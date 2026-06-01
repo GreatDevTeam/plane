@@ -7,7 +7,7 @@
 // plane imports
 import type { IFavorite } from "@plane/types";
 // components
-import { getFavoriteItemIcon } from "@/components/workspace/sidebar/favorites/favorite-items/common";
+import { FavoriteItemIcon } from "@/components/workspace/sidebar/favorites/favorite-items/common";
 
 export const useAdditionalFavoriteItemDetails = () => {
   const getAdditionalFavoriteItemDetails = (_workspaceSlug: string, favorite: IFavorite) => {
@@ -20,7 +20,7 @@ export const useAdditionalFavoriteItemDetails = () => {
     switch (favoriteItemEntityType) {
       default:
         itemTitle = favoriteItemName;
-        itemIcon = getFavoriteItemIcon(favoriteItemEntityType);
+        itemIcon = <FavoriteItemIcon type={favoriteItemEntityType} />;
         break;
     }
     return { itemIcon, itemTitle };
