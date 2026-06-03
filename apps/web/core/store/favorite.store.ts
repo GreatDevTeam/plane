@@ -8,7 +8,7 @@ import { orderBy, uniqBy, set } from "lodash-es";
 import { action, observable, makeObservable, runInAction, computed } from "mobx";
 import { v4 as uuidv4 } from "uuid";
 import type { IFavorite } from "@plane/types";
-import { FavoriteService } from "@/services/favorite";
+import { UserFavoriteService } from "@plane/services";
 import type { CoreRootStore } from "./root.store";
 
 export interface IFavoriteStore {
@@ -81,7 +81,7 @@ export class FavoriteStore implements IFavoriteStore {
       removeFavoriteEntityFromStore: action,
       removeFromFavoriteFolder: action,
     });
-    this.favoriteService = new FavoriteService();
+    this.favoriteService = new UserFavoriteService();
     this.rootStore = _rootStore;
     this.viewStore = _rootStore.projectView;
     this.projectStore = _rootStore.projectRoot.project;
@@ -145,7 +145,7 @@ export class FavoriteStore implements IFavoriteStore {
         }
         this.favoriteIds = [id, ...this.favoriteIds];
       });
-      const response = await this.favoriteService.addFavorite(workspaceSlug, data);
+      const response = await this.favoriteService.add(workspaceSlug, data);
 
       // overwrite the temp id
       runInAction(() => {
@@ -184,7 +184,7 @@ export class FavoriteStore implements IFavoriteStore {
       runInAction(() => {
         set(this.favoriteMap, [favoriteId], { ...this.favoriteMap[favoriteId], ...data });
       });
-      const response = await this.favoriteService.updateFavorite(workspaceSlug, favoriteId, data);
+      const response = await this.favoriteService.update(workspaceSlug, favoriteId, data);
 
       return response;
     } catch (error) {
@@ -205,7 +205,7 @@ export class FavoriteStore implements IFavoriteStore {
    */
   moveFavoriteToFolder = async (workspaceSlug: string, favoriteId: string, data: Partial<IFavorite>) => {
     try {
-      await this.favoriteService.updateFavorite(workspaceSlug, favoriteId, data);
+      await this.favoriteService.update(workspaceSlug, favoriteId, data);
       runInAction(() => {
         // add parent of the favorite
         set(this.favoriteMap, [favoriteId, "parent"], data.parent);
@@ -242,7 +242,7 @@ export class FavoriteStore implements IFavoriteStore {
         }
       }
 
-      await this.favoriteService.updateFavorite(workspaceSlug, favoriteId, { sequence: resultSequence });
+      await this.favoriteService.update(workspaceSlug, favoriteId, { sequence: resultSequence });
 
       runInAction(() => {
         set(this.favoriteMap, [favoriteId, "sequence"], resultSequence);
@@ -255,7 +255,7 @@ export class FavoriteStore implements IFavoriteStore {
 
   removeFromFavoriteFolder = async (workspaceSlug: string, favoriteId: string) => {
     try {
-      await this.favoriteService.updateFavorite(workspaceSlug, favoriteId, { parent: null });
+      await this.favoriteService.update(workspaceSlug, favoriteId, { parent: null });
       runInAction(() => {
         //remove parent
         set(this.favoriteMap, [favoriteId, "parent"], null);
@@ -308,7 +308,7 @@ export class FavoriteStore implements IFavoriteStore {
     const initialState = this.favoriteMap[favoriteId];
 
     try {
-      await this.favoriteService.deleteFavorite(workspaceSlug, favoriteId);
+      await this.favoriteService.remove(workspaceSlug, favoriteId);
       runInAction(() => {
         delete this.favoriteMap[favoriteId];
         if (entity_identifier) {
@@ -400,7 +400,7 @@ export class FavoriteStore implements IFavoriteStore {
   fetchGroupedFavorites = async (workspaceSlug: string, favoriteId: string) => {
     if (!favoriteId) return [];
     try {
-      const response = await this.favoriteService.getGroupedFavorites(workspaceSlug, favoriteId);
+      const response = await this.favoriteService.groupedList(workspaceSlug, favoriteId);
       runInAction(() => {
         // add the favorites to the map
         response.forEach((favorite) => {
@@ -426,7 +426,7 @@ export class FavoriteStore implements IFavoriteStore {
    */
   fetchFavorite = async (workspaceSlug: string) => {
     try {
-      const favorites = await this.favoriteService.getFavorites(workspaceSlug);
+      const favorites = await this.favoriteService.list(workspaceSlug);
       runInAction(() => {
         favorites.forEach((favorite) => {
           set(this.favoriteMap, [favorite.id], favorite);

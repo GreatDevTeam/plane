@@ -9,7 +9,7 @@ import { set } from "lodash-es";
 import { action, computed, makeObservable, observable, runInAction } from "mobx";
 import type { IUserLite, TNotification, TNotificationData } from "@plane/types";
 // services
-import workspaceNotificationService from "@/services/workspace-notification.service";
+import { WorkspaceNotificationService } from "@plane/services";
 // store
 import type { CoreRootStore } from "../root.store";
 
@@ -29,6 +29,8 @@ export interface INotification extends TNotification {
   snoozeNotification: (workspaceSlug: string, snoozeTill: Date) => Promise<TNotification | undefined>;
   unSnoozeNotification: (workspaceSlug: string) => Promise<TNotification | undefined>;
 }
+
+const workspaceNotificationService = new WorkspaceNotificationService();
 
 export class Notification implements INotification {
   // observables
@@ -176,7 +178,7 @@ export class Notification implements INotification {
     payload: Partial<TNotification>
   ): Promise<TNotification | undefined> => {
     try {
-      const notification = await workspaceNotificationService.updateNotificationById(workspaceSlug, this.id, payload);
+      const notification = await workspaceNotificationService.update(workspaceSlug, this.id, payload);
       if (notification) {
         runInAction(() => this.mutateNotification(notification));
       }
@@ -199,7 +201,7 @@ export class Notification implements INotification {
       };
       this.store.workspaceNotification.setUnreadNotificationsCount("decrement");
       runInAction(() => this.mutateNotification(payload));
-      const notification = await workspaceNotificationService.markNotificationAsRead(workspaceSlug, this.id);
+      const notification = await workspaceNotificationService.markAsRead(workspaceSlug, this.id);
       if (notification) {
         runInAction(() => this.mutateNotification(notification));
       }
@@ -224,7 +226,7 @@ export class Notification implements INotification {
       };
       this.store.workspaceNotification.setUnreadNotificationsCount("increment");
       runInAction(() => this.mutateNotification(payload));
-      const notification = await workspaceNotificationService.markNotificationAsUnread(workspaceSlug, this.id);
+      const notification = await workspaceNotificationService.markAsUnread(workspaceSlug, this.id);
       if (notification) {
         runInAction(() => this.mutateNotification(notification));
       }
@@ -248,7 +250,7 @@ export class Notification implements INotification {
         archived_at: new Date().toISOString(),
       };
       runInAction(() => this.mutateNotification(payload));
-      const notification = await workspaceNotificationService.markNotificationAsArchived(workspaceSlug, this.id);
+      const notification = await workspaceNotificationService.archive(workspaceSlug, this.id);
       if (notification) {
         runInAction(() => this.mutateNotification(notification));
       }
@@ -271,7 +273,7 @@ export class Notification implements INotification {
         archived_at: undefined,
       };
       runInAction(() => this.mutateNotification(payload));
-      const notification = await workspaceNotificationService.markNotificationAsUnArchived(workspaceSlug, this.id);
+      const notification = await workspaceNotificationService.unarchive(workspaceSlug, this.id);
       if (notification) {
         runInAction(() => this.mutateNotification(notification));
       }
@@ -295,7 +297,7 @@ export class Notification implements INotification {
         snoozed_till: snoozeTill.toISOString(),
       };
       runInAction(() => this.mutateNotification(payload));
-      const notification = await workspaceNotificationService.updateNotificationById(workspaceSlug, this.id, payload);
+      const notification = await workspaceNotificationService.update(workspaceSlug, this.id, payload);
       return notification;
     } catch (error) {
       runInAction(() => this.mutateNotification({ snoozed_till: currentNotificationSnoozeTill }));
@@ -315,7 +317,7 @@ export class Notification implements INotification {
         snoozed_till: undefined,
       };
       runInAction(() => this.mutateNotification(payload));
-      const notification = await workspaceNotificationService.updateNotificationById(workspaceSlug, this.id, payload);
+      const notification = await workspaceNotificationService.update(workspaceSlug, this.id, payload);
       return notification;
     } catch (error) {
       runInAction(() => this.mutateNotification({ snoozed_till: currentNotificationSnoozeTill }));
