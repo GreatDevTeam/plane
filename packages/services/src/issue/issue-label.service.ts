@@ -7,7 +7,7 @@
 import { API_BASE_URL } from "@plane/constants";
 import type { IIssueLabel } from "@plane/types";
 // services
-import { APIService } from "@/services/api.service";
+import { APIService } from "../api.service";
 // types
 
 export class IssueLabelService extends APIService {

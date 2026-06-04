@@ -20,7 +20,7 @@ import type {
 import { EIssueServiceType } from "@plane/types";
 // plane web constants
 // services
-import { IssueActivityService } from "@/services/issue";
+import { IssueActivityService } from "@plane/services";
 // store
 import type { CoreRootStore } from "@/store/root.store";
 

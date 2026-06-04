@@ -12,7 +12,7 @@ import type { IIssueLabel, IIssueLabelTree } from "@plane/types";
 // helpers
 import { buildTree } from "@plane/utils";
 // services
-import { IssueLabelService } from "@/services/issue";
+import { IssueLabelService } from "@plane/services";
 // store
 import type { CoreRootStore } from "./root.store";
 

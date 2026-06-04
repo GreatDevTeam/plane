@@ -13,7 +13,7 @@ import type { TFetchStatus, TLoader, TProjectAnalyticsCount, TProjectAnalyticsCo
 import { orderProjects, shouldFilterProject } from "@plane/utils";
 // services
 import type { TProject, TPartialProject } from "@plane/types";
-import { IssueLabelService, IssueService } from "@/services/issue";
+import { IssueLabelService, IssueService } from "@plane/services";
 import { ProjectService, ProjectStateService, ProjectArchiveService } from "@plane/services";
 // store
 import type { CoreRootStore } from "../root.store";

@@ -33,7 +33,7 @@ import { convertToISODateString } from "@plane/utils";
 import { workItemSortWithOrderByExtended } from "@/plane-web/store/issue/helpers/base-issue.store";
 // services
 import { CycleService } from "@/services/cycle.service";
-import { IssueArchiveService, IssueService } from "@/services/issue";
+import { IssueArchiveService, IssueService } from "@plane/services";
 import { ModuleService } from "@/services/module.service";
 //
 import type { IIssueRootStore } from "../root.store";
