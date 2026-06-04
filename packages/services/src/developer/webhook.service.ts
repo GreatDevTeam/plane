@@ -13,7 +13,7 @@ import { APIService } from "../api.service";
  * Handles CRUD operations for webhooks and secret key management
  * @extends {APIService}
  */
-export default class WebhookService extends APIService {
+export class WebhookService extends APIService {
   constructor(BASE_URL?: string) {
     super(BASE_URL || API_BASE_URL);
   }
@@ -108,5 +108,3 @@ export default class WebhookService extends APIService {
       });
   }
 }
-
-export { WebhookService };
