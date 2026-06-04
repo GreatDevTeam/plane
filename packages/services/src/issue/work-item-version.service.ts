@@ -10,7 +10,7 @@ import { EIssueServiceType } from "@plane/types";
 import type { TDescriptionVersionsListResponse, TDescriptionVersionDetails, TIssueServiceType } from "@plane/types";
 // helpers
 // services
-import { APIService } from "@/services/api.service";
+import { APIService } from "../api.service";
 
 export class WorkItemVersionService extends APIService {
   private serviceType: TIssueServiceType;

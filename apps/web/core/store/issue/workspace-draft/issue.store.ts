@@ -24,7 +24,7 @@ import type {
 } from "@plane/types";
 import { getCurrentDateTimeInISO, convertToISODateString } from "@plane/utils";
 // services
-import workspaceDraftService from "@/services/issue/workspace_draft.service";
+import { WorkspaceDraftService } from "@plane/services";
 // types
 import type { IIssueRootStore } from "../root.store";
 
@@ -111,6 +111,8 @@ export interface IWorkspaceDraftIssues {
   removeBulkIssues: (workspaceSlug: string, projectId: string, issueIds: string[]) => Promise<void>;
   bulkUpdateProperties: (workspaceSlug: string, projectId: string, data: TBulkOperationsPayload) => Promise<void>;
 }
+
+const workspaceDraftService = new WorkspaceDraftService();
 
 export class WorkspaceDraftIssues implements IWorkspaceDraftIssues {
   // local constants

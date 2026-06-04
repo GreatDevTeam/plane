@@ -8,7 +8,7 @@ import { API_BASE_URL } from "@plane/constants";
 import type { TIssue, TWorkspaceDraftIssue, TWorkspaceDraftPaginationInfo } from "@plane/types";
 // helpers
 // services
-import { APIService } from "@/services/api.service";
+import { APIService } from "../api.service";
 
 export class WorkspaceDraftService extends APIService {
   constructor() {

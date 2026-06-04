@@ -26,7 +26,7 @@ import { DeDupeIssuePopoverRoot } from "@/plane-web/components/de-dupe/duplicate
 import { IssueTypeSwitcher } from "@/plane-web/components/issues/issue-details/issue-type-switcher";
 import { useDebouncedDuplicateIssues } from "@/plane-web/hooks/use-debounced-duplicate-issues";
 // services
-import { WorkItemVersionService } from "@/services/issue";
+import { WorkItemVersionService } from "@plane/services";
 // local imports
 import { IssueDetailWidgets } from "../issue-detail-widgets";
 import { NameDescriptionUpdateStatus } from "../issue-update-status";

@@ -27,7 +27,7 @@ import { IssueTypeSwitcher } from "@/plane-web/components/issues/issue-details/i
 // plane web hooks
 import { useDebouncedDuplicateIssues } from "@/plane-web/hooks/use-debounced-duplicate-issues";
 // services
-import { WorkItemVersionService } from "@/services/issue";
+import { WorkItemVersionService } from "@plane/services";
 // local components
 import type { TIssueOperations } from "../issue-detail";
 import { IssueParentDetail } from "../issue-detail/parent";
