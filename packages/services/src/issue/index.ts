@@ -4,4 +4,5 @@
  * See the LICENSE file for details.
  */
 
+export * from "./issue-filter.service";
 export * from "./sites-issue.service";
