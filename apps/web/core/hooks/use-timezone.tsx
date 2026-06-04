@@ -7,7 +7,7 @@
 import useSWR from "swr";
 import type { TTimezoneObject } from "@plane/types";
 // services
-import timezoneService from "@/services/timezone.service";
+import { TimezoneService } from "@plane/services";
 
 // group timezones by value
 const groupTimezones = (timezones: TTimezoneObject[]): TTimezoneObject[] => {
@@ -31,6 +31,8 @@ const groupTimezones = (timezones: TTimezoneObject[]): TTimezoneObject[] => {
 
   return Array.from(groupedMap.values());
 };
+
+const timezoneService = new TimezoneService();
 
 const useTimezone = () => {
   // fetching the timezone from the server

@@ -8,7 +8,7 @@ import { API_BASE_URL } from "@plane/constants";
 import type { TTimezones } from "@plane/types";
 // helpers
 // api services
-import { APIService } from "@/services/api.service";
+import { APIService } from "./api.service";
 
 export class TimezoneService extends APIService {
   constructor() {
