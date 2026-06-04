@@ -20,7 +20,7 @@ import { useProject } from "@/hooks/store/use-project";
 import { useUser } from "@/hooks/store/user";
 import { useAppRouter } from "@/hooks/use-app-router";
 // services
-import { ProjectExportService } from "@/services/project";
+import { ProjectExportService } from "@plane/services";
 type Props = {
   isOpen: boolean;
   handleClose: () => void;

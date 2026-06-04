@@ -14,7 +14,7 @@ import { orderProjects, shouldFilterProject } from "@plane/utils";
 // services
 import type { TProject, TPartialProject } from "@plane/types";
 import { IssueLabelService, IssueService } from "@/services/issue";
-import { ProjectService, ProjectStateService, ProjectArchiveService } from "@/services/project";
+import { ProjectService, ProjectStateService, ProjectArchiveService } from "@plane/services";
 // store
 import type { CoreRootStore } from "../root.store";
 

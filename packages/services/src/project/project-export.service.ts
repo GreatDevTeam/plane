@@ -6,7 +6,7 @@
 
 import { API_BASE_URL } from "@plane/constants";
 import type { TWorkItemFilterExpression } from "@plane/types";
-import { APIService } from "@/services/api.service";
+import { APIService } from "../api.service";
 // helpers
 
 export class ProjectExportService extends APIService {

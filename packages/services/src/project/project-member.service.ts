@@ -8,7 +8,7 @@
 import { API_BASE_URL } from "@plane/constants";
 import type { IProjectBulkAddFormData, TProjectMembership } from "@plane/types";
 // services
-import { APIService } from "@/services/api.service";
+import { APIService } from "../api.service";
 
 export class ProjectMemberService extends APIService {
   constructor() {

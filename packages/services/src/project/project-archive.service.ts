@@ -7,7 +7,7 @@
 // helpers
 import { API_BASE_URL } from "@plane/constants";
 // services
-import { APIService } from "@/services/api.service";
+import { APIService } from "../api.service";
 
 export class ProjectArchiveService extends APIService {
   constructor() {

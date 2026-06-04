@@ -20,11 +20,12 @@ import { EUserWorkspaceRoles } from "@plane/types";
 import { WorkspaceService } from "@/services/workspace.service";
 import type { RootStore } from "@/plane-web/store/root.store";
 // services
-import projectMemberService from "@/services/project/project-member.service";
+import { ProjectMemberService } from "@plane/services";
 import userService from "@/services/user.service";
 
 // derived services
 const workspaceService = new WorkspaceService();
+const projectMemberService = new ProjectMemberService();
 
 type ETempUserRole = TUserPermissions | EUserWorkspaceRoles | EUserProjectRoles; // TODO: Remove this once we have migrated user permissions to enums to plane constants package
 
