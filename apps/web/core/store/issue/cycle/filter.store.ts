@@ -22,7 +22,7 @@ import type {
 } from "@plane/types";
 import { EIssuesStoreType } from "@plane/types";
 import { handleIssueQueryParamsByLayout } from "@plane/utils";
-import { IssueFiltersService } from "@/services/issue_filter.service";
+import { IssueFiltersService } from "@plane/services";
 import type { IBaseIssueFilterStore } from "../helpers/issue-filter-helper.store";
 import { IssueFilterHelperStore } from "../helpers/issue-filter-helper.store";
 // helpers
