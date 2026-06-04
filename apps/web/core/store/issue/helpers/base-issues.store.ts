@@ -32,7 +32,7 @@ import { convertToISODateString } from "@plane/utils";
 // plane web imports
 import { workItemSortWithOrderByExtended } from "@/plane-web/store/issue/helpers/base-issue.store";
 // services
-import { CycleService } from "@/services/cycle.service";
+import { CycleService } from "@plane/services";
 import { IssueArchiveService, IssueService } from "@plane/services";
 import { ModuleService } from "@/services/module.service";
 //

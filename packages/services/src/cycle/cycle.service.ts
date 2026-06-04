@@ -5,7 +5,15 @@
  */
 
 import { API_BASE_URL } from "@plane/constants";
-import type { CycleDateCheckData, ICycle, TIssuesResponse, IWorkspaceActiveCyclesResponse } from "@plane/types";
+import type {
+  CycleDateCheckData,
+  ICycle,
+  TIssuesResponse,
+  IWorkspaceActiveCyclesResponse,
+  TCycleDistribution,
+  TCycleEstimateDistribution,
+  TProgressSnapshot,
+} from "@plane/types";
 import { APIService } from "../api.service";
 
 /**
@@ -182,6 +190,69 @@ export class CycleService extends APIService {
    */
   async validateDates(workspaceSlug: string, projectId: string, data: CycleDateCheckData): Promise<any> {
     return this.post(`/api/workspaces/${workspaceSlug}/projects/${projectId}/cycles/date-check/`, data)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async analytics(
+    workspaceSlug: string,
+    projectId: string,
+    cycleId: string,
+    analytic_type: string = "points"
+  ): Promise<TCycleDistribution | TCycleEstimateDistribution> {
+    return this.get(
+      `/api/workspaces/${workspaceSlug}/projects/${projectId}/cycles/${cycleId}/analytics?type=${analytic_type}`
+    )
+      .then((res) => res?.data)
+      .catch((err) => {
+        throw err?.response?.data;
+      });
+  }
+
+  async progress(workspaceSlug: string, projectId: string, cycleId: string): Promise<TProgressSnapshot> {
+    return this.get(`/api/workspaces/${workspaceSlug}/projects/${projectId}/cycles/${cycleId}/progress/`)
+      .then((res) => res?.data)
+      .catch((err) => {
+        throw err?.response?.data;
+      });
+  }
+
+  async progressPro(workspaceSlug: string, projectId: string, cycleId: string): Promise<TProgressSnapshot> {
+    return this.get(`/api/workspaces/${workspaceSlug}/projects/${projectId}/cycles/${cycleId}/cycle-progress/`)
+      .then((res) => res?.data)
+      .catch((err) => {
+        throw err?.response?.data;
+      });
+  }
+
+  async addToFavorites(workspaceSlug: string, projectId: string, data: { cycle: string }): Promise<any> {
+    return this.post(`/api/workspaces/${workspaceSlug}/projects/${projectId}/user-favorite-cycles/`, data)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async removeFromFavorites(workspaceSlug: string, projectId: string, cycleId: string): Promise<any> {
+    return this.delete(`/api/workspaces/${workspaceSlug}/projects/${projectId}/user-favorite-cycles/${cycleId}/`)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async transferIssues(
+    workspaceSlug: string,
+    projectId: string,
+    cycleId: string,
+    data: { new_cycle_id: string }
+  ): Promise<any> {
+    return this.post(
+      `/api/workspaces/${workspaceSlug}/projects/${projectId}/cycles/${cycleId}/transfer-issues/`,
+      data
+    )
       .then((response) => response?.data)
       .catch((error) => {
         throw error?.response?.data;

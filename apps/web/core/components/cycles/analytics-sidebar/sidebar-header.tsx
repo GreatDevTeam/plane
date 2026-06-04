@@ -22,7 +22,7 @@ import { useCycle } from "@/hooks/store/use-cycle";
 import { useUserPermissions } from "@/hooks/store/user";
 import { useTimeZoneConverter } from "@/hooks/use-timezone-converter";
 // services
-import { CycleService } from "@/services/cycle.service";
+import { CycleService } from "@plane/services";
 
 type Props = {
   workspaceSlug: string;
@@ -74,7 +74,7 @@ export const CycleSidebarHeader = observer(function CycleSidebarHeader(props: Pr
 
   const dateChecker = async (payload: any) => {
     try {
-      const res = await cycleService.cycleDateCheck(workspaceSlug, projectId, payload);
+      const res = await cycleService.validateDates(workspaceSlug, projectId, payload);
       return res.status;
     } catch (_err) {
       return false;
