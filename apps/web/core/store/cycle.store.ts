@@ -22,7 +22,7 @@ import { orderCycles, shouldFilterCycle, getDate, updateDistribution } from "@pl
 // helpers
 // services
 import { CycleService } from "@/services/cycle.service";
-import { CycleArchiveService } from "@/services/cycle_archive.service";
+import { CycleArchiveService } from "@plane/services";
 import { IssueService } from "@plane/services";
 import { ProjectService } from "@plane/services";
 // store
@@ -442,7 +442,7 @@ export class CycleStore implements ICycleStore {
   fetchArchivedCycles = async (workspaceSlug: string, projectId: string) => {
     this.loader = true;
     return await this.cycleArchiveService
-      .getArchivedCycles(workspaceSlug, projectId)
+      .list(workspaceSlug, projectId)
       .then((response) => {
         runInAction(() => {
           response.forEach((cycle) => {
@@ -533,7 +533,7 @@ export class CycleStore implements ICycleStore {
    * @returns
    */
   fetchArchivedCycleDetails = async (workspaceSlug: string, projectId: string, cycleId: string) =>
-    await this.cycleArchiveService.getArchivedCycleDetails(workspaceSlug, projectId, cycleId).then((response) => {
+    await this.cycleArchiveService.retrieve(workspaceSlug, projectId, cycleId).then((response) => {
       runInAction(() => {
         set(this.cycleMap, [response.id], { ...this.cycleMap?.[response.id], ...response });
       });
@@ -689,7 +689,7 @@ export class CycleStore implements ICycleStore {
     const cycleDetails = this.getCycleById(cycleId);
     if (cycleDetails?.archived_at) return;
     await this.cycleArchiveService
-      .archiveCycle(workspaceSlug, projectId, cycleId)
+      .archive(workspaceSlug, projectId, cycleId)
       .then((response) => {
         runInAction(() => {
           set(this.cycleMap, [cycleId, "archived_at"], response.archived_at);
@@ -712,7 +712,7 @@ export class CycleStore implements ICycleStore {
     const cycleDetails = this.getCycleById(cycleId);
     if (!cycleDetails?.archived_at) return;
     await this.cycleArchiveService
-      .restoreCycle(workspaceSlug, projectId, cycleId)
+      .restore(workspaceSlug, projectId, cycleId)
       .then(() => {
         runInAction(() => {
           set(this.cycleMap, [cycleId, "archived_at"], null);
