@@ -24,7 +24,7 @@ import type {
 import { EIssuesStoreType } from "@plane/types";
 import { handleIssueQueryParamsByLayout } from "@plane/utils";
 // services
-import { ViewService } from "@/services/view.service";
+import { ProjectViewService } from "@plane/services";
 import type { IBaseIssueFilterStore } from "../helpers/issue-filter-helper.store";
 import { IssueFilterHelperStore } from "../helpers/issue-filter-helper.store";
 // helpers
@@ -86,7 +86,7 @@ export class ProjectViewIssuesFilter extends IssueFilterHelperStore implements I
     // root store
     this.rootIssueStore = _rootStore;
     // services
-    this.issueFilterService = new ViewService();
+    this.issueFilterService = new ProjectViewService();
   }
 
   get issueFilters() {
@@ -175,7 +175,7 @@ export class ProjectViewIssuesFilter extends IssueFilterHelperStore implements I
 
   fetchFilters = async (workspaceSlug: string, projectId: string, viewId: string) => {
     try {
-      const viewDetails = await this.issueFilterService.getViewDetails(workspaceSlug, projectId, viewId);
+      const viewDetails = await this.issueFilterService.retrieve(workspaceSlug, projectId, viewId);
       this.mutateFilters(workspaceSlug, viewId, viewDetails);
     } catch (error) {
       console.log("error while fetching project view filters", error);

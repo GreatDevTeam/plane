@@ -13,7 +13,7 @@ import type { IProjectView, TViewFilters } from "@plane/types";
 // helpers
 import { getValidatedViewFilters, getViewName, orderViews, shouldFilterView } from "@plane/utils";
 // services
-import { ViewService } from "@/services/view.service";
+import { ProjectViewService } from "@plane/services";
 // store
 import type { CoreRootStore } from "./root.store";
 
@@ -87,7 +87,7 @@ export class ProjectViewStore implements IProjectViewStore {
     // root store
     this.rootStore = _rootStore;
     // services
-    this.viewService = new ViewService();
+    this.viewService = new ProjectViewService();
 
     this.createView = this.createView.bind(this);
     this.updateView = this.updateView.bind(this);
@@ -165,7 +165,7 @@ export class ProjectViewStore implements IProjectViewStore {
   fetchViews = async (workspaceSlug: string, projectId: string) => {
     try {
       this.loader = true;
-      await this.viewService.getViews(workspaceSlug, projectId).then((response) => {
+      await this.viewService.list(workspaceSlug, projectId).then((response) => {
         runInAction(() => {
           response.forEach((view) => {
             set(this.viewMap, [view.id], view);
@@ -189,7 +189,7 @@ export class ProjectViewStore implements IProjectViewStore {
    * @returns Promise<IProjectView>
    */
   fetchViewDetails = async (workspaceSlug: string, projectId: string, viewId: string): Promise<IProjectView> =>
-    await this.viewService.getViewDetails(workspaceSlug, projectId, viewId).then((response) => {
+    await this.viewService.retrieve(workspaceSlug, projectId, viewId).then((response) => {
       runInAction(() => {
         set(this.viewMap, [viewId], response);
       });
@@ -204,7 +204,7 @@ export class ProjectViewStore implements IProjectViewStore {
    * @returns Promise<IProjectView>
    */
   async createView(workspaceSlug: string, projectId: string, data: Partial<IProjectView>): Promise<IProjectView> {
-    const response = await this.viewService.createView(workspaceSlug, projectId, getValidatedViewFilters(data));
+    const response = await this.viewService.create(workspaceSlug, projectId, getValidatedViewFilters(data));
 
     runInAction(() => {
       set(this.viewMap, [response.id], response);
@@ -233,7 +233,7 @@ export class ProjectViewStore implements IProjectViewStore {
       set(this.viewMap, [viewId], { ...currentView, ...data });
     });
 
-    const response = await this.viewService.patchView(workspaceSlug, projectId, viewId, data);
+    const response = await this.viewService.update(workspaceSlug, projectId, viewId, data);
 
     return response;
   }
@@ -246,7 +246,7 @@ export class ProjectViewStore implements IProjectViewStore {
    * @returns
    */
   deleteView = async (workspaceSlug: string, projectId: string, viewId: string): Promise<any> => {
-    await this.viewService.deleteView(workspaceSlug, projectId, viewId).then(() => {
+    await this.viewService.destroy(workspaceSlug, projectId, viewId).then(() => {
       runInAction(() => {
         delete this.viewMap[viewId];
         if (this.rootStore.favorite.entityMap[viewId]) this.rootStore.favorite.removeFavoriteFromStore(viewId);
