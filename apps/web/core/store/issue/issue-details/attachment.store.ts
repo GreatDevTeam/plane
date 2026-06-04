@@ -11,7 +11,7 @@ import { v4 as uuidv4 } from "uuid";
 // types
 import type { TIssueAttachment, TIssueAttachmentMap, TIssueAttachmentIdMap, TIssueServiceType } from "@plane/types";
 // services
-import { IssueAttachmentService } from "@/services/issue";
+import { IssueAttachmentService } from "@plane/services";
 import type { IIssueRootStore } from "../root.store";
 import type { IIssueDetail } from "./root.store";
 

@@ -9,8 +9,8 @@ import { API_BASE_URL } from "@plane/constants";
 import type { TIssueComment, TIssueServiceType } from "@plane/types";
 import { EIssueServiceType } from "@plane/types";
 // services
-import { APIService } from "@/services/api.service";
-import { FileUploadService } from "@/services/file-upload.service";
+import { APIService } from "../api.service";
+import { FileUploadService } from "../file/file-upload.service";
 
 export class IssueCommentService extends APIService {
   private fileUploadService: FileUploadService;

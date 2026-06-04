@@ -5,6 +5,7 @@
  */
 
 import axios from "axios";
+import type { AxiosRequestConfig } from "axios";
 // api service
 import { APIService } from "../api.service";
 
@@ -27,7 +28,11 @@ export class FileUploadService extends APIService {
    * @returns {Promise<void>} Promise resolving to void
    * @throws {Error} If the request fails
    */
-  async uploadFile(url: string, data: FormData): Promise<void> {
+  async uploadFile(
+    url: string,
+    data: FormData,
+    uploadProgressHandler?: AxiosRequestConfig["onUploadProgress"]
+  ): Promise<void> {
     this.cancelSource = axios.CancelToken.source();
     return this.post(url, data, {
       headers: {
@@ -35,6 +40,7 @@ export class FileUploadService extends APIService {
       },
       cancelToken: this.cancelSource.token,
       withCredentials: false,
+      onUploadProgress: uploadProgressHandler,
     })
       .then((response) => response?.data)
       .catch((error) => {

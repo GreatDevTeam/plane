@@ -11,8 +11,8 @@ import { getFileMetaDataForUpload, generateFileUploadPayload } from "@plane/serv
 import type { TIssueAttachment, TIssueAttachmentUploadResponse, TIssueServiceType } from "@plane/types";
 import { EIssueServiceType } from "@plane/types";
 // services
-import { APIService } from "@/services/api.service";
-import { FileUploadService } from "@/services/file-upload.service";
+import { APIService } from "../api.service";
+import { FileUploadService } from "../file/file-upload.service";
 
 export class IssueAttachmentService extends APIService {
   private fileUploadService: FileUploadService;

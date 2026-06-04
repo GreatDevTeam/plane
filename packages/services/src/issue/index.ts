@@ -6,6 +6,8 @@
 
 export * from "./issue.service";
 export * from "./issue-archive.service";
+export * from "./issue-attachment.service";
+export * from "./issue-comment.service";
 export * from "./issue-activity.service";
 export * from "./issue-filter.service";
 export * from "./issue-label.service";
