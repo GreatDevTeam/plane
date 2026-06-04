@@ -14,7 +14,7 @@ import { updateDistribution, orderModules, shouldFilterModule } from "@plane/uti
 // helpers
 // services
 import { ModuleService } from "@/services/module.service";
-import { ModuleArchiveService } from "@/services/module_archive.service";
+import { ModuleArchiveService } from "@plane/services";
 import { ProjectService } from "@/services/project";
 // store
 import type { CoreRootStore } from "./root.store";

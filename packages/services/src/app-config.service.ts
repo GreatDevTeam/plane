@@ -6,11 +6,7 @@
 
 // services
 import { API_BASE_URL } from "@plane/constants";
-import { APIService } from "@/services/api.service";
-// helper
-// types
-// FIXME:
-// import { TAppConfig } from "@plane/types";
+import { APIService } from "./api.service";
 
 export class AppConfigService extends APIService {
   constructor() {

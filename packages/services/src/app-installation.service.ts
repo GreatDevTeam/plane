@@ -6,7 +6,7 @@
 
 // services
 import { API_BASE_URL } from "@plane/constants";
-import { APIService } from "@/services/api.service";
+import { APIService } from "./api.service";
 // helpers
 
 export class AppInstallationService extends APIService {

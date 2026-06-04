@@ -9,7 +9,7 @@ import { API_BASE_URL } from "@plane/constants";
 import type { IModule } from "@plane/types";
 // helpers
 // services
-import { APIService } from "@/services/api.service";
+import { APIService } from "../api.service";
 
 export class ModuleArchiveService extends APIService {
   constructor() {
