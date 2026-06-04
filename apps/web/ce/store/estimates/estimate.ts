@@ -14,7 +14,7 @@ import type {
   TEstimateSystemKeys,
 } from "@plane/types";
 // plane web services
-import estimateService from "@/services/estimate.service";
+import { EstimateService } from "@plane/services";
 // store
 import type { IEstimatePoint } from "@/store/estimates/estimate-point";
 import { EstimatePoint } from "@/store/estimates/estimate-point";
@@ -40,6 +40,8 @@ export interface IEstimate extends Omit<IEstimateType, "points"> {
     payload: Partial<IEstimatePointType>
   ) => Promise<IEstimatePointType | undefined>;
 }
+
+const estimateService = new EstimateService();
 
 export class Estimate implements IEstimate {
   // data model observables

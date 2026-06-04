@@ -11,7 +11,7 @@ import { action, computed, makeObservable, observable, runInAction } from "mobx"
 // types
 import type { IEstimate, IEstimatePoint as IEstimatePointType } from "@plane/types";
 // plane web services
-import estimateService from "@/services/estimate.service";
+import { EstimateService } from "@plane/services";
 // store
 import type { CoreRootStore } from "@/store/root.store";
 
@@ -34,6 +34,8 @@ export interface IEstimatePoint extends IEstimatePointType {
     payload: Partial<IEstimatePointType>
   ) => Promise<IEstimatePointType | undefined>;
 }
+
+const estimateService = new EstimateService();
 
 export class EstimatePoint implements IEstimatePoint {
   // data model observables

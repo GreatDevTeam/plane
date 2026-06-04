@@ -10,7 +10,7 @@ import { computedFn } from "mobx-utils";
 // types
 import type { IEstimate as IEstimateType, IEstimateFormData, TEstimateSystemKeys } from "@plane/types";
 // plane web services
-import estimateService from "@/services/estimate.service";
+import { EstimateService } from "@plane/services";
 // plane web store
 import type { IEstimate } from "@/plane-web/store/estimates/estimate";
 import { Estimate } from "@/plane-web/store/estimates/estimate";
@@ -52,6 +52,8 @@ export interface IProjectEstimateStore {
   ) => Promise<IEstimateType | undefined>;
   deleteEstimate: (workspaceSlug: string, projectId: string, estimateId: string) => Promise<void>;
 }
+
+const estimateService = new EstimateService();
 
 export class ProjectEstimateStore implements IProjectEstimateStore {
   // observables

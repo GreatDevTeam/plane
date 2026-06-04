@@ -11,7 +11,7 @@ import { API_BASE_URL } from "@plane/constants";
 import type { IEstimate, IEstimateFormData, IEstimatePoint } from "@plane/types";
 // helpers
 // services
-import { APIService } from "@/services/api.service";
+import { APIService } from "../api.service";
 
 export class EstimateService extends APIService {
   constructor() {
