@@ -15,7 +15,7 @@ import type { TChartData } from "@plane/types";
 // hooks
 import { useAnalytics } from "@/hooks/store/use-analytics";
 // services
-import { AnalyticsService } from "@/services/analytics.service";
+import { AnalyticsService } from "@plane/services";
 // plane web components
 import AnalyticsSectionWrapper from "../analytics-section-wrapper";
 import { ProjectInsightsLoader } from "../loaders";

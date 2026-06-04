@@ -21,7 +21,7 @@ import { getFileURL } from "@plane/utils";
 // hooks
 import { useAnalytics } from "@/hooks/store/use-analytics";
 import { useProject } from "@/hooks/store/use-project";
-import { AnalyticsService } from "@/services/analytics.service";
+import { AnalyticsService } from "@plane/services";
 // plane web components
 import { exportCSV } from "../export";
 import { InsightTable } from "../insight-table";
