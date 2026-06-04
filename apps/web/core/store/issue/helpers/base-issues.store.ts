@@ -34,7 +34,7 @@ import { workItemSortWithOrderByExtended } from "@/plane-web/store/issue/helpers
 // services
 import { CycleService } from "@plane/services";
 import { IssueArchiveService, IssueService } from "@plane/services";
-import { ModuleService } from "@/services/module.service";
+import { ModuleService } from "@plane/services";
 //
 import type { IIssueRootStore } from "../root.store";
 import {

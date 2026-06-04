@@ -4,12 +4,17 @@
  * See the LICENSE file for details.
  */
 
+import { API_BASE_URL } from "@plane/constants";
 // types
 import type { IModule, ILinkDetails, ModuleLink, TIssuesResponse } from "@plane/types";
 // services
 import { APIService } from "../api.service";
 
 export class ModuleService extends APIService {
+  constructor(BASE_URL?: string) {
+    super(BASE_URL || API_BASE_URL);
+  }
+
   async workspaceModulesList(workspaceSlug: string): Promise<IModule[]> {
     return this.get(`/api/workspaces/${workspaceSlug}/modules/`)
       .then((response) => response?.data)
