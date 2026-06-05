@@ -20,7 +20,7 @@ import { useProject } from "@/hooks/store/use-project";
 import { useProjectView } from "@/hooks/store/use-project-view";
 // plane web hooks
 import { EPageStoreType, usePage } from "@/hooks/store";
-import { useAdditionalFavoriteItemDetails } from "@/plane-web/hooks/use-additional-favorite-item-details";
+import { useAdditionalFavoriteItemDetails } from "@/hooks/use-additional-favorite-item-details";
 
 export const useFavoriteItemDetails = (workspaceSlug: string, favorite: IFavorite) => {
   const {
