@@ -4,5 +4,5 @@
  * See the LICENSE file for details.
  */
 
-export * from "@/hooks/store/use-page-store";
-export * from "@/hooks/store/use-page";
+export * from "./use-page-store";
+export * from "./use-page";
