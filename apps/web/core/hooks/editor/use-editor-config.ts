@@ -11,7 +11,7 @@ import { getEditorAssetDownloadSrc, getEditorAssetSrc } from "@plane/utils";
 // hooks
 import { useEditorAsset } from "@/hooks/store/use-editor-asset";
 // plane web hooks
-import { useExtendedEditorConfig } from "@/plane-web/hooks/editor/use-extended-editor-config";
+import { useExtendedEditorConfig } from "@/hooks/editor/use-extended-editor-config";
 import { useFileSize } from "@/hooks/use-file-size";
 // services
 import { FileService } from "@/services/file.service";
