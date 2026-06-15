@@ -166,7 +166,7 @@ export const COMPLEX_ITEMS: ToolbarMenuItem<"table" | "image">[] = [
   { itemKey: "image", renderKey: "image", name: "Image", icon: Image, editors: ["lite", "document"] },
 ];
 
-export const IMAGE_ITEM = COMPLEX_ITEMS.find((item) => item.itemKey === "image") as ToolbarMenuItem<"image">;
+export const IMAGE_ITEM = COMPLEX_ITEMS.find((item): item is ToolbarMenuItem<"image"> => item.itemKey === "image")!;
 
 export const TOOLBAR_ITEMS: {
   [editorType in TEditorTypes]: {
@@ -188,8 +188,8 @@ export const TOOLBAR_ITEMS: {
     complex: COMPLEX_ITEMS.filter((item) => item.editors.includes("document")),
   },
   sticky: {
-    basic: BASIC_MARK_ITEMS.filter((item) => ["Bold", "Italic"].includes(item.name)),
-    list: LIST_ITEMS.filter((item) => ["To-do list"].includes(item.name)),
+    basic: BASIC_MARK_ITEMS.filter((item) => ["bold", "italic"].includes(item.itemKey)),
+    list: LIST_ITEMS.filter((item) => ["to-do-list"].includes(item.itemKey)),
   },
 };
 
