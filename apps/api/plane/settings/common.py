@@ -5,6 +5,8 @@
 """Global Settings"""
 
 # Python imports
+import ipaddress
+import logging
 import os
 from urllib.parse import urlparse
 from urllib.parse import urljoin
@@ -31,6 +33,44 @@ DEBUG = int(os.environ.get("DEBUG", "0"))
 
 # Self-hosted mode
 IS_SELF_MANAGED = True
+
+# Webhook IP allowlist — comma-separated IPs or CIDR ranges that are allowed as
+# webhook targets even if they resolve to private networks.
+# Example: "10.0.0.0/8,192.168.1.0/24,172.16.0.5"
+_webhook_allowed_ips_raw = os.environ.get("WEBHOOK_ALLOWED_IPS", "")
+WEBHOOK_ALLOWED_IPS = []
+_logger = logging.getLogger("plane")
+for _cidr in _webhook_allowed_ips_raw.split(","):
+    _cidr = _cidr.strip()
+    if not _cidr:
+        continue
+    try:
+        WEBHOOK_ALLOWED_IPS.append(ipaddress.ip_network(_cidr, strict=False))
+    except ValueError:
+        _logger.warning("WEBHOOK_ALLOWED_IPS: skipping invalid entry %r", _cidr)
+
+# Webhook hostname allowlist — comma-separated hostnames that bypass the
+# private-IP SSRF check. Useful for trusted internal services whose IPs are
+# dynamic in containerised deployments (e.g. docker-compose service DNS,
+# kubernetes service hostnames).
+# Example: "silo,silo.namespace.svc.cluster.local,internal-api.lan"
+_webhook_allowed_hosts_raw = os.environ.get("WEBHOOK_ALLOWED_HOSTS", "")
+WEBHOOK_ALLOWED_HOSTS = [
+    _host.strip().rstrip(".").lower()
+    for _host in _webhook_allowed_hosts_raw.split(",")
+    if _host.strip()
+]
+
+# Webhook disallowed domains — comma-separated hostnames. Webhooks targeting
+# these domains or any of their subdomains are rejected (the request host is
+# always appended at validation time as a loop-back guard). Empty by default
+# for self-hosted deployments; set to e.g. "plane.so" to block specific domains.
+_webhook_disallowed_domains_raw = os.environ.get("WEBHOOK_DISALLOWED_DOMAINS", "")
+WEBHOOK_DISALLOWED_DOMAINS = [
+    _d.strip().rstrip(".").lower()
+    for _d in _webhook_disallowed_domains_raw.split(",")
+    if _d.strip()
+]
 
 # Allowed Hosts
 ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "*").split(",")
@@ -91,6 +131,9 @@ REST_FRAMEWORK = {
     # Preserve original Django URL parameter names (pk) instead of converting to 'id'
     "SCHEMA_COERCE_PATH_PK": False,
 }
+
+# API key throttle rate (DRF SimpleRateThrottle format, e.g. "60/minute")
+API_KEY_RATE_LIMIT = os.environ.get("API_KEY_RATE_LIMIT", "60/minute")
 
 # Django Auth Backend
 AUTHENTICATION_BACKENDS = ("django.contrib.auth.backends.ModelBackend",)  # default
@@ -224,7 +267,6 @@ MEDIA_URL = "/media/"
 # Internationalization
 LANGUAGE_CODE = "en-us"
 USE_I18N = True
-USE_L10N = True
 
 # Timezones
 USE_TZ = True
@@ -282,7 +324,7 @@ CELERY_IMPORTS = (
     "plane.bgtasks.file_asset_task",
     "plane.bgtasks.email_notification_task",
     "plane.bgtasks.cleanup_task",
-    "plane.license.bgtasks.tracer",
+    "plane.license.bgtasks.telemetry_metrics",
     # management tasks
     "plane.bgtasks.dummy_data_task",
     # issue version tasks
@@ -362,6 +404,34 @@ LIVE_URL = urljoin(LIVE_BASE_URL, LIVE_BASE_PATH) if LIVE_BASE_URL else None
 WEB_URL = os.environ.get("WEB_URL")
 
 HARD_DELETE_AFTER_DAYS = int(os.environ.get("HARD_DELETE_AFTER_DAYS", 60))
+
+
+def _retention_days(env_var, default):
+    """
+    Read a retention window (in days) from the environment, falling back to the
+    default when the variable is unset, unparseable, or negative — a negative
+    window would otherwise select rows with a future cutoff and delete everything.
+    """
+    raw = os.environ.get(env_var)
+    if raw is None:
+        return default
+    try:
+        days = int(raw)
+    except ValueError:
+        return default
+    return days if days >= 0 else default
+
+
+# API activity logs hold request/response payloads, so they are retained for a
+# shorter window than other logs.
+API_ACTIVITY_LOG_RETENTION_DAYS = _retention_days("API_ACTIVITY_LOG_RETENTION_DAYS", 14)
+
+# Webhook delivery logs are retained on their own window, independent of the
+# generic HARD_DELETE_AFTER_DAYS.
+WEBHOOK_LOG_RETENTION_DAYS = _retention_days("WEBHOOK_LOG_RETENTION_DAYS", 14)
+
+# Email notification logs are retained on their own window.
+EMAIL_LOG_RETENTION_DAYS = _retention_days("EMAIL_LOG_RETENTION_DAYS", 7)
 
 # Instance Changelog URL
 INSTANCE_CHANGELOG_URL = os.environ.get("INSTANCE_CHANGELOG_URL", "")
@@ -465,7 +535,3 @@ if ENABLE_DRF_SPECTACULAR:
     REST_FRAMEWORK["DEFAULT_SCHEMA_CLASS"] = "drf_spectacular.openapi.AutoSchema"
     INSTALLED_APPS.append("drf_spectacular")
     from .openapi import SPECTACULAR_SETTINGS  # noqa: F401
-
-# MongoDB Settings
-MONGO_DB_URL = os.environ.get("MONGO_DB_URL", False)
-MONGO_DB_DATABASE = os.environ.get("MONGO_DB_DATABASE", False)
