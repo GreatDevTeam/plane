@@ -22,7 +22,7 @@ import { useIssueStoreType } from "@/hooks/use-issue-layout-store";
 import { CreateUpdateEpicModal } from "@/components/epic-modal";
 // types
 // Plane-web
-import { WorkFlowGroupTree } from "@/plane-web/components/workflow";
+import { WorkFlowGroupTree } from "@/components/workflow";
 
 interface IHeaderGroupByCard {
   sub_group_by: TIssueGroupByOptions | undefined;

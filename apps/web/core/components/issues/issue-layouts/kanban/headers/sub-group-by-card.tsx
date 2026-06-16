@@ -11,7 +11,7 @@ import { ChevronDownIcon, ChevronUpIcon } from "@plane/propel/icons";
 // Plane
 import type { TIssueGroupByOptions, TIssueKanbanFilters } from "@plane/types";
 // Plane-web
-import { WorkFlowGroupTree } from "@/plane-web/components/workflow";
+import { WorkFlowGroupTree } from "@/components/workflow";
 // mobx
 
 interface IHeaderSubGroupByCard {
@@ -27,6 +27,7 @@ interface IHeaderSubGroupByCard {
 export const HeaderSubGroupByCard = observer(function HeaderSubGroupByCard(props: IHeaderSubGroupByCard) {
   const { icon, title, count, column_id, collapsedGroups, sub_group_by, handleCollapsedGroups } = props;
   return (
+    // oxlint-disable-next-line jsx_a11y/click-events-have-key-events oxlint-disable-next-line jsx_a11y/no-static-element-interactions
     <div
       className={`relative flex w-full flex-shrink-0 cursor-pointer flex-row items-center gap-1 rounded-xs py-1.5`}
       onClick={() => handleCollapsedGroups("sub_group_by", column_id)}
