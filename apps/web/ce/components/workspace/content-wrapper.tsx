@@ -10,8 +10,7 @@ import { observer } from "mobx-react";
 import { cn } from "@plane/utils";
 import { AppRailRoot } from "@/components/navigation";
 import { useAppRailVisibility } from "@/lib/app-rail";
-// local imports
-import { TopNavigationRoot } from "../navigations";
+import { TopNavigationRoot } from "@/components/navigation/top-navigation-root";
 
 export const WorkspaceContentWrapper = observer(function WorkspaceContentWrapper({
   children,

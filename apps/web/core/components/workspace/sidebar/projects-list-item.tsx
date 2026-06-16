@@ -38,11 +38,10 @@ import { useProject } from "@/hooks/store/use-project";
 import { useUserPermissions } from "@/hooks/store/user";
 import { useProjectNavigationPreferences } from "@/hooks/use-navigation-preferences";
 import { usePlatformOS } from "@/hooks/use-platform-os";
-// plane web imports
-import { useNavigationItems } from "@/plane-web/components/navigations";
 // local imports
 import { HIGHLIGHT_CLASS, highlightIssueOnDrop } from "../../issues/issue-layouts/utils";
 import { ProjectNavigation } from "./project-navigation";
+import { useNavigationItems } from "@/components/navigation/use-navigation-items";
 
 type Props = {
   projectId: string;
