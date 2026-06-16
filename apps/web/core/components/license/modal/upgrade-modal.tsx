@@ -40,6 +40,7 @@ export const PaidPlanUpgradeModal = observer(function PaidPlanUpgradeModal(props
   const handleRedirection = ({ planVariant, priceId }: TCheckoutParams) => {
     // Get the product and price using plane community constants
     const product = PLANE_COMMUNITY_PRODUCTS[planVariant];
+    // oxlint-disable-next-line no-shadow
     const price = product.prices.find((price) => price.id === priceId);
     const frequency = price?.recurring ?? "year";
     // Redirect to the appropriate URL

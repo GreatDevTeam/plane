@@ -13,8 +13,8 @@ import { Tooltip } from "@plane/propel/tooltip";
 import { usePlatformOS } from "@/hooks/use-platform-os";
 import packageJson from "package.json";
 // local components
-import { PaidPlanUpgradeModal } from "../license";
 import { Button } from "@plane/propel/button";
+import { PaidPlanUpgradeModal } from "@/components/license/modal/upgrade-modal";
 
 export const WorkspaceEditionBadge = observer(function WorkspaceEditionBadge() {
   // states
