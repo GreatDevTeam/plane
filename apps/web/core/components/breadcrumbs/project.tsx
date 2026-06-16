@@ -36,6 +36,7 @@ export const ProjectBreadcrumb = observer(function ProjectBreadcrumb(props: TPro
 
   // derived values
   const switcherOptions = joinedProjectIds
+    // oxlint-disable-next-line no-shadow
     .map((projectId) => {
       const project = getPartialProjectById(projectId);
       return {
@@ -54,6 +55,7 @@ export const ProjectBreadcrumb = observer(function ProjectBreadcrumb(props: TPro
     .filter((option) => option !== undefined) as ICustomSearchSelectOption[];
 
   // helpers
+  // oxlint-disable-next-line unicorn/consistent-function-scoping
   const renderIcon = (projectDetails: TProject) => (
     <span className="grid size-4 flex-shrink-0 place-items-center">
       <Logo logo={projectDetails.logo_props} size={14} />

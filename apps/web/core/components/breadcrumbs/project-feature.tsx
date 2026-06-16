@@ -14,8 +14,7 @@ import { BreadcrumbLink } from "@/components/common/breadcrumb-link";
 import type { TNavigationItem } from "@/components/workspace/sidebar/project-navigation";
 // hooks
 import { useProject } from "@/hooks/store/use-project";
-// local imports
-import { getProjectFeatureNavigation } from "../projects/navigation/helper";
+import { getProjectFeatureNavigation } from "@/plane-web/components/projects/navigation/helper";
 
 type TProjectFeatureBreadcrumbProps = {
   workspaceSlug: string;
