@@ -80,6 +80,10 @@ class EntityAssetEndpoint(BaseAPIView):
         entity_type = request.data.get("entity_type", "")
         entity_identifier = request.data.get("entity_identifier")
 
+        # Cap the client-provided size to the instance limit so the signed
+        # upload policy cannot exceed settings.FILE_SIZE_LIMIT
+        size_limit = min(size, settings.FILE_SIZE_LIMIT)
+
         # Check if the entity type is allowed
         if entity_type not in FileAsset.EntityTypeContext.values:
             return Response(
@@ -109,9 +113,9 @@ class EntityAssetEndpoint(BaseAPIView):
 
         # Create a File Asset
         asset = FileAsset.objects.create(
-            attributes={"name": name, "type": type, "size": size},
+            attributes={"name": name, "type": type, "size": size_limit},
             asset=asset_key,
-            size=size,
+            size=size_limit,
             workspace=deploy_board.workspace,
             created_by=request.user,
             entity_type=entity_type,
@@ -122,7 +126,7 @@ class EntityAssetEndpoint(BaseAPIView):
         # Get the presigned URL
         storage = S3Storage(request=request)
         # Generate a presigned URL to share an S3 object
-        presigned_url = storage.generate_presigned_post(object_name=asset_key, file_type=type, file_size=size)
+        presigned_url = storage.generate_presigned_post(object_name=asset_key, file_type=type, file_size=size_limit)
         # Return the presigned URL
         return Response(
             {
