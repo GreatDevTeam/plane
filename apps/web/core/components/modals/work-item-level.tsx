@@ -54,6 +54,7 @@ export const WorkItemLevelModals = observer(function WorkItemLevelModals(props: 
   const { fetchSubIssues: fetchSubWorkItems } = useIssueDetail();
   const { fetchSubIssues: fetchEpicSubWorkItems } = useIssueDetail(EIssueServiceType.EPICS);
 
+  // oxlint-disable-next-line no-shadow
   const handleDeleteIssue = async (workspaceSlug: string, projectId: string, issueId: string) => {
     try {
       const isEpic = workItemDetails?.is_epic;
