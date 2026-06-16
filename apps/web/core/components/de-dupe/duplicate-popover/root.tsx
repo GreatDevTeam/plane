@@ -22,6 +22,7 @@ type TDeDupeIssuePopoverRootProps = {
 };
 
 export const DeDupeIssuePopoverRoot = observer(function DeDupeIssuePopoverRoot(props: TDeDupeIssuePopoverRootProps) {
+  // oxlint-disable-next-line no-empty-pattern
   const {} = props;
   return <></>;
 });

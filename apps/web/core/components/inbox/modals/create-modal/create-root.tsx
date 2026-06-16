@@ -1,3 +1,5 @@
+// oxlint-disable jsx_a11y/prefer-tag-over-role
+// oxlint-disable jsx_a11y/click-events-have-key-events
 /**
  * Copyright (c) 2023-present Plane Software, Inc. and contributors
  * SPDX-License-Identifier: AGPL-3.0-only
@@ -24,8 +26,8 @@ import { useAppRouter } from "@/hooks/use-app-router";
 import useKeypress from "@/hooks/use-keypress";
 import { usePlatformOS } from "@/hooks/use-platform-os";
 // plane web imports
-import { DeDupeButtonRoot } from "@/plane-web/components/de-dupe/de-dupe-button";
-import { DuplicateModalRoot } from "@/plane-web/components/de-dupe/duplicate-modal";
+import { DeDupeButtonRoot } from "@/components/de-dupe/de-dupe-button";
+import { DuplicateModalRoot } from "@/components/de-dupe/duplicate-modal";
 import { useDebouncedDuplicateIssues } from "@/hooks/use-debounced-duplicate-issues";
 // services
 import { FileService } from "@/services/file.service";
@@ -160,6 +162,7 @@ export const InboxIssueCreateRoot = observer(function InboxIssueCreateRoot(props
     setFormSubmitting(true);
 
     await createInboxIssue(workspaceSlug, projectId, payload)
+      // oxlint-disable-next-line promise/always-return
       .then(async (res) => {
         if (uploadedAssetIds.length > 0) {
           await fileService.updateBulkProjectAssetsUploadStatus(workspaceSlug, projectId, res?.issue.id ?? "", {
