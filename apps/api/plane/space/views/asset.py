@@ -76,13 +76,20 @@ class EntityAssetEndpoint(BaseAPIView):
         # Get the asset
         name = sanitize_filename(request.data.get("name")) or "unnamed"
         type = request.data.get("type", "image/jpeg")
-        size = int(request.data.get("size", settings.FILE_SIZE_LIMIT))
+        try:
+            size = int(request.data.get("size", settings.FILE_SIZE_LIMIT))
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "Invalid size.", "status": False},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         entity_type = request.data.get("entity_type", "")
         entity_identifier = request.data.get("entity_identifier")
 
-        # Cap the client-provided size to the instance limit so the signed
-        # upload policy cannot exceed settings.FILE_SIZE_LIMIT
-        size_limit = min(size, settings.FILE_SIZE_LIMIT)
+        # Clamp the client-provided size to [1, FILE_SIZE_LIMIT] so the signed
+        # upload policy cannot exceed the instance limit and always carries a
+        # valid content-length-range bound
+        size_limit = max(1, min(size, settings.FILE_SIZE_LIMIT))
 
         # Check if the entity type is allowed
         if entity_type not in FileAsset.EntityTypeContext.values:
