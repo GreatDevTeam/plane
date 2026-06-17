@@ -18,13 +18,12 @@ import { CountChip } from "@/components/common/count-chip";
 // hooks
 import { useWorkspaceNotifications } from "@/hooks/store/notifications";
 import { useWorkspace } from "@/hooks/store/use-workspace";
-// plane web components
-import { NotificationListRoot } from "@/components/workspace-notifications/list-root";
 // local imports
 import { NotificationEmptyState } from "./empty-state";
 import { AppliedFilters } from "./filters/applied-filter";
 import { NotificationSidebarHeader } from "./header";
 import { NotificationsLoader } from "./loader";
+import { NotificationCardListRoot } from "../notification-card/root";
 
 export const NotificationsSidebarRoot = observer(function NotificationsSidebarRoot() {
   const { workspaceSlug } = useParams();
@@ -108,7 +107,7 @@ export const NotificationsSidebarRoot = observer(function NotificationsSidebarRo
           <>
             {notificationIds && notificationIds.length > 0 ? (
               <ContentWrapper variant={ERowVariant.HUGGING}>
-                <NotificationListRoot workspaceSlug={workspaceSlug.toString()} workspaceId={workspace?.id} />
+                <NotificationCardListRoot workspaceSlug={workspaceSlug.toString()} workspaceId={workspace?.id} />
               </ContentWrapper>
             ) : (
               <div className="relative flex h-full w-full items-center justify-center">
