@@ -4,7 +4,6 @@
  * See the LICENSE file for details.
  */
 
-import type { IProjectView } from "@plane/types";
 import { EIssueLayoutTypes } from "@plane/types";
 import { WorkspaceSpreadsheetRoot } from "@/components/issues/issue-layouts/spreadsheet/roots/workspace-root";
 
@@ -67,10 +66,5 @@ export function GlobalViewLayoutSelection(_props: TLayoutSelectionProps) {
 }
 
 export function WorkspaceAdditionalLayouts(_props: TWorkspaceLayoutProps) {
-  return <></>;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export function AdditionalHeaderItems(view: IProjectView) {
   return <></>;
 }

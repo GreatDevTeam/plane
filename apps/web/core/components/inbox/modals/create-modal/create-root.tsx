@@ -19,16 +19,11 @@ import type { TIssue } from "@plane/types";
 import { ToggleSwitch } from "@plane/ui";
 import { renderFormattedPayloadDate, getTabIndex } from "@plane/utils";
 // hooks
-import { useProject } from "@/hooks/store/use-project";
 import { useProjectInbox } from "@/hooks/store/use-project-inbox";
 import { useWorkspace } from "@/hooks/store/use-workspace";
 import { useAppRouter } from "@/hooks/use-app-router";
 import useKeypress from "@/hooks/use-keypress";
 import { usePlatformOS } from "@/hooks/use-platform-os";
-// plane web imports
-import { DeDupeButtonRoot } from "@/components/de-dupe/de-dupe-button";
-import { DuplicateModalRoot } from "@/components/de-dupe/duplicate-modal";
-import { useDebouncedDuplicateIssues } from "@/hooks/use-debounced-duplicate-issues";
 // services
 import { FileService } from "@/services/file.service";
 // local imports
@@ -59,7 +54,7 @@ export const defaultIssueData: Partial<TIssue> = {
 };
 
 export const InboxIssueCreateRoot = observer(function InboxIssueCreateRoot(props: TInboxIssueCreateRoot) {
-  const { workspaceSlug, projectId, handleModalClose, isDuplicateModalOpen, handleDuplicateIssueModal } = props;
+  const { workspaceSlug, projectId, handleModalClose } = props;
   // states
   const [uploadedAssetIds, setUploadedAssetIds] = useState<string[]>([]);
   // router
@@ -74,7 +69,6 @@ export const InboxIssueCreateRoot = observer(function InboxIssueCreateRoot(props
   const { getWorkspaceBySlug } = useWorkspace();
   const workspaceId = getWorkspaceBySlug(workspaceSlug)?.id;
   const { isMobile } = usePlatformOS();
-  const { getProjectById } = useProject();
   const { t } = useTranslation();
   // states
   const [createMore, setCreateMore] = useState<boolean>(false);
@@ -90,21 +84,7 @@ export const InboxIssueCreateRoot = observer(function InboxIssueCreateRoot(props
     [formData]
   );
 
-  // derived values
-  const projectDetails = projectId ? getProjectById(projectId) : undefined;
-
   const { getIndex } = getTabIndex(ETabIndices.INTAKE_ISSUE_FORM, isMobile);
-
-  // debounced duplicate issues swr
-  const { duplicateIssues } = useDebouncedDuplicateIssues(
-    workspaceSlug,
-    projectDetails?.workspace.toString(),
-    projectId,
-    {
-      name: formData?.name,
-      description_html: formData?.description_html,
-    }
-  );
 
   const handleEscKeyDown = (event: KeyboardEvent) => {
     if (descriptionEditorRef.current?.isEditorReadyToDiscard()) {
@@ -196,8 +176,6 @@ export const InboxIssueCreateRoot = observer(function InboxIssueCreateRoot(props
 
   const isTitleLengthMoreThan255Character = formData?.name ? formData.name.length > 255 : false;
 
-  const shouldRenderDuplicateModal = isDuplicateModalOpen && duplicateIssues?.length > 0;
-
   if (!workspaceSlug || !projectId || !workspaceId) return <></>;
   return (
     <div className="flex w-full gap-2 bg-transparent">
@@ -206,14 +184,6 @@ export const InboxIssueCreateRoot = observer(function InboxIssueCreateRoot(props
           <div className="space-y-5 rounded-t-lg bg-surface-1 p-5">
             <div className="flex items-center justify-between gap-2">
               <h3 className="text-18 font-medium text-secondary">{t("inbox_issue.modal.title")}</h3>
-              {duplicateIssues?.length > 0 && (
-                <DeDupeButtonRoot
-                  workspaceSlug={workspaceSlug}
-                  isDuplicateModalOpen={isDuplicateModalOpen}
-                  label={`${duplicateIssues.length} duplicate issue${duplicateIssues.length > 1 ? "s" : ""} found!`}
-                  handleOnClick={() => handleDuplicateIssueModal(!isDuplicateModalOpen)}
-                />
-              )}
             </div>
             <div className="space-y-3">
               <InboxIssueTitle
@@ -280,19 +250,6 @@ export const InboxIssueCreateRoot = observer(function InboxIssueCreateRoot(props
           </div>
         </form>
       </div>
-      {shouldRenderDuplicateModal && (
-        <div
-          ref={modalContainerRef}
-          className="shadow-xl bg-pi-50 relative flex flex-col gap-2.5 rounded-lg px-3 py-4"
-          style={{ maxHeight: formRef?.current?.offsetHeight ? `${formRef.current.offsetHeight}px` : "436px" }}
-        >
-          <DuplicateModalRoot
-            workspaceSlug={workspaceSlug.toString()}
-            issues={duplicateIssues}
-            handleDuplicateIssueModal={handleDuplicateIssueModal}
-          />
-        </div>
-      )}
     </div>
   );
 });

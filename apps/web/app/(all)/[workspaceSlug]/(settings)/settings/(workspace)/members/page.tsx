@@ -20,17 +20,15 @@ import { CountChip } from "@/components/common/count-chip";
 import { PageHead } from "@/components/core/page-title";
 import { MemberListFiltersDropdown } from "@/components/project/dropdowns/filters/member-list";
 import { WorkspaceMembersList } from "@/components/workspace/settings/members-list";
+import { SettingsContentWrapper } from "@/components/settings/content-wrapper";
+import { SendWorkspaceInvitationModal } from "@/components/workspace/members";
 // hooks
 import { useMember } from "@/hooks/store/use-member";
 import { useWorkspace } from "@/hooks/store/use-workspace";
 import { useUserPermissions } from "@/hooks/store/user";
-// plane web components
-import { SendWorkspaceInvitationModal, MembersActivityButton } from "@/components/workspace/members";
-import { SettingsContentWrapper } from "@/components/settings/content-wrapper";
 // local imports
 import type { Route } from "./+types/page";
 import { MembersWorkspaceSettingsHeader } from "./header";
-import { BillingActionsButton } from "@/components/workspace/billing/billing-actions-button";
 
 const WorkspaceMembersSettingsPage = observer(function WorkspaceMembersSettingsPage({ params }: Route.ComponentProps) {
   // states
@@ -137,13 +135,11 @@ const WorkspaceMembersSettingsPage = observer(function WorkspaceMembersSettingsP
               handleUpdate={handleRoleFilterUpdate}
               memberType="workspace"
             />
-            <MembersActivityButton workspaceSlug={workspaceSlug} />
             {canPerformWorkspaceAdminActions && (
               <Button variant="primary" size="lg" onClick={() => setInviteModal(true)}>
                 {t("workspace_settings.settings.members.add_member")}
               </Button>
             )}
-            <BillingActionsButton canPerformWorkspaceAdminActions={canPerformWorkspaceAdminActions} />
           </div>
         </div>
         <WorkspaceMembersList searchQuery={searchQuery} isAdmin={canPerformWorkspaceAdminActions} />

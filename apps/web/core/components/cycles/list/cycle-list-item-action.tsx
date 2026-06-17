@@ -34,7 +34,6 @@ import { useTimeZoneConverter } from "@/hooks/use-timezone-converter";
 // local imports
 import { CycleQuickActions } from "../quick-actions";
 import { TransferIssuesModal } from "../transfer-issues-modal";
-import { CycleAdditionalActions } from "../additional-actions";
 
 type Props = {
   workspaceSlug: string;
@@ -192,7 +191,6 @@ export const CycleListItemAction = observer(function CycleListItemAction(props: 
           <span className="text-11 text-tertiary">{cycleDetails.total_issues}</span>
         </div>
       )}
-      <CycleAdditionalActions cycleId={cycleId} projectId={projectId} />
       {showTransferIssues && (
         // oxlint-disable-next-line jsx_a11y/click-events-have-key-events oxlint-disable-next-line jsx_a11y/no-static-element-interactions
         <div
