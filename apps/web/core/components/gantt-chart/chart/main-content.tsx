@@ -22,20 +22,16 @@ import { GanttChartSidebar, MonthChartView, QuarterChartView, WeekChartView } fr
 // helpers
 // hooks
 import { useTimeLineChartStore } from "@/hooks/use-timeline-chart";
-// plane web components
-import {
-  TimelineDependencyPaths,
-  TimelineDraggablePath,
-  GanttAdditionalLayers,
-} from "@/plane-web/components/gantt-chart";
-import { GanttChartRowList } from "@/plane-web/components/gantt-chart/blocks/block-row-list";
-import { GanttChartBlocksList } from "@/plane-web/components/gantt-chart/blocks/blocks-list";
+import { GanttChartRowList } from "@/components/gantt-chart/blocks/block-row-list";
+import { GanttChartBlocksList } from "@/components/gantt-chart/blocks/blocks-list";
 import { IssueBulkOperationsRoot } from "@/plane-web/components/issues/bulk-operations";
 import { useBulkOperationStatus } from "@/hooks/use-bulk-operation-status";
 // local imports
 import { DEFAULT_BLOCK_WIDTH, GANTT_SELECT_GROUP, HEADER_HEIGHT } from "../constants";
 import { getItemPositionWidth } from "../views";
 import { TimelineDragHelper } from "./timeline-drag-helper";
+import { TimelineDependencyPaths, TimelineDraggablePath } from "../dependency";
+import { GanttAdditionalLayers } from "../layers";
 
 type Props = {
   blockIds: string[];
@@ -109,6 +105,7 @@ export const GanttChartMainContent = observer(function GanttChartMainContent(pro
         canScroll: ({ source }) => source.data.dragInstanceId === "GANTT_REORDER",
       })
     );
+    // oxlint-disable-next-line eslint-plugin-react-hooks/exhaustive-deps
   }, [ganttContainerRef?.current]);
 
   // handling scroll functionality

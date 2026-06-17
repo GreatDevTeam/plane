@@ -11,11 +11,10 @@ import { observer } from "mobx-react";
 import type { IGanttBlock } from "@plane/types";
 // helpers
 import { cn } from "@plane/utils";
-//  Plane-web
-import { LeftDependencyDraggable, RightDependencyDraggable } from "@/plane-web/components/gantt-chart";
-//
+// components
 import { LeftResizable } from "./blockResizables/left-resizable";
 import { RightResizable } from "./blockResizables/right-resizable";
+import { RightDependencyDraggable, LeftDependencyDraggable } from "../dependency";
 
 type Props = {
   block: IGanttBlock;
@@ -54,6 +53,7 @@ export const ChartDraggable = observer(function ChartDraggable(props: Props) {
         isMoving={isMoving}
         position={block.position}
       />
+      {/* oxlint-disable-next-line jsx_a11y/no-static-element-interactions */}
       <div
         className={cn("relative z-[6] flex h-8 w-full items-center rounded-sm", {
           "pointer-events-none": isMoving,
