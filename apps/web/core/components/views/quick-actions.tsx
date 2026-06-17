@@ -20,7 +20,7 @@ import { copyUrlToClipboard, cn } from "@plane/utils";
 import { useViewMenuItems } from "@/components/common/quick-actions-helper";
 // hooks
 import { useUser, useUserPermissions } from "@/hooks/store/user";
-import { PublishViewModal, useViewPublish } from "@/plane-web/components/views/publish";
+import { PublishViewModal, useViewPublish } from "@/components/views/publish";
 // local imports
 import { DeleteProjectViewModal } from "./delete-view-modal";
 import { CreateUpdateProjectViewModal } from "./modal";
@@ -52,6 +52,7 @@ export const ViewQuickActions = observer(function ViewQuickActions(props: Props)
 
   const viewLink = `${workspaceSlug}/projects/${projectId}/views/${view.id}`;
   const handleCopyText = () =>
+    // oxlint-disable-next-line promise/always-return
     copyUrlToClipboard(viewLink).then(() => {
       setToast({
         type: TOAST_TYPE.SUCCESS,

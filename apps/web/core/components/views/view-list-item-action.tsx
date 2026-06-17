@@ -22,7 +22,7 @@ import { useMember } from "@/hooks/store/use-member";
 import { useProjectView } from "@/hooks/store/use-project-view";
 import { useUserPermissions } from "@/hooks/store/user";
 // plane web imports
-import { PublishViewModal } from "@/plane-web/components/views/publish";
+import { PublishViewModal } from "@/components/views/publish";
 // local imports
 import { ButtonAvatars } from "../dropdowns/member/avatar";
 import { DeleteProjectViewModal } from "./delete-view-modal";
@@ -100,6 +100,7 @@ export const ViewListItemAction = observer(function ViewListItemAction(props: Pr
       </div>
 
       {view?.anchor && publishLink ? (
+        // oxlint-disable-next-line jsx_a11y/click-events-have-key-events oxlint-disable-next-line jsx_a11y/no-static-element-interactions
         <div
           className="flex cursor-pointer items-center gap-1.5 rounded-sm bg-success-subtle px-3 py-1.5 text-11 font-medium text-success-primary"
           onClick={() => setPublishModalOpen(true)}
