@@ -7,10 +7,8 @@
 import { Command } from "cmdk";
 import { useTranslation } from "@plane/i18n";
 import { SearchIcon } from "@plane/propel/icons";
-// plane imports
 // components
 import type { TPowerKContext } from "@/components/power-k/core/types";
-// plane web imports
 import { PowerKModalCommandItem } from "@/components/power-k/ui/modal/command-item";
 
 export type TPowerKModalNoSearchResultsCommandProps = {

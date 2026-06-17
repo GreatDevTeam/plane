@@ -5,7 +5,6 @@
  */
 
 import { observer } from "mobx-react";
-// plane types
 import { StateGroupIcon } from "@plane/propel/icons";
 import type { IState } from "@plane/types";
 // components
