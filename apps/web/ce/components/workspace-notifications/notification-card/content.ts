@@ -4,4 +4,4 @@
  * See the LICENSE file for details.
  */
 
-export * from "./invite-modal";
+export * from "@/components/workspace-notifications/notification-card/content";
