@@ -126,7 +126,7 @@ export interface IIssueDetail
   relation: IIssueRelationStore;
 }
 
-export abstract class IssueDetail implements IIssueDetail {
+export class IssueDetail implements IIssueDetail {
   // observables
   peekIssue: TPeekIssue | undefined = undefined;
   relationKey: TIssueRelationTypes | null = null;

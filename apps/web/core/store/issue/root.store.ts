@@ -12,8 +12,8 @@ import { EIssueServiceType } from "@plane/types";
 // plane web store
 import type { IProjectEpics, IProjectEpicsFilter } from "@/plane-web/store/issue/epic";
 import { ProjectEpics, ProjectEpicsFilter } from "@/plane-web/store/issue/epic";
-import type { IIssueDetail } from "@/plane-web/store/issue/issue-details/root.store";
-import { IssueDetail } from "@/plane-web/store/issue/issue-details/root.store";
+import type { IIssueDetail } from "@/store/issue/issue-details/root.store";
+import { IssueDetail } from "@/store/issue/issue-details/root.store";
 import type { ITeamIssuesFilter, ITeamIssues } from "@/plane-web/store/issue/team";
 import { TeamIssues, TeamIssuesFilter } from "@/plane-web/store/issue/team";
 import type { ITeamProjectWorkItemsFilter } from "@/plane-web/store/issue/team-project/filter.store";

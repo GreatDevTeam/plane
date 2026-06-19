@@ -11,7 +11,7 @@ import { EPageAccess } from "@plane/constants";
 import type { TChangeHandlerProps } from "@plane/propel/emoji-icon-picker";
 import type { TDocumentPayload, TLogoProps, TNameDescriptionLoader, TPage } from "@plane/types";
 // plane web store
-import { ExtendedBasePage } from "@/plane-web/store/pages/extended-base-page";
+import { ExtendedBasePage } from "@/store/pages/extended-base-page";
 import type { RootStore } from "@/plane-web/store/root.store";
 // local imports
 import { PageEditorInstance } from "./page-editor-info";

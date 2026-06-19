@@ -10,15 +10,15 @@ import { FALLBACK_LANGUAGE, setLanguage } from "@plane/i18n";
 import type { IWorkItemFilterStore } from "@plane/shared-state";
 import { WorkItemFilterStore } from "@plane/shared-state";
 // plane web store
-import type { IAnalyticsStore } from "@/plane-web/store/analytics.store";
-import { AnalyticsStore } from "@/plane-web/store/analytics.store";
+import type { IBaseAnalyticsStore as IAnalyticsStore } from "@/store/analytics.store";
+import { BaseAnalyticsStore as AnalyticsStore } from "@/store/analytics.store";
+import type { IBasePowerKStore as IPowerKStore } from "@/store/base-power-k.store";
+import { BasePowerKStore as PowerKStore } from "@/store/base-power-k.store";
+import type { IStateStore } from "@/store/state.store";
+import { StateStore } from "@/store/state.store";
 import type { ICommandPaletteStore } from "@/plane-web/store/command-palette.store";
 import { CommandPaletteStore } from "@/plane-web/store/command-palette.store";
-import { PowerKStore } from "@/plane-web/store/power-k.store";
-import type { IPowerKStore } from "@/plane-web/store/power-k.store";
 import type { RootStore } from "@/plane-web/store/root.store";
-import type { IStateStore } from "@/plane-web/store/state.store";
-import { StateStore } from "@/plane-web/store/state.store";
 import { WorkspaceRootStore } from "@/plane-web/store/workspace";
 // stores
 import type { ICycleStore } from "./cycle.store";
