@@ -18,7 +18,7 @@ import type { EUserProjectRoles, IUserProjectsRole, IWorkspaceMemberMe, TProject
 import { EUserWorkspaceRoles } from "@plane/types";
 // plane web imports
 import { WorkspaceService } from "@/services/workspace.service";
-import type { RootStore } from "@/plane-web/store/root.store";
+import type { RootStore } from "@/store/root.store";
 // services
 import projectMemberService from "@/services/project/project-member.service";
 import userService from "@/services/user.service";

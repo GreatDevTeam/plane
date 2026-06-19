@@ -12,7 +12,7 @@ import { EIssueServiceType } from "@plane/types";
 // plane web store
 import type { IIssueDetail } from "@/store/issue/issue-details/root.store";
 import { IssueDetail } from "@/store/issue/issue-details/root.store";
-import type { RootStore } from "@/plane-web/store/root.store";
+import type { RootStore } from "@/store/root.store";
 import type { IWorkspaceMembership } from "@/store/member/workspace/workspace-member.store";
 // issues data store
 import type { IArchivedIssuesFilter, IArchivedIssues } from "./archived";
