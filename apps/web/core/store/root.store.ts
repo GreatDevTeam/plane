@@ -16,10 +16,10 @@ import type { IBasePowerKStore as IPowerKStore } from "@/store/base-power-k.stor
 import { BasePowerKStore as PowerKStore } from "@/store/base-power-k.store";
 import type { IStateStore } from "@/store/state.store";
 import { StateStore } from "@/store/state.store";
-import type { ICommandPaletteStore } from "@/plane-web/store/command-palette.store";
-import { CommandPaletteStore } from "@/plane-web/store/command-palette.store";
+import type { ICommandPaletteStore } from "@/store/base-command-palette.store";
+import { CommandPaletteStore } from "@/store/base-command-palette.store";
 import type { RootStore } from "@/plane-web/store/root.store";
-import { WorkspaceRootStore } from "@/plane-web/store/workspace";
+import { WorkspaceRootStore } from "@/store/workspace";
 // stores
 import type { ICycleStore } from "./cycle.store";
 import { CycleStore } from "./cycle.store";
