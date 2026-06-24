@@ -211,13 +211,20 @@ class ProjectJoinEndpoint(BaseAPIView):
             )
 
         if project_invite.responded_at is None:
-            project_invite.accepted = request.data.get("accepted", False)
+            accepted = request.data.get("accepted", False)
+            if not isinstance(accepted, bool):
+                return Response(
+                    {"error": "`accepted` must be a boolean"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            project_invite.accepted = accepted
             project_invite.responded_at = timezone.now()
             project_invite.save()
 
             if project_invite.accepted:
-                # Check if the user account exists
-                user = User.objects.filter(email=project_invite.email).first()
+                # Use the authenticated user directly — they've already been
+                # validated as the invite recipient above.
+                user = request.user
 
                 # Check if user is a part of workspace
                 workspace_member = WorkspaceMember.objects.filter(workspace__slug=slug, member=user).first()
