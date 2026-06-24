@@ -186,11 +186,27 @@ class ProjectJoinEndpoint(BaseAPIView):
     def post(self, request, slug, project_id, pk):
         project_invite = ProjectMemberInvite.objects.get(pk=pk, project_id=project_id, workspace__slug=slug)
 
-        email = request.data.get("email", "")
+        token = request.data.get("token", "")
 
-        if email == "" or project_invite.email != email:
+        # Validate the token to verify the user received the invitation email
+        if not token or project_invite.token != token:
             return Response(
                 {"error": "You do not have permission to join the project"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Require an authenticated session — the accepting user must be the
+        # person who was invited.  Without this check an attacker who knows the
+        # invitee email and obtains the token can hijack the project membership
+        # (GHSA-g36h-p63v-g9c7).
+        if not request.user.is_authenticated:
+            return Response(
+                {"error": "Authentication required to accept project invitation"},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+        if request.user.email.lower() != project_invite.email.lower():
+            return Response(
+                {"error": "You do not have permission to accept this invitation"},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -201,7 +217,7 @@ class ProjectJoinEndpoint(BaseAPIView):
 
             if project_invite.accepted:
                 # Check if the user account exists
-                user = User.objects.filter(email=email).first()
+                user = User.objects.filter(email=project_invite.email).first()
 
                 # Check if user is a part of workspace
                 workspace_member = WorkspaceMember.objects.filter(workspace__slug=slug, member=user).first()
