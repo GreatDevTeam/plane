@@ -41,8 +41,12 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.WARNING(f"{obj.key} configuration already exists"))
 
         keys = ["IS_GOOGLE_ENABLED", "IS_GITHUB_ENABLED", "IS_GITLAB_ENABLED", "IS_GITEA_ENABLED"]
-        if not InstanceConfiguration.objects.filter(key__in=keys).exists():
-            for key in keys:
+
+        existed_keys = InstanceConfiguration.objects.filter(key__in=keys).values_list("key", flat=True)
+        missing_keys = set(keys) - set(existed_keys)
+
+        if missing_keys:
+            for key in missing_keys:
                 if key == "IS_GOOGLE_ENABLED":
                     GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET = get_configuration_value(
                         [
