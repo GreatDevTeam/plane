@@ -449,7 +449,7 @@ class GenericAssetEndpoint(BaseAPIView):
             # to prevent same-origin XSS when the asset URL shares the app's origin
             # (default MinIO self-hosted setup).
             storage = S3Storage(request=request, is_server=True)
-            asset_mime_type = asset.attributes.get("type", "")
+            asset_mime_type = (asset.attributes.get("type") or "").split(";")[0].strip().lower()
             disposition = (
                 "attachment" if asset_mime_type in settings.SCRIPT_CAPABLE_MIME_TYPES else "inline"
             )

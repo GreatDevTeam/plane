@@ -63,7 +63,7 @@ class EntityAssetEndpoint(BaseAPIView):
         # Force attachment disposition for script-capable MIME types to prevent
         # same-origin XSS when Spaces assets are served on the application's origin.
         storage = S3Storage(request=request)
-        asset_mime_type = asset.attributes.get("type", "")
+        asset_mime_type = (asset.attributes.get("type") or "").split(";")[0].strip().lower()
         disposition = (
             "attachment" if asset_mime_type in settings.SCRIPT_CAPABLE_MIME_TYPES else "inline"
         )
