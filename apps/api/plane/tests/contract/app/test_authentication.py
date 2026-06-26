@@ -20,6 +20,22 @@ from plane.settings.redis import redis_instance
 from plane.license.models import Instance
 
 
+@pytest.fixture(autouse=True)
+def _reset_auth_throttle_cache():
+    """Clear the shared cache around every test in this module.
+
+    The auth endpoints apply a per-IP throttle (AuthenticationThrottle) whose
+    request history lives in the Django cache. Because the test session reuses a
+    single cache, that count leaks across tests and trips RATE_LIMIT_EXCEEDED in
+    classes that don't reset it. This mirrors the per-class ``_clear_state``
+    fixtures already used by the throttle / verify-attempt classes, applied
+    module-wide so every auth test starts from a clean throttle state.
+    """
+    cache.clear()
+    yield
+    cache.clear()
+
+
 @pytest.fixture
 def setup_instance(db):
     """Create and configure an instance for authentication tests"""
