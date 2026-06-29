@@ -13,7 +13,7 @@ export type TExtendedPageInstance = TPageExtended & {
 };
 
 export class ExtendedBasePage implements TExtendedPageInstance {
-  // oxlint-disable-next-line no-useless-constructor oxlint-disable-next-line no-unused-vars
+  // oxlint-disable-next-line no-useless-constructor, no-unused-vars
   constructor(store: CoreRootStore, page: TPage, services: TBasePageServices) {}
 
   get asJSONExtended(): TExtendedPageInstance["asJSONExtended"] {
