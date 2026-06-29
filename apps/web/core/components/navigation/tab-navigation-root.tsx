@@ -108,13 +108,17 @@ export const TabNavigationRoot = observer(function TabNavigationRoot(props: TTab
   // Filter and sort navigation items
   const allNavigationItems = navigationItems
     .filter((item) => item.shouldRender)
-    .toSorted((a, b) => a.sortOrder - b.sortOrder);
+    .toSorted((a: TNavigationItem, b: TNavigationItem) => a.sortOrder - b.sortOrder);
 
   // Split items into two categories:
   // 1. visibleNavigationItems: Items NOT user-hidden (may still overflow due to space)
   // 2. hiddenNavigationItems: Items user explicitly hid (always in overflow with "Show" icon)
-  const visibleNavigationItems = allNavigationItems.filter((item) => !tabPreferences.hiddenTabs.includes(item.key));
-  const hiddenNavigationItems = allNavigationItems.filter((item) => tabPreferences.hiddenTabs.includes(item.key));
+  const visibleNavigationItems = allNavigationItems.filter(
+    (item: TNavigationItem) => !tabPreferences.hiddenTabs.includes(item.key)
+  );
+  const hiddenNavigationItems = allNavigationItems.filter((item: TNavigationItem) =>
+    tabPreferences.hiddenTabs.includes(item.key)
+  );
 
   // Responsive tab layout hook
   const { visibleItems, overflowItems, hasOverflow, itemRefs, containerRef } = useResponsiveTabLayout({
@@ -130,10 +134,11 @@ export const TabNavigationRoot = observer(function TabNavigationRoot(props: TTab
 
     if (isProjectRoot && allNavigationItems.length > 0) {
       // Find the default tab in available items
-      const defaultTabItem = allNavigationItems.find((item) => item.key === tabPreferences.defaultTab);
+      const defaultTabItem = allNavigationItems.find((item: TNavigationItem) => item.key === tabPreferences.defaultTab);
 
       // If default tab exists and is enabled, use it; otherwise fall back to work_items
-      const targetItem = defaultTabItem || allNavigationItems.find((item) => item.key === DEFAULT_TAB_KEY);
+      const targetItem =
+        defaultTabItem || allNavigationItems.find((item: TNavigationItem) => item.key === DEFAULT_TAB_KEY);
 
       if (targetItem) {
         navigate(targetItem.href, { replace: true });
@@ -223,7 +228,7 @@ export const TabNavigationRoot = observer(function TabNavigationRoot(props: TTab
 
           {hasOverflow && (
             <div className="pointer-events-none absolute -z-10 opacity-0">
-              {visibleNavigationItems.map((item) => {
+              {visibleNavigationItems.map((item: TNavigationItem) => {
                 const itemIsActive = isActive(item);
                 const originalIndex = allNavigationItems.indexOf(item);
                 return (
