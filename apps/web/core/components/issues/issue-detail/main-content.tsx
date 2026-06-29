@@ -14,14 +14,13 @@ import { EFileAssetType, EIssueServiceType } from "@plane/types";
 // components
 import { DescriptionVersionsRoot } from "@/components/core/description-versions";
 import { DescriptionInput } from "@/components/editor/rich-text/description-input";
+import { IssueTypeSwitcher } from "@/components/issues/issue-type-switcher";
 // hooks
 import { useIssueDetail } from "@/hooks/store/use-issue-detail";
 import { useMember } from "@/hooks/store/use-member";
 import { useUser } from "@/hooks/store/user";
 import useReloadConfirmations from "@/hooks/use-reload-confirmation";
 import useSize from "@/hooks/use-window-size";
-// plane web components
-import { IssueTypeSwitcher } from "@/components/issues/issue-type-switcher";
 // services
 import { WorkItemVersionService } from "@/services/issue";
 // local imports
