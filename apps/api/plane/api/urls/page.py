@@ -4,7 +4,12 @@
 
 from django.urls import path
 
-from plane.api.views import PageListCreateAPIEndpoint, PageDetailAPIEndpoint
+from plane.api.views import (
+    PageListCreateAPIEndpoint,
+    PageDetailAPIEndpoint,
+    PageArchiveUnarchiveAPIEndpoint,
+    PageSearchAPIEndpoint,
+)
 
 urlpatterns = [
     path(
@@ -13,8 +18,18 @@ urlpatterns = [
         name="page-list",
     ),
     path(
+        "workspaces/<str:slug>/projects/<uuid:project_id>/pages/search/",
+        PageSearchAPIEndpoint.as_view(),
+        name="page-search",
+    ),
+    path(
         "workspaces/<str:slug>/projects/<uuid:project_id>/pages/<uuid:pk>/",
         PageDetailAPIEndpoint.as_view(),
         name="page-detail",
+    ),
+    path(
+        "workspaces/<str:slug>/projects/<uuid:project_id>/pages/<uuid:pk>/archive/",
+        PageArchiveUnarchiveAPIEndpoint.as_view(),
+        name="page-archive",
     ),
 ]
