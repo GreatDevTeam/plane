@@ -2,7 +2,7 @@ name: Build to Harbor
 
 on:
   push:
-    branches: [preview]
+    branches: [master]
   workflow_dispatch:
 
 env:
@@ -46,7 +46,22 @@ jobs:
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        run: |
+          mkdir -p /opt/buildkit
+          cat > /opt/buildkit/buildkitd-plane.toml << 'EOF'
+          [registry."registry-harbor.jobscanner.pro"]
+            insecure = true
+          EOF
+          if ! docker buildx inspect plane-builder >/dev/null 2>&1; then
+            docker buildx create \
+              --name plane-builder \
+              --driver docker-container \
+              --config /opt/buildkit/buildkitd-plane.toml \
+              --use
+          else
+            docker buildx use plane-builder
+          fi
+          docker buildx inspect --bootstrap
 
       - name: Build and push
         uses: docker/build-push-action@v7

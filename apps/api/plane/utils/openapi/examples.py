@@ -686,6 +686,44 @@ STICKY_EXAMPLE = OpenApiExample(
     },
 )
 
+# Page Examples
+PAGE_EXAMPLE = OpenApiExample(
+    name="Page",
+    value={
+        "id": "550e8400-e29b-41d4-a716-446655440000",
+        "name": "Project Overview",
+        "description_html": "<p>This page contains project overview information.</p>",
+        "access": 0,
+        "color": "",
+        "is_locked": False,
+        "archived_at": None,
+        "owned_by": "550e8400-e29b-41d4-a716-446655440001",
+        "workspace": "550e8400-e29b-41d4-a716-446655440002",
+        "label_ids": [],
+        "project_ids": ["550e8400-e29b-41d4-a716-446655440003"],
+        "created_at": "2024-01-15T10:30:00Z",
+        "updated_at": "2024-01-15T10:30:00Z",
+    },
+)
+
+PAGE_CREATE_EXAMPLE = OpenApiExample(
+    name="Create Page",
+    value={
+        "name": "Project Overview",
+        "description_html": "<p>This page contains project overview information.</p>",
+        "access": 0,
+        "color": "",
+    },
+)
+
+PAGE_UPDATE_EXAMPLE = OpenApiExample(
+    name="Update Page",
+    value={
+        "name": "Updated Project Overview",
+        "description_html": "<p>Updated content.</p>",
+    },
+)
+
 # Estimate Examples
 ESTIMATE_EXAMPLE = OpenApiExample(
     name="Estimate",

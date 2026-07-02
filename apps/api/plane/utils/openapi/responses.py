@@ -488,3 +488,8 @@ ASSET_NOT_FOUND_RESPONSE = OpenApiResponse(
     description="Asset not found",
     examples=[OpenApiExample(name="Asset not found", value={"error": "Asset not found"})],
 )
+
+PAGE_NOT_FOUND_RESPONSE = OpenApiResponse(
+    description="Page not found",
+    examples=[OpenApiExample(name="Page not found", value={"error": "Page not found"})],
+)

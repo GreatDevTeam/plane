@@ -48,6 +48,7 @@ from .parameters import (
     FIELDS_PARAMETER,
     EXPAND_PARAMETER,
     ESTIMATE_ID_PARAMETER,
+    PAGE_ID_PARAMETER,
 )
 
 # Responses
@@ -91,6 +92,7 @@ from .responses import (
     ASSET_UPDATED_RESPONSE,
     ASSET_DELETED_RESPONSE,
     ASSET_NOT_FOUND_RESPONSE,
+    PAGE_NOT_FOUND_RESPONSE,
     create_paginated_response,
 )
 
@@ -152,6 +154,9 @@ from .examples import (
     STICKY_EXAMPLE,
     ESTIMATE_EXAMPLE,
     ESTIMATE_POINT_EXAMPLE,
+    PAGE_EXAMPLE,
+    PAGE_CREATE_EXAMPLE,
+    PAGE_UPDATE_EXAMPLE,
 )
 
 # Helper decorators
@@ -175,6 +180,7 @@ from .decorators import (
     state_docs,
     estimate_docs,
     estimate_point_docs,
+    page_docs,
 )
 
 # Schema processing hooks
@@ -217,6 +223,7 @@ __all__ = [
     "FIELDS_PARAMETER",
     "EXPAND_PARAMETER",
     "ESTIMATE_ID_PARAMETER",
+    "PAGE_ID_PARAMETER",
     # Responses
     "UNAUTHORIZED_RESPONSE",
     "FORBIDDEN_RESPONSE",
@@ -258,6 +265,7 @@ __all__ = [
     "ASSET_UPDATED_RESPONSE",
     "ASSET_DELETED_RESPONSE",
     "ASSET_NOT_FOUND_RESPONSE",
+    "PAGE_NOT_FOUND_RESPONSE",
     # Examples
     "FILE_UPLOAD_EXAMPLE",
     "WORKSPACE_EXAMPLE",
@@ -315,6 +323,9 @@ __all__ = [
     "STICKY_EXAMPLE",
     "ESTIMATE_EXAMPLE",
     "ESTIMATE_POINT_EXAMPLE",
+    "PAGE_EXAMPLE",
+    "PAGE_CREATE_EXAMPLE",
+    "PAGE_UPDATE_EXAMPLE",
     # Decorators
     "workspace_docs",
     "project_docs",
@@ -335,6 +346,7 @@ __all__ = [
     "state_docs",
     "estimate_docs",
     "estimate_point_docs",
+    "page_docs",
     # Hooks
     "preprocess_filter_api_v1_paths",
     "generate_operation_summary",
