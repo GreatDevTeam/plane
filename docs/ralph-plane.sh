@@ -250,7 +250,7 @@ while true; do
 
     if [ "$ITER_RESUME" = "false" ]; then
         printf "\033[90m[%s] Checking out dev + pulling...\033[0m" "$(date +%H:%M:%S)"
-        git checkout dev 2>/dev/null && git pull origin dev 2>/dev/null && printf " \033[32mOK\033[0m\n" || printf " \033[33mskipped\033[0m\n"
+        git checkout master 2>/dev/null && git pull origin master 2>/dev/null && printf " \033[32mOK\033[0m\n" || printf " \033[33mskipped\033[0m\n"
     fi
     TMPFILE=$(mktemp)
     RAWFILE="$LOGS_DIR/iteration-${ITERATION}.json"
