@@ -408,7 +408,7 @@ class PageArchiveUnarchiveAPIEndpoint(BaseAPIView):
 
 
 class PageSearchAPIEndpoint(BaseAPIView):
-    """Search pages by name"""
+    """Search pages by name or description"""
 
     permission_classes = [ProjectPagePermission]
     use_read_replica = True
@@ -416,7 +416,7 @@ class PageSearchAPIEndpoint(BaseAPIView):
     @page_docs(
         operation_id="search_pages",
         summary="Search pages",
-        description="Search for pages in a project by name.",
+        description="Search for pages in a project by name or description.",
         parameters=[SEARCH_PARAMETER],
         responses={
             200: OpenApiResponse(
@@ -463,6 +463,6 @@ class PageSearchAPIEndpoint(BaseAPIView):
         )
 
         if query:
-            pages = pages.filter(name__icontains=query)
+            pages = pages.filter(Q(name__icontains=query) | Q(description_stripped__icontains=query))
 
         return Response(PageSerializer(pages, many=True).data, status=status.HTTP_200_OK)
