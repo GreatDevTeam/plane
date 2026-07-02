@@ -18,7 +18,7 @@
 set -euo pipefail
 
 OWNER="${GH_OWNER:-GreatDevTeam}"
-REPO="${GH_REPO:-jobscanner-python}"
+REPO="${GH_REPO:-plane}"
 
 cmd_pr_number() {
     local branch="${1:?branch required}"
