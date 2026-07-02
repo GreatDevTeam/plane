@@ -127,8 +127,8 @@ Branch name format: `feature/{sequence_id}_{name_slug}`
 Rules for `name_slug`: lowercase the name; spaces → hyphens; remove non-alphanumeric except hyphens; collapse repeated hyphens; strip leading/trailing hyphens; truncate to 50 chars at a word boundary.
 
 ```bash
-git checkout dev
-git pull origin dev
+git checkout master
+git pull origin master
 git checkout -b <branch>
 docs/plane.sh set-branch <id> <branch>
 ```
@@ -150,8 +150,8 @@ PR_STATE=$(docs/github.sh pr-state "$BRANCH")
 - **`MERGED` or `NONE`** — a new PR is needed. Create a new branch by appending `-v2` (then `-v3`, …, until unused):
   ```bash
   NEW_BRANCH="${BRANCH}-v2"
-  git checkout dev
-  git pull origin dev
+  git checkout master
+  git pull origin master
   git checkout -b "$NEW_BRANCH"
   docs/plane.sh set-branch <id> "$NEW_BRANCH"
   ```
@@ -217,7 +217,7 @@ Fix all reported issues. **If a test or tool cannot run at all** (Docker/infra/c
 
 ### 5. Commit and push
 
-**Never push to `master` or `dev`.** Always push to the feature branch.
+**Never push directly to `master`.** Always push to the feature branch.
 
 ```bash
 git add -p
@@ -243,7 +243,7 @@ Then continue to step 6.
 ### 6. Create PR and record it on the task
 
 ```bash
-PR_URL=$(docs/github.sh create-pr dev <branch> "<task name>" "Plane task: <sequence_id>")
+PR_URL=$(docs/github.sh create-pr master <branch> "<task name>" "Plane task: <sequence_id>")
 docs/plane.sh set-pr <id> "$PR_URL"
 ```
 
@@ -251,7 +251,7 @@ docs/plane.sh set-pr <id> "$PR_URL"
 
 > **Do NOT** add any further comment about the PR — no `add-comment` with the PR link, the commit message, or a "ready for review" note. `set-pr` already posted the comment; anything more is a duplicate. Two commands only at this step:
 > ```bash
-> PR_URL=$(docs/github.sh create-pr dev <branch> "<task name>" "Plane task: <sequence_id>")
+> PR_URL=$(docs/github.sh create-pr master <branch> "<task name>" "Plane task: <sequence_id>")
 > docs/plane.sh set-pr <id> "$PR_URL"   # ← last PR-related command; STOP here
 > ```
 
