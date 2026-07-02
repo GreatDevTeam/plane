@@ -3,6 +3,9 @@
 # See the LICENSE file for details.
 
 # Django imports
+from datetime import datetime
+
+from django.db import connection
 from django.db.models import (
     Q,
     Value,
@@ -31,6 +34,9 @@ from plane.utils.openapi import (
     PER_PAGE_PARAMETER,
     PAGE_ID_PARAMETER,
     DELETED_RESPONSE,
+    ARCHIVED_RESPONSE,
+    UNARCHIVED_RESPONSE,
+    SEARCH_PARAMETER,
     PAGE_NOT_FOUND_RESPONSE,
     PAGE_EXAMPLE,
     PAGE_CREATE_EXAMPLE,
@@ -39,6 +45,19 @@ from plane.utils.openapi import (
 )
 
 from .base import BaseAPIView
+
+
+def _archive_page_and_descendants(page_id, archived_at):
+    sql = """
+    WITH RECURSIVE descendants AS (
+        SELECT id FROM pages WHERE id = %s
+        UNION ALL
+        SELECT pages.id FROM pages, descendants WHERE pages.parent_id = descendants.id
+    )
+    UPDATE pages SET archived_at = %s WHERE id IN (SELECT id FROM descendants);
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(sql, [page_id, archived_at])
 
 
 class PageListCreateAPIEndpoint(BaseAPIView):
@@ -303,3 +322,147 @@ class PageDetailAPIEndpoint(BaseAPIView):
 
         page.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PageArchiveUnarchiveAPIEndpoint(BaseAPIView):
+    """Page archive and unarchive endpoint"""
+
+    permission_classes = [ProjectPagePermission]
+
+    @page_docs(
+        operation_id="archive_page",
+        summary="Archive a page",
+        description="Archive a page and all its descendants. Only the owner or an admin can archive a page.",
+        parameters=[PAGE_ID_PARAMETER],
+        responses={
+            200: ARCHIVED_RESPONSE,
+            400: OpenApiResponse(description="Only the owner or admin can archive the page"),
+            404: PAGE_NOT_FOUND_RESPONSE,
+        },
+    )
+    def post(self, request, slug, project_id, pk):
+        try:
+            page = Page.objects.get(
+                pk=pk,
+                workspace__slug=slug,
+                projects__id=project_id,
+                project_pages__deleted_at__isnull=True,
+            )
+        except Page.DoesNotExist:
+            return Response({"error": "Page not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if (
+            ProjectMember.objects.filter(
+                project_id=project_id, member=request.user, is_active=True, role__lte=15
+            ).exists()
+            and request.user.id != page.owned_by_id
+        ):
+            return Response(
+                {"error": "Only the owner or admin can archive the page"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        archived_at = datetime.now()
+        _archive_page_and_descendants(pk, archived_at)
+        return Response({"archived_at": str(archived_at)}, status=status.HTTP_200_OK)
+
+    @page_docs(
+        operation_id="unarchive_page",
+        summary="Unarchive a page",
+        description="Unarchive a page and all its descendants. Only the owner or an admin can unarchive a page.",
+        parameters=[PAGE_ID_PARAMETER],
+        responses={
+            204: UNARCHIVED_RESPONSE,
+            400: OpenApiResponse(description="Only the owner or admin can unarchive the page"),
+            404: PAGE_NOT_FOUND_RESPONSE,
+        },
+    )
+    def delete(self, request, slug, project_id, pk):
+        try:
+            page = Page.objects.get(
+                pk=pk,
+                workspace__slug=slug,
+                projects__id=project_id,
+                project_pages__deleted_at__isnull=True,
+            )
+        except Page.DoesNotExist:
+            return Response({"error": "Page not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if (
+            ProjectMember.objects.filter(
+                project_id=project_id, member=request.user, is_active=True, role__lte=15
+            ).exists()
+            and request.user.id != page.owned_by_id
+        ):
+            return Response(
+                {"error": "Only the owner or admin can unarchive the page"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if page.parent_id and page.parent.archived_at:
+            page.parent = None
+            page.save(update_fields=["parent"])
+
+        _archive_page_and_descendants(pk, None)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PageSearchAPIEndpoint(BaseAPIView):
+    """Search pages by name"""
+
+    permission_classes = [ProjectPagePermission]
+    use_read_replica = True
+
+    @page_docs(
+        operation_id="search_pages",
+        summary="Search pages",
+        description="Search for pages in a project by name.",
+        parameters=[SEARCH_PARAMETER],
+        responses={
+            200: OpenApiResponse(
+                description="List of matching pages",
+                response=PageSerializer(many=True),
+            ),
+        },
+    )
+    def get(self, request, slug, project_id):
+        query = request.query_params.get("search", "")
+
+        pages = (
+            Page.objects.filter(workspace__slug=slug)
+            .filter(
+                projects__id=project_id,
+                project_pages__deleted_at__isnull=True,
+            )
+            .filter(
+                projects__project_projectmember__member=request.user,
+                projects__project_projectmember__is_active=True,
+                projects__archived_at__isnull=True,
+            )
+            .filter(parent__isnull=True)
+            .filter(Q(owned_by=request.user) | Q(access=Page.PUBLIC_ACCESS))
+            .annotate(
+                label_ids=Coalesce(
+                    ArrayAgg(
+                        "page_labels__label_id",
+                        distinct=True,
+                        filter=~Q(page_labels__label_id__isnull=True),
+                    ),
+                    Value([], output_field=ArrayField(UUIDField())),
+                ),
+                project_ids=Coalesce(
+                    ArrayAgg(
+                        "projects__id",
+                        distinct=True,
+                        filter=~Q(projects__id=True),
+                    ),
+                    Value([], output_field=ArrayField(UUIDField())),
+                ),
+            )
+            .distinct()
+        )
+
+        if query:
+            pages = pages.filter(name__icontains=query)
+
+        return Response(PageSerializer(pages, many=True).data, status=status.HTTP_200_OK)
