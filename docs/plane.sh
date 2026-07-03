@@ -16,6 +16,14 @@
 #   docs/plane.sh set-pr <id> <pr_url>                  — append PR link to description AND post a comment
 #   docs/plane.sh task-in-progress                      — in-progress task (filtered by PLANE_LABEL); {"done":true} if none
 #   docs/plane.sh create-task <name> [desc] [priority] [backlog|todo]  — create new issue
+#   docs/plane.sh create-page <name> [desc_html]         — create new project page
+#   docs/plane.sh get-page <id>                          — print full page JSON (includes description_html)
+#   docs/plane.sh edit-page <id> [name] [desc_html]      — patch a page's name and/or description (pass "" to skip one)
+#   docs/plane.sh remove-page <id>                       — delete a page (must be archived first — see archive-page)
+#   docs/plane.sh archive-page <id>                      — archive a page (and descendants); required before remove-page
+#   docs/plane.sh unarchive-page <id>                    — unarchive a page (and descendants)
+#   docs/plane.sh search-pages <query>                   — server-side search for pages by name
+#   docs/plane.sh replace-in-page <id> <search> <replace> — literal (non-regex) search/replace within a page's description_html
 #   docs/plane.sh done-in-period <from> [<to>]          — list tasks in Done state updated within a date range
 #   docs/plane.sh review-done-in-period <from> [<to>]   — grouped text report of Done/Processing/Cancelled tasks updated within a range
 #   docs/plane.sh set-done <id>                          — move issue to Done (operator-triggered only)
@@ -800,6 +808,148 @@ cmd_create_task() {
         "$BASE/projects/$pid/issues/" | jq '{id, sequence_id, name, priority, state}'
 }
 
+# Create a new page in the project. A plain-text description is wrapped in
+# <p>; a string already containing tags is sent through as-is (HTML).
+cmd_create_page() {
+    local name="${1:?page name required}"
+    local description="${2:-}"
+    local pid
+    pid=$(_project_id)
+
+    local desc_html=""
+    if [ -n "$description" ]; then
+        if [[ "$description" != *"<"*">"* ]]; then
+            desc_html="<p>${description}</p>"
+        else
+            desc_html="$description"
+        fi
+    fi
+
+    local payload
+    payload=$(jq -n \
+        --arg name "$name" \
+        --arg desc "$desc_html" '
+        {name: $name} +
+        (if $desc != "" then {description_html: $desc} else {} end)
+    ')
+
+    _curl -X POST -d "$payload" \
+        "$BASE/projects/$pid/pages/" | jq '{id, name, access}'
+}
+
+cmd_get_page() {
+    local page_id="${1:?page_id required}"
+    local pid
+    pid=$(_project_id)
+    _curl "$BASE/projects/$pid/pages/$page_id/" | jq '.'
+}
+
+# Patch a page's name and/or description_html. Either arg may be "" to leave
+# that field untouched. A plain-text description is wrapped in <p>; a string
+# already containing tags is sent through as-is (HTML).
+cmd_edit_page() {
+    local page_id="${1:?page_id required}"
+    local name="${2:-}"
+    local description="${3:-}"
+    local pid
+    pid=$(_project_id)
+
+    local desc_html=""
+    if [ -n "$description" ]; then
+        if [[ "$description" != *"<"*">"* ]]; then
+            desc_html="<p>${description}</p>"
+        else
+            desc_html="$description"
+        fi
+    fi
+
+    local payload
+    payload=$(jq -n \
+        --arg name "$name" \
+        --arg desc "$desc_html" '
+        (if $name != "" then {name: $name} else {} end) +
+        (if $desc != "" then {description_html: $desc} else {} end)
+    ')
+
+    if [ "$payload" = "{}" ]; then
+        echo "ERROR: nothing to update — provide a name and/or description" >&2
+        exit 1
+    fi
+
+    _curl -X PATCH -d "$payload" \
+        "$BASE/projects/$pid/pages/$page_id/" | jq '{id, name, access, description_html}'
+}
+
+# Delete a page. Plane's API only allows deleting an already-archived page
+# (400 "should be archived before deleting" otherwise) — use archive-page first.
+cmd_remove_page() {
+    local page_id="${1:?page_id required}"
+    local pid
+    pid=$(_project_id)
+    _curl -X DELETE "$BASE/projects/$pid/pages/$page_id/" >/dev/null
+    jq -n --arg id "$page_id" '{id: $id, deleted: true}'
+}
+
+# Archive a page (and its descendants). Required before remove-page will
+# succeed. Only the page owner or a project admin can archive it.
+cmd_archive_page() {
+    local page_id="${1:?page_id required}"
+    local pid
+    pid=$(_project_id)
+    _curl -X POST "$BASE/projects/$pid/pages/$page_id/archive/" \
+        | jq --arg id "$page_id" '{id: $id, archived_at}'
+}
+
+# Unarchive a page (and its descendants). Only the page owner or a project
+# admin can unarchive it.
+cmd_unarchive_page() {
+    local page_id="${1:?page_id required}"
+    local pid
+    pid=$(_project_id)
+    _curl -X DELETE "$BASE/projects/$pid/pages/$page_id/archive/" >/dev/null
+    jq -n --arg id "$page_id" '{id: $id, archived: false}'
+}
+
+# Server-side name search via the pages/search/ endpoint.
+cmd_search_pages() {
+    local query="${1:?search query required}"
+    local pid
+    pid=$(_project_id)
+    _curl -G "$BASE/projects/$pid/pages/search/" --data-urlencode "search=$query" \
+        | jq 'map({id, name, access, archived_at, updated_at})'
+}
+
+# Literal (non-regex) search/replace within a page's description_html.
+# Uses jq split/join rather than gsub so regex metacharacters in the search
+# string (., *, etc.) are matched literally.
+cmd_replace_in_page() {
+    local page_id="${1:?page_id required}"
+    local search="${2:?search string required}"
+    local replace="${3:-}"
+    local pid
+    pid=$(_project_id)
+
+    local current_desc
+    current_desc=$(_curl "$BASE/projects/$pid/pages/$page_id/" | jq -r '.description_html // ""')
+
+    local count
+    count=$(jq -n --arg d "$current_desc" --arg s "$search" '($d | split($s) | length) - 1')
+
+    if [ "$count" -eq 0 ]; then
+        echo "ERROR: search string not found in page $page_id" >&2
+        exit 1
+    fi
+
+    local new_desc
+    new_desc=$(jq -n -r --arg d "$current_desc" --arg s "$search" --arg r "$replace" '$d | split($s) | join($r)')
+
+    local payload
+    payload=$(jq -n --arg d "$new_desc" '{description_html: $d}')
+
+    _curl -X PATCH -d "$payload" "$BASE/projects/$pid/pages/$page_id/" \
+        | jq --argjson count "$count" '{id, name, replacements: $count}'
+}
+
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
@@ -824,6 +974,14 @@ case "$CMD" in
     append-description)  cmd_append_description "${1:?issue_id required}" ;;
     prepend-description) cmd_prepend_description "${1:?issue_id required}" ;;
     create-task)         cmd_create_task "${1:?task name required}" "${2:-}" "${3:-none}" "${4:-backlog}" ;;
+    create-page)         cmd_create_page "${1:?page name required}" "${2:-}" ;;
+    get-page)             cmd_get_page "${1:?page_id required}" ;;
+    edit-page)            cmd_edit_page "${1:?page_id required}" "${2:-}" "${3:-}" ;;
+    remove-page)          cmd_remove_page "${1:?page_id required}" ;;
+    archive-page)         cmd_archive_page "${1:?page_id required}" ;;
+    unarchive-page)       cmd_unarchive_page "${1:?page_id required}" ;;
+    search-pages)         cmd_search_pages "${1:?search query required}" ;;
+    replace-in-page)      cmd_replace_in_page "${1:?page_id required}" "${2:?search string required}" "${3:-}" ;;
     done-in-period)   cmd_done_in_period "${1:?from_date required}" "${2:-}" ;;
     review-done-in-period) cmd_review_done_in_period "${1:?from_date required}" "${2:-}" ;;
     get-issue)        cmd_get_issue "${1:?issue_id required}" ;;
@@ -831,7 +989,7 @@ case "$CMD" in
     list-projects)    cmd_list_projects ;;
     *)
         echo "Usage: $0 <command> [args]"
-        echo "Commands: next-task | task-in-progress | set-in-progress <id> | set-review <id> | set-todo <id> | list-review | set-done <id> | set-cancelled <id> | set-branch <id> <branch> | set-pr <id> <pr_url> | add-comment <id> <html> | get-comments <id> | update-description <id> | append-description <id> | prepend-description <id> | create-task <name> [desc] [priority] [backlog|todo] | done-in-period <from> [<to>] | review-done-in-period <from> [<to>] | get-issue <id> | list-states | list-projects"
+        echo "Commands: next-task | task-in-progress | set-in-progress <id> | set-review <id> | set-todo <id> | list-review | set-done <id> | set-cancelled <id> | set-branch <id> <branch> | set-pr <id> <pr_url> | add-comment <id> <html> | get-comments <id> | update-description <id> | append-description <id> | prepend-description <id> | create-task <name> [desc] [priority] [backlog|todo] | create-page <name> [desc_html] | get-page <id> | edit-page <id> [name] [desc_html] | remove-page <id> | archive-page <id> | unarchive-page <id> | search-pages <query> | replace-in-page <id> <search> <replace> | done-in-period <from> [<to>] | review-done-in-period <from> [<to>] | get-issue <id> | list-states | list-projects"
         exit 1
         ;;
 esac

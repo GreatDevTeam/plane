@@ -50,6 +50,7 @@ if [ -f .env ]; then
 fi
 
 MODEL="${MODEL:-${RALPH_MODEL:-claude-sonnet-4-6}}"
+RALPH_BASE_BRANCH="${RALPH_BASE_BRANCH:-main}"
 RALPH_MAX_LIMIT_PCT="${RALPH_MAX_LIMIT_PCT:-80}"
 RALPH_WAIT_INTERVAL="${RALPH_WAIT_INTERVAL:-60}"
 # Higher limit allowed during off-hours (22:00–07:00 local time)
@@ -178,6 +179,7 @@ echo -e "\033[1;35m  Model: $MODEL\033[0m"
 echo -e "\033[1;35m  Continue mode: $CONTINUE_MODE\033[0m"
 echo -e "\033[1;35m  Prompt file: $PROMPT_FILE\033[0m"
 echo -e "\033[1;35m  Logs: $LOGS_DIR\033[0m"
+echo -e "\033[1;35m  Base branch: $RALPH_BASE_BRANCH\033[0m"
 echo -e "\033[1;35m  Plane host: $PLANE_HOST\033[0m"
 echo -e "\033[1;35m  Workspace: $PLANE_USERNAME\033[0m"
 echo -e "\033[1;35m  Max limit usage: ${RALPH_MAX_LIMIT_PCT}%\033[0m"
@@ -249,8 +251,8 @@ while true; do
     echo -e "\033[1;32m└──────────────────────────────────────┘\033[0m"
 
     if [ "$ITER_RESUME" = "false" ]; then
-        printf "\033[90m[%s] Checking out dev + pulling...\033[0m" "$(date +%H:%M:%S)"
-        git checkout master 2>/dev/null && git pull origin master 2>/dev/null && printf " \033[32mOK\033[0m\n" || printf " \033[33mskipped\033[0m\n"
+        printf "\033[90m[%s] Checking out %s + pulling...\033[0m" "$(date +%H:%M:%S)" "$RALPH_BASE_BRANCH"
+        git checkout "$RALPH_BASE_BRANCH" 2>/dev/null && git pull origin "$RALPH_BASE_BRANCH" 2>/dev/null && printf " \033[32mOK\033[0m\n" || printf " \033[33mskipped\033[0m\n"
     fi
     TMPFILE=$(mktemp)
     RAWFILE="$LOGS_DIR/iteration-${ITERATION}.json"

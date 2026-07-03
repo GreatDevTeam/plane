@@ -6,8 +6,11 @@ Development loop using Plane.so as the task board. **The task you must work on i
 
 - **All communication goes through task comments — never address the operator in your stdout/response.** Questions, answers, status, and blockers must be posted with `docs/plane.sh add-comment <id> "<html>"`. Your textual response is not seen by anyone.
 - **Everything sent to Plane must be HTML, not Markdown.** Comments and description fragments use `<p>`, `<code>`, `<a href>`, `<ul><li>`, `<strong>`, etc. Never send `**bold**`, `` `code` ``, `[text](url)`, or `- bullet` Markdown — it will not render.
+  - ❌ WRONG: `add-comment <id> "[PR #57](https://github.com/x/pull/57)"` → renders as the literal text `[PR #57](...)`.
+  - ✅ RIGHT: `add-comment <id> "<p><a href=\"https://github.com/x/pull/57\">PR #57</a></p>"`.
+  - Before every `add-comment`, re-read the body: if it contains `[`…`](`, `**`, `` ` ``, or a leading `- `, rewrite it as HTML first.
 - **If a comment or the description asks a question, answer it in a comment** (`add-comment`). Do not answer only in your response.
-- **If you hit an infrastructure problem** — cannot run code, tests fail to start, code-quality tools won't run, database/Redis/ChromaDB connection errors, Docker issues, missing services — **post a comment describing the problem** (what you ran, the error) so the operator sees it, then signal completion.
+- **If you hit an infrastructure problem** — cannot run code, tests fail to start, code-quality tools do not run, database/Redis/ChromaDB connection errors, Docker issues, missing services — **post a comment describing the problem** (what you ran, the error) so the operator sees it, then signal completion.
 
 ## Task states (managed by the loop)
 
@@ -217,7 +220,7 @@ Fix all reported issues. **If a test or tool cannot run at all** (Docker/infra/c
 
 ### 5. Commit and push
 
-**Never push to `master` or `dev`.** Always push to the feature branch.
+**Never push to `dev` or `master`.** Always push to the feature branch.
 
 ```bash
 git add -p
@@ -283,7 +286,7 @@ Output:
 ## General rules
 
 - **When mentioning code in comments/descriptions, link to it on GitHub** using HTML anchors and full permalinks:
-  `<a href="https://github.com/GreatDevTeam/jobscanner-python/blob/<branch>/<path>#L<line>">UserService.handle()</a>`
+  `<a href="https://github.com/GreatDevTeam/plane/blob/<branch>/<path>#L<line>">UserService.handle()</a>`
 
 ## Signals
 

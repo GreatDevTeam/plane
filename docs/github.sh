@@ -13,12 +13,12 @@
 #   docs/github.sh resolve-thread <thread_id>    — mark a review thread resolved
 #   docs/github.sh create-pr <base> <head> <title> <body>  — create a PR, print its URL
 #
-# Optional env: GH_OWNER (default GreatDevTeam), GH_REPO (default jobscanner-python)
+# Required in .env: GH_OWNER (repo owner/org), GH_REPO (repo name)
 
 set -euo pipefail
 
-OWNER="${GH_OWNER:-GreatDevTeam}"
-REPO="${GH_REPO:-plane}"
+OWNER="${GH_OWNER:?GH_OWNER not set in .env (repo owner, e.g. an org or user name)}"
+REPO="${GH_REPO:?GH_REPO not set in .env (repo name)}"
 
 cmd_pr_number() {
     local branch="${1:?branch required}"
@@ -35,11 +35,12 @@ cmd_pr_state() {
     gh pr list --head "$branch" --json state --jq '.[0].state // "NONE"' 2>/dev/null || echo "NONE"
 }
 
-# Conclusion of ONLY the test check ("Run tests in container") for a branch's PR.
+# Conclusion of ONLY the PR check whose name contains "test" (case-insensitive).
 # Prints: SUCCESS | FAILURE | PENDING | NONE
 #   - Build / Code-quality / Deploy checks are ignored on purpose, so a non-test
 #     CI failure with green tests still reports SUCCESS.
-#   - NONE = no PR, or the test check has not reported a result yet.
+#   - NONE = no PR, the test check has not reported a result yet, or this repo
+#     has no PR-time CI at all (a push-only pipeline never produces a check here).
 # Note: this gh (2.46) has no --json on `gh pr checks`; output is TSV
 #   (name<TAB>bucket<TAB>elapsed<TAB>link). bucket ∈ pass|fail|pending|skipping|cancel.
 cmd_tests_status() {
