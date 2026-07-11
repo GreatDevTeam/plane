@@ -47,6 +47,20 @@ from plane.utils.openapi import (
 from .base import BaseAPIView
 
 
+def _would_create_cycle(page_id, new_parent_id):
+    """Return True if setting page's parent to new_parent_id would create a cycle."""
+    current_id = new_parent_id
+    while current_id is not None:
+        if str(current_id) == str(page_id):
+            return True
+        try:
+            ancestor = Page.objects.only("parent_id").get(pk=current_id)
+            current_id = ancestor.parent_id
+        except Page.DoesNotExist:
+            break
+    return False
+
+
 def _archive_page_and_descendants(page_id, archived_at):
     sql = """
     WITH RECURSIVE descendants AS (
@@ -78,7 +92,6 @@ class PageListCreateAPIEndpoint(BaseAPIView):
                 projects__project_projectmember__is_active=True,
                 projects__archived_at__isnull=True,
             )
-            .filter(parent__isnull=True)
             .filter(Q(owned_by=self.request.user) | Q(access=Page.PUBLIC_ACCESS))
             .select_related("workspace", "owned_by")
             .annotate(
@@ -126,6 +139,12 @@ class PageListCreateAPIEndpoint(BaseAPIView):
             and not project.guest_view_all_features
         ):
             queryset = queryset.filter(owned_by=request.user)
+
+        parent_id_param = request.query_params.get("parent_id")
+        if parent_id_param is None or parent_id_param == "null":
+            queryset = queryset.filter(parent__isnull=True)
+        else:
+            queryset = queryset.filter(parent_id=parent_id_param)
 
         return self.paginate(
             request=request,
@@ -263,8 +282,19 @@ class PageDetailAPIEndpoint(BaseAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        serializer = PageCreateUpdateSerializer(page, data=request.data, partial=True)
+        serializer = PageCreateUpdateSerializer(
+            page,
+            data=request.data,
+            partial=True,
+            context={"project_id": project_id, "page_id": pk},
+        )
         if serializer.is_valid():
+            new_parent = serializer.validated_data.get("parent", page.parent)
+            if new_parent is not None and _would_create_cycle(pk, new_parent.pk):
+                return Response(
+                    {"error": "Setting this parent would create a cycle."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             serializer.save()
             page = self.get_queryset().filter(pk=pk).first()
             return Response(PageDetailSerializer(page).data, status=status.HTTP_200_OK)

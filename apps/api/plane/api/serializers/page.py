@@ -53,6 +53,7 @@ class PageCreateUpdateSerializer(BaseSerializer):
         write_only=True,
         required=False,
     )
+    parent_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
 
     class Meta:
         model = Page
@@ -62,12 +63,42 @@ class PageCreateUpdateSerializer(BaseSerializer):
             "access",
             "color",
             "parent",
+            "parent_id",
             "view_props",
             "logo_props",
             "labels",
             "external_id",
             "external_source",
         ]
+
+    def validate(self, data):
+        # Allow parent_id as an alias for parent
+        if "parent_id" in data:
+            parent_id = data.pop("parent_id")
+            if parent_id is not None:
+                try:
+                    data["parent"] = Page.objects.get(pk=parent_id)
+                except Page.DoesNotExist:
+                    raise serializers.ValidationError({"parent_id": "Page not found."})
+            else:
+                data["parent"] = None
+        return data
+
+    def validate_parent(self, value):
+        if value is None:
+            return value
+        project_id = self.context.get("project_id")
+        if project_id:
+            if not ProjectPage.objects.filter(
+                page=value,
+                project_id=project_id,
+                deleted_at__isnull=True,
+            ).exists():
+                raise serializers.ValidationError("Parent page must belong to the same project.")
+        page_id = self.context.get("page_id")
+        if page_id and str(value.pk) == str(page_id):
+            raise serializers.ValidationError("A page cannot be its own parent.")
+        return value
 
     def create(self, validated_data):
         labels = validated_data.pop("labels", None)
