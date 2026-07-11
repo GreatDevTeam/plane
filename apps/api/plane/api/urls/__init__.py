@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # See the LICENSE file for details.
 
+from django.conf import settings
+
 from .asset import urlpatterns as asset_patterns
 from .cycle import urlpatterns as cycle_patterns
 from .intake import urlpatterns as intake_patterns
@@ -31,3 +33,8 @@ urlpatterns = [
     *invite_patterns,
     *sticky_patterns,
 ]
+
+if getattr(settings, "ENABLE_DRF_SPECTACULAR", False):
+    from .schema import urlpatterns as schema_patterns
+
+    urlpatterns += [*schema_patterns]
