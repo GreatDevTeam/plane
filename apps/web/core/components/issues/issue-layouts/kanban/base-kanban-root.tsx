@@ -85,7 +85,13 @@ export const BaseKanBanRoot = observer(function BaseKanBanRoot(props: IBaseKanBa
   } = useIssuesActions(storeType);
 
   const deleteAreaRef = useRef<HTMLDivElement | null>(null);
+  const scrollableContainerRef = useRef<HTMLDivElement | null>(null);
+  const scrollPositionRef = useRef<number>(0);
+
   const [isDragOverDelete, setIsDragOverDelete] = useState(false);
+  // states
+  const [draggedIssueId, setDraggedIssueId] = useState<string | undefined>(undefined);
+  const [deleteIssueModal, setDeleteIssueModal] = useState(false);
 
   const { isDragging } = useKanbanView();
 
@@ -101,19 +107,37 @@ export const BaseKanBanRoot = observer(function BaseKanBanRoot(props: IBaseKanBa
     fetchIssues("init-loader", { canGroup: true, perPageCount: sub_group_by ? 10 : 30 }, viewId);
   }, [fetchIssues, storeType, group_by, sub_group_by, viewId]);
 
-  useAutoRefreshIssues(
-    refreshIssues ?? (() => Promise.resolve()),
-    () => {
-      if (isDragging) return true;
-      if (issues.getIssueLoader() === "init-loader" || issues.getIssueLoader() === "pagination") return true;
-      const activeEl = document.activeElement;
-      if (activeEl) {
-        const tag = activeEl.tagName.toLowerCase();
-        if (tag === "input" || tag === "textarea" || activeEl.getAttribute("contenteditable") === "true") return true;
+  useEffect(() => {
+    const container = scrollableContainerRef.current;
+    if (!container) return;
+    const onScroll = () => {
+      scrollPositionRef.current = container.scrollLeft;
+    };
+    container.addEventListener("scroll", onScroll, { passive: true });
+    return () => container.removeEventListener("scroll", onScroll);
+  }, []);
+
+  const refreshWithScrollPreserved = useCallback(async () => {
+    if (!refreshIssues) return;
+    const savedScroll = scrollPositionRef.current;
+    await refreshIssues();
+    requestAnimationFrame(() => {
+      if (scrollableContainerRef.current && savedScroll > 0) {
+        scrollableContainerRef.current.scrollLeft = savedScroll;
       }
-      return false;
+    });
+  }, [refreshIssues]);
+
+  useAutoRefreshIssues(refreshWithScrollPreserved, () => {
+    if (isDragging) return true;
+    if (issues.getIssueLoader() === "init-loader" || issues.getIssueLoader() === "pagination") return true;
+    const activeEl = document.activeElement;
+    if (activeEl) {
+      const tag = activeEl.tagName.toLowerCase();
+      if (tag === "input" || tag === "textarea" || activeEl.getAttribute("contenteditable") === "true") return true;
     }
-  );
+    return false;
+  });
 
   const fetchMoreIssues = useCallback(
     (groupId?: string, subgroupId?: string) => {
@@ -131,12 +155,6 @@ export const BaseKanBanRoot = observer(function BaseKanBanRoot(props: IBaseKanBa
   const KanBanView = sub_group_by ? KanBanSwimLanes : KanBan;
 
   const { enableInlineEditing, enableQuickAdd, enableIssueCreation } = issues?.viewFlags || {};
-
-  const scrollableContainerRef = useRef<HTMLDivElement | null>(null);
-
-  // states
-  const [draggedIssueId, setDraggedIssueId] = useState<string | undefined>(undefined);
-  const [deleteIssueModal, setDeleteIssueModal] = useState(false);
 
   const isEditingAllowed = allowPermissions(
     [EUserPermissions.ADMIN, EUserPermissions.MEMBER],

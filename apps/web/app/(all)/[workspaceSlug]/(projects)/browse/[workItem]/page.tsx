@@ -4,7 +4,7 @@
  * See the LICENSE file for details.
  */
 
-import { useEffect } from "react";
+import { useEffect, useCallback } from "react";
 import { observer } from "mobx-react";
 import { useTheme } from "next-themes";
 import useSWR from "swr";
@@ -24,6 +24,7 @@ import { useAppTheme } from "@/hooks/store/use-app-theme";
 import { useIssueDetail } from "@/hooks/store/use-issue-detail";
 import { useProject } from "@/hooks/store/use-project";
 import { useAppRouter } from "@/hooks/use-app-router";
+import useAutoRefreshIssues from "@/hooks/use-auto-refresh-issues";
 // layouts
 import { ProjectAuthWrapper } from "@/layouts/auth-layout/project-wrapper";
 // plane web imports
@@ -70,6 +71,21 @@ export const IssueDetailsPage = observer(function IssueDetailsPage({ params }: R
     issueId,
     issue?.is_epic ? EIssueServiceType.EPICS : EIssueServiceType.ISSUES
   );
+
+  const refreshIssue = useCallback(
+    () => fetchIssueWithIdentifier(workspaceSlug.toString(), projectIdentifier, sequence_id).then(() => {}),
+    [fetchIssueWithIdentifier, workspaceSlug, projectIdentifier, sequence_id]
+  );
+
+  useAutoRefreshIssues(refreshIssue, () => {
+    if (issueLoader) return true;
+    const activeEl = document.activeElement;
+    if (activeEl) {
+      const tag = activeEl.tagName.toLowerCase();
+      if (tag === "input" || tag === "textarea" || activeEl.getAttribute("contenteditable") === "true") return true;
+    }
+    return false;
+  });
 
   useEffect(() => {
     const handleToggleIssueDetailSidebar = () => {
