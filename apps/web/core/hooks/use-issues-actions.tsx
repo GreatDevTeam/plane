@@ -30,6 +30,7 @@ export interface IssueActions {
     viewId?: string
   ) => Promise<TIssuesResponse | undefined>;
   fetchNextIssues: (groupId?: string, subGroupId?: string) => Promise<TIssuesResponse | undefined>;
+  refreshIssues?: () => Promise<void>;
   removeIssue: (projectId: string | undefined | null, issueId: string) => Promise<void>;
   createIssue?: (projectId: string | undefined | null, data: Partial<TIssue>) => Promise<TIssue | undefined>;
   quickAddIssue?: (projectId: string | undefined | null, data: TIssue) => Promise<TIssue | undefined>;
@@ -101,6 +102,10 @@ const useProjectIssueActions = () => {
     },
     [issues.fetchIssues, workspaceSlug, projectId]
   );
+  const refreshIssues = useCallback(async () => {
+    if (!workspaceSlug || !projectId) return;
+    await issues.fetchIssuesWithExistingPagination(workspaceSlug, projectId, "mutation");
+  }, [issues.fetchIssuesWithExistingPagination, workspaceSlug, projectId]);
 
   const createIssue = useCallback(
     async (projectId: string | undefined | null, data: Partial<TIssue>) => {
@@ -150,6 +155,7 @@ const useProjectIssueActions = () => {
     () => ({
       fetchIssues,
       fetchNextIssues,
+      refreshIssues,
       createIssue,
       quickAddIssue,
       updateIssue,
@@ -157,7 +163,7 @@ const useProjectIssueActions = () => {
       archiveIssue,
       updateFilters,
     }),
-    [fetchIssues, fetchNextIssues, createIssue, quickAddIssue, updateIssue, removeIssue, archiveIssue, updateFilters]
+    [fetchIssues, fetchNextIssues, refreshIssues, createIssue, quickAddIssue, updateIssue, removeIssue, archiveIssue, updateFilters]
   );
 };
 
@@ -183,6 +189,10 @@ const useProjectEpicsActions = () => {
     },
     [issues.fetchIssues, workspaceSlug, projectId]
   );
+  const refreshIssues = useCallback(async () => {
+    if (!workspaceSlug || !projectId) return;
+    await issues.fetchIssuesWithExistingPagination(workspaceSlug, projectId, "mutation");
+  }, [issues.fetchIssuesWithExistingPagination, workspaceSlug, projectId]);
 
   const createIssue = useCallback(
     async (projectId: string | undefined | null, data: Partial<TIssue>) => {
@@ -232,6 +242,7 @@ const useProjectEpicsActions = () => {
     () => ({
       fetchIssues,
       fetchNextIssues,
+      refreshIssues,
       createIssue,
       quickAddIssue,
       updateIssue,
@@ -239,7 +250,7 @@ const useProjectEpicsActions = () => {
       archiveIssue,
       updateFilters,
     }),
-    [fetchIssues, fetchNextIssues, createIssue, quickAddIssue, updateIssue, removeIssue, archiveIssue, updateFilters]
+    [fetchIssues, fetchNextIssues, refreshIssues, createIssue, quickAddIssue, updateIssue, removeIssue, archiveIssue, updateFilters]
   );
 };
 
@@ -272,6 +283,10 @@ const useCycleIssueActions = () => {
     },
     [issues.fetchIssues, workspaceSlug, projectId, cycleId]
   );
+  const refreshIssues = useCallback(async () => {
+    if (!workspaceSlug || !projectId || !cycleId) return;
+    await issues.fetchIssuesWithExistingPagination(workspaceSlug, projectId, "mutation", cycleId);
+  }, [issues.fetchIssuesWithExistingPagination, workspaceSlug, projectId, cycleId]);
 
   const createIssue = useCallback(
     async (projectId: string | undefined | null, data: Partial<TIssue>) => {
@@ -328,6 +343,7 @@ const useCycleIssueActions = () => {
     () => ({
       fetchIssues,
       fetchNextIssues,
+      refreshIssues,
       createIssue,
       quickAddIssue,
       updateIssue,
@@ -339,6 +355,7 @@ const useCycleIssueActions = () => {
     [
       fetchIssues,
       fetchNextIssues,
+      refreshIssues,
       createIssue,
       quickAddIssue,
       updateIssue,
@@ -379,6 +396,10 @@ const useModuleIssueActions = () => {
     },
     [issues.fetchIssues, workspaceSlug, projectId, moduleId]
   );
+  const refreshIssues = useCallback(async () => {
+    if (!workspaceSlug || !projectId || !moduleId) return;
+    await issues.fetchIssuesWithExistingPagination(workspaceSlug, projectId, "mutation", moduleId);
+  }, [issues.fetchIssuesWithExistingPagination, workspaceSlug, projectId, moduleId]);
 
   const createIssue = useCallback(
     async (projectId: string | undefined | null, data: Partial<TIssue>) => {
@@ -435,6 +456,7 @@ const useModuleIssueActions = () => {
     () => ({
       fetchIssues,
       fetchNextIssues,
+      refreshIssues,
       createIssue,
       quickAddIssue,
       updateIssue,
@@ -443,7 +465,7 @@ const useModuleIssueActions = () => {
       archiveIssue,
       updateFilters,
     }),
-    [fetchIssues, createIssue, updateIssue, removeIssue, removeIssueFromView, archiveIssue, updateFilters]
+    [fetchIssues, refreshIssues, createIssue, updateIssue, removeIssue, removeIssueFromView, archiveIssue, updateFilters]
   );
 };
 
@@ -475,6 +497,10 @@ const useProfileIssueActions = () => {
     },
     [issues.fetchIssues, workspaceSlug, userId]
   );
+  const refreshIssues = useCallback(async () => {
+    if (!workspaceSlug || !userId) return;
+    await issues.fetchIssuesWithExistingPagination(workspaceSlug, userId, "mutation");
+  }, [issues.fetchIssuesWithExistingPagination, workspaceSlug, userId]);
 
   const createIssue = useCallback(
     async (projectId: string | undefined | null, data: Partial<TIssue>) => {
@@ -517,13 +543,14 @@ const useProfileIssueActions = () => {
     () => ({
       fetchIssues,
       fetchNextIssues,
+      refreshIssues,
       createIssue,
       updateIssue,
       removeIssue,
       archiveIssue,
       updateFilters,
     }),
-    [fetchIssues, createIssue, updateIssue, removeIssue, archiveIssue, updateFilters]
+    [fetchIssues, refreshIssues, createIssue, updateIssue, removeIssue, archiveIssue, updateFilters]
   );
 };
 
@@ -550,6 +577,10 @@ const useProjectViewIssueActions = () => {
     },
     [issues.fetchIssues, workspaceSlug, projectId]
   );
+  const refreshIssues = useCallback(async () => {
+    if (!workspaceSlug || !projectId || !viewId) return;
+    await issues.fetchIssuesWithExistingPagination(workspaceSlug, projectId, viewId, "mutation");
+  }, [issues.fetchIssuesWithExistingPagination, workspaceSlug, projectId, viewId]);
 
   const createIssue = useCallback(
     async (projectId: string | undefined | null, data: Partial<TIssue>) => {
@@ -599,6 +630,7 @@ const useProjectViewIssueActions = () => {
     () => ({
       fetchIssues,
       fetchNextIssues,
+      refreshIssues,
       createIssue,
       quickAddIssue,
       updateIssue,
@@ -606,7 +638,7 @@ const useProjectViewIssueActions = () => {
       archiveIssue,
       updateFilters,
     }),
-    [fetchIssues, fetchNextIssues, createIssue, quickAddIssue, updateIssue, removeIssue, archiveIssue, updateFilters]
+    [fetchIssues, fetchNextIssues, refreshIssues, createIssue, quickAddIssue, updateIssue, removeIssue, archiveIssue, updateFilters]
   );
 };
 
