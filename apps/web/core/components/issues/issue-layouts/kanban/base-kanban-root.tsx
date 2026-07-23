@@ -103,7 +103,16 @@ export const BaseKanBanRoot = observer(function BaseKanBanRoot(props: IBaseKanBa
 
   useAutoRefreshIssues(
     refreshIssues ?? (() => Promise.resolve()),
-    () => isDragging || issues.getIssueLoader() === "init-loader" || issues.getIssueLoader() === "pagination"
+    () => {
+      if (isDragging) return true;
+      if (issues.getIssueLoader() === "init-loader" || issues.getIssueLoader() === "pagination") return true;
+      const activeEl = document.activeElement;
+      if (activeEl) {
+        const tag = activeEl.tagName.toLowerCase();
+        if (tag === "input" || tag === "textarea" || activeEl.getAttribute("contenteditable") === "true") return true;
+      }
+      return false;
+    }
   );
 
   const fetchMoreIssues = useCallback(
