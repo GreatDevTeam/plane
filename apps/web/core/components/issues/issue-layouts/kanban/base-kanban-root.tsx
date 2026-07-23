@@ -19,6 +19,7 @@ import { useIssueDetail } from "@/hooks/store/use-issue-detail";
 import { useIssues } from "@/hooks/store/use-issues";
 import { useKanbanView } from "@/hooks/store/use-kanban-view";
 import { useUserPermissions } from "@/hooks/store/user";
+import useAutoRefreshIssues from "@/hooks/use-auto-refresh-issues";
 import { useGroupIssuesDragNDrop } from "@/hooks/use-group-dragndrop";
 import { useIssueStoreType } from "@/hooks/use-issue-layout-store";
 import { useIssuesActions } from "@/hooks/use-issues-actions";
@@ -73,6 +74,7 @@ export const BaseKanBanRoot = observer(function BaseKanBanRoot(props: IBaseKanBa
   const {
     fetchIssues,
     fetchNextIssues,
+    refreshIssues,
     quickAddIssue,
     updateIssue,
     removeIssue,
@@ -98,6 +100,11 @@ export const BaseKanBanRoot = observer(function BaseKanBanRoot(props: IBaseKanBa
   useEffect(() => {
     fetchIssues("init-loader", { canGroup: true, perPageCount: sub_group_by ? 10 : 30 }, viewId);
   }, [fetchIssues, storeType, group_by, sub_group_by, viewId]);
+
+  useAutoRefreshIssues(
+    refreshIssues ?? (() => Promise.resolve()),
+    () => isDragging || issues.getIssueLoader() === "init-loader" || issues.getIssueLoader() === "pagination"
+  );
 
   const fetchMoreIssues = useCallback(
     (groupId?: string, subgroupId?: string) => {
