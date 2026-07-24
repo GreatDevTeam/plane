@@ -5,7 +5,7 @@
  */
 
 import type { FC } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { combine } from "@atlaskit/pragmatic-drag-and-drop/combine";
 import { dropTargetForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { autoScrollForElements } from "@atlaskit/pragmatic-drag-and-drop-auto-scroll/element";
@@ -87,6 +87,7 @@ export const BaseKanBanRoot = observer(function BaseKanBanRoot(props: IBaseKanBa
   const deleteAreaRef = useRef<HTMLDivElement | null>(null);
   const scrollableContainerRef = useRef<HTMLDivElement | null>(null);
   const scrollPositionRef = useRef<number>(0);
+  const pendingScrollRestoreRef = useRef<number | null>(null);
 
   const [isDragOverDelete, setIsDragOverDelete] = useState(false);
   // states
@@ -117,15 +118,20 @@ export const BaseKanBanRoot = observer(function BaseKanBanRoot(props: IBaseKanBa
     return () => container.removeEventListener("scroll", onScroll);
   }, []);
 
+  // Restore pending scroll after every React DOM commit so it survives deferred MobX-triggered re-renders.
+  useLayoutEffect(() => {
+    if (pendingScrollRestoreRef.current !== null && scrollableContainerRef.current) {
+      scrollableContainerRef.current.scrollLeft = pendingScrollRestoreRef.current;
+      pendingScrollRestoreRef.current = null;
+    }
+  });
+
   const refreshWithScrollPreserved = useCallback(async () => {
     if (!refreshIssues) return;
     const savedScroll = scrollPositionRef.current;
     await refreshIssues();
-    requestAnimationFrame(() => {
-      if (scrollableContainerRef.current && savedScroll > 0) {
-        scrollableContainerRef.current.scrollLeft = savedScroll;
-      }
-    });
+    // Set after refresh so loading-state re-renders don't prematurely clear the ref.
+    pendingScrollRestoreRef.current = savedScroll;
   }, [refreshIssues]);
 
   useAutoRefreshIssues(refreshWithScrollPreserved, () => {
