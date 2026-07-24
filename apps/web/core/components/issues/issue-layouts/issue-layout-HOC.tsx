@@ -49,8 +49,12 @@ export const IssueLayoutHOC = observer(function IssueLayoutHOC(props: Props) {
   const { issues } = useIssues(storeType);
 
   const issueCount = issues.getGroupIssueCount(undefined, undefined, false);
+  const loader = issues?.getIssueLoader();
 
-  if (issues?.getIssueLoader() === "init-loader" || issueCount === undefined) {
+  // During "mutation" (background refresh) the store briefly clears groupedIssueCount,
+  // making issueCount undefined. We must NOT switch to the skeleton loader in that case —
+  // the board should stay mounted so the user doesn't see a flash.
+  if (loader === "init-loader" || (issueCount === undefined && loader !== "mutation")) {
     return <ActiveLoader layout={layout} />;
   }
 
