@@ -86,7 +86,6 @@ export const BaseKanBanRoot = observer(function BaseKanBanRoot(props: IBaseKanBa
 
   const deleteAreaRef = useRef<HTMLDivElement | null>(null);
   const scrollableContainerRef = useRef<HTMLDivElement | null>(null);
-  const scrollPositionRef = useRef<number>(0);
   const pendingScrollRestoreRef = useRef<number | null>(null);
 
   const [isDragOverDelete, setIsDragOverDelete] = useState(false);
@@ -108,16 +107,6 @@ export const BaseKanBanRoot = observer(function BaseKanBanRoot(props: IBaseKanBa
     fetchIssues("init-loader", { canGroup: true, perPageCount: sub_group_by ? 10 : 30 }, viewId);
   }, [fetchIssues, storeType, group_by, sub_group_by, viewId]);
 
-  useEffect(() => {
-    const container = scrollableContainerRef.current;
-    if (!container) return;
-    const onScroll = () => {
-      scrollPositionRef.current = container.scrollLeft;
-    };
-    container.addEventListener("scroll", onScroll, { passive: true });
-    return () => container.removeEventListener("scroll", onScroll);
-  }, []);
-
   // Restore scroll after every React DOM commit, but only when the store is idle.
   // During "mutation" the store briefly clears groupedIssueIds — we skip restoration
   // then so the position is applied once the final data render lands.
@@ -133,9 +122,12 @@ export const BaseKanBanRoot = observer(function BaseKanBanRoot(props: IBaseKanBa
 
   const refreshWithScrollPreserved = useCallback(async () => {
     if (!refreshIssues) return;
-    // Capture position BEFORE the refresh so the ref is already set when MobX triggers
-    // React re-renders — avoids a race where useLayoutEffect fires before this line.
-    pendingScrollRestoreRef.current = scrollPositionRef.current;
+    // Read scrollLeft directly from the DOM element. An event-listener approach doesn't
+    // work here because the scrollable div lives inside IssueLayoutHOC, which renders a
+    // skeleton during init-load — so the div is not in the DOM when the one-time effect
+    // runs, and the listener never attaches. Reading directly is always correct because
+    // background refreshes only fire while the board is visible (init-loader guard skips them).
+    pendingScrollRestoreRef.current = scrollableContainerRef.current?.scrollLeft ?? 0;
     await refreshIssues();
   }, [refreshIssues]);
 
