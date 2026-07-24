@@ -118,20 +118,25 @@ export const BaseKanBanRoot = observer(function BaseKanBanRoot(props: IBaseKanBa
     return () => container.removeEventListener("scroll", onScroll);
   }, []);
 
-  // Restore pending scroll after every React DOM commit so it survives deferred MobX-triggered re-renders.
+  // Restore scroll after every React DOM commit, but only when the store is idle.
+  // During "mutation" the store briefly clears groupedIssueIds — we skip restoration
+  // then so the position is applied once the final data render lands.
   useLayoutEffect(() => {
     if (pendingScrollRestoreRef.current !== null && scrollableContainerRef.current) {
-      scrollableContainerRef.current.scrollLeft = pendingScrollRestoreRef.current;
-      pendingScrollRestoreRef.current = null;
+      const loader = issues.getIssueLoader();
+      if (loader !== "mutation" && loader !== "init-loader" && loader !== "pagination") {
+        scrollableContainerRef.current.scrollLeft = pendingScrollRestoreRef.current;
+        pendingScrollRestoreRef.current = null;
+      }
     }
   });
 
   const refreshWithScrollPreserved = useCallback(async () => {
     if (!refreshIssues) return;
-    const savedScroll = scrollPositionRef.current;
+    // Capture position BEFORE the refresh so the ref is already set when MobX triggers
+    // React re-renders — avoids a race where useLayoutEffect fires before this line.
+    pendingScrollRestoreRef.current = scrollPositionRef.current;
     await refreshIssues();
-    // Set after refresh so loading-state re-renders don't prematurely clear the ref.
-    pendingScrollRestoreRef.current = savedScroll;
   }, [refreshIssues]);
 
   useAutoRefreshIssues(refreshWithScrollPreserved, () => {
