@@ -156,4 +156,17 @@ class PageCreateUpdateSerializer(BaseSerializer):
                 batch_size=10,
             )
 
+        # The editor renders a page from its collaborative (Yjs) snapshot stored in
+        # description_binary, not from description_html, and the page title lives in
+        # that snapshot as well. Updating the HTML or the name through the API would
+        # otherwise leave the snapshot untouched and the change would never show up in
+        # the UI. Dropping the snapshot makes the live server rebuild it from
+        # description_html and the page name the next time the page is opened.
+        snapshot_fields = ("description_html", "name")
+        if any(
+            field in validated_data and validated_data[field] != getattr(instance, field) for field in snapshot_fields
+        ):
+            instance.description_binary = None
+            instance.description_json = {}
+
         return super().update(instance, validated_data)
