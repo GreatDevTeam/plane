@@ -8,6 +8,7 @@ import pytest
 from rest_framework import status
 
 from plane.db.models import Page, Project, ProjectMember, ProjectPage
+from plane.utils.live_server import LiveServerUnavailable
 
 
 @pytest.fixture
@@ -320,11 +321,12 @@ class TestPageUpdateRewritesCollaborativeSnapshot:
         response = api_key_client.patch(url, {"description_html": "<p>new content</p>"}, format="json")
 
         assert response.status_code == status.HTTP_200_OK
-        # the existing snapshot is handed over so the rewrite is an update of it, not a new document
+        # the existing snapshot is handed over so the rewrite is an update of it, not a new document,
+        # and the name is left out so the rewrite does not revert a rename made in the editor
         live_server_call.assert_called_once_with(
             document_id=page_with_snapshot.id,
             description_html="<p>new content</p>",
-            name="Page With Snapshot",
+            name=None,
             description_binary=b"stale-binary",
         )
         page_with_snapshot.refresh_from_db()
@@ -342,9 +344,10 @@ class TestPageUpdateRewritesCollaborativeSnapshot:
         response = api_key_client.patch(url, {"name": "Renamed Page"}, format="json")
 
         assert response.status_code == status.HTTP_200_OK
+        # the body is left out: rewriting it with the stored HTML would revert unsaved edits
         live_server_call.assert_called_once_with(
             document_id=page_with_snapshot.id,
-            description_html="<p>old content</p>",
+            description_html=None,
             name="Renamed Page",
             description_binary=b"stale-binary",
         )
@@ -353,21 +356,41 @@ class TestPageUpdateRewritesCollaborativeSnapshot:
         assert bytes(page_with_snapshot.description_binary) == b"rewritten-binary"
 
     @pytest.mark.django_db
-    def test_snapshot_is_dropped_when_live_server_is_unavailable(
+    def test_page_is_left_untouched_when_live_server_is_unavailable(
         self, api_key_client, workspace, project, page_with_snapshot, live_server_call
     ):
-        # Without the live server the snapshot can only be invalidated, so that it is
-        # rebuilt from description_html the next time the page is opened.
-        live_server_call.return_value = None
+        # Rebuilding the snapshot from HTML produces a Yjs document unrelated to the one the
+        # clients hold, and Yjs merges documents instead of replacing them, so every browser
+        # that cached the page would end up showing the old and the new content at once. The
+        # update is refused instead, and the page stays as it was.
+        live_server_call.side_effect = LiveServerUnavailable("the live server is not configured")
         url = self.get_detail_url(workspace.slug, project.id, page_with_snapshot.id)
 
         response = api_key_client.patch(url, {"description_html": "<p>new content</p>"}, format="json")
 
-        assert response.status_code == status.HTTP_200_OK
+        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        assert "the live server is not configured" in response.data["error"]
         page_with_snapshot.refresh_from_db()
-        assert page_with_snapshot.description_html == "<p>new content</p>"
-        assert page_with_snapshot.description_binary is None
-        assert page_with_snapshot.description_json == {}
+        assert page_with_snapshot.description_html == "<p>old content</p>"
+        assert bytes(page_with_snapshot.description_binary) == b"stale-binary"
+        assert page_with_snapshot.description_json == {"type": "doc", "content": []}
+
+    @pytest.mark.django_db
+    def test_page_without_a_snapshot_does_not_need_the_live_server(
+        self, api_key_client, workspace, project, create_page, live_server_call
+    ):
+        # A page that was never opened in the editor has no snapshot for the clients to hold:
+        # the live server builds one from description_html the first time it is opened.
+        page = create_page("Page Without Snapshot", "<p>old content</p>")
+        live_server_call.side_effect = LiveServerUnavailable("the live server is not configured")
+        url = self.get_detail_url(workspace.slug, project.id, page.id)
+
+        response = api_key_client.patch(url, {"description_html": "<p>new content</p>"}, format="json")
+
+        assert response.status_code == status.HTTP_200_OK
+        live_server_call.assert_not_called()
+        page.refresh_from_db()
+        assert page.description_html == "<p>new content</p>"
 
     @pytest.mark.django_db
     def test_update_unrelated_field_keeps_snapshot(

@@ -140,6 +140,15 @@ class PageCreateUpdateSerializer(BaseSerializer):
         return page
 
     def update(self, instance, validated_data):
+        # The editor renders a page from its collaborative (Yjs) snapshot stored in
+        # description_binary, not from description_html, and the page title lives in
+        # that snapshot as well. Writing the HTML or the name without the snapshot
+        # would make the change invisible in the UI, so the live server rewrites the
+        # content inside the existing snapshot and hands the update to any editor that
+        # has the page open. It runs first so that a live server that cannot be reached
+        # leaves the page untouched instead of half updated.
+        self._sync_collaborative_snapshot(instance, validated_data)
+
         labels = validated_data.pop("labels", None)
         if labels is not None:
             PageLabel.objects.filter(page=instance).delete()
@@ -157,35 +166,29 @@ class PageCreateUpdateSerializer(BaseSerializer):
                 batch_size=10,
             )
 
-        # The editor renders a page from its collaborative (Yjs) snapshot stored in
-        # description_binary, not from description_html, and the page title lives in
-        # that snapshot as well. Leaving the snapshot untouched would make the change
-        # invisible in the UI, and dropping it is not enough either: the live server
-        # would rebuild an unrelated snapshot that clients merge with the one they
-        # already hold. The live server rewrites the content inside the existing
-        # snapshot instead, and hands the update to any editor that has the page open.
-        snapshot_fields = ("description_html", "name")
-        if any(
-            field in validated_data and validated_data[field] != getattr(instance, field) for field in snapshot_fields
-        ):
-            self._sync_collaborative_snapshot(instance, validated_data)
-
         return super().update(instance, validated_data)
 
     def _sync_collaborative_snapshot(self, instance, validated_data):
+        changed = {
+            field: validated_data[field]
+            for field in ("description_html", "name")
+            if field in validated_data and validated_data[field] != getattr(instance, field)
+        }
+        if not changed:
+            return
+
+        if not instance.description_binary:
+            # The page has never been opened in the editor, so there is no snapshot the clients
+            # could hold: the live server builds one from description_html and the page name the
+            # first time the page is opened.
+            return
+
         document = replace_document_content(
             document_id=instance.id,
-            description_html=validated_data.get("description_html", instance.description_html),
-            name=validated_data.get("name", instance.name),
+            description_html=changed.get("description_html"),
+            name=changed.get("name"),
             description_binary=instance.description_binary,
         )
-
-        if document is None:
-            # The live server is unreachable or not configured. Dropping the snapshot is the
-            # next best thing: it is rebuilt from description_html when the page is opened.
-            instance.description_binary = None
-            instance.description_json = {}
-            return
 
         instance.description_binary = document["description_binary"]
         instance.description_json = document["description_json"]

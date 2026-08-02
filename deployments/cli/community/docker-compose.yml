@@ -58,6 +58,9 @@ x-app-env: &app-env
   API_KEY_RATE_LIMIT: ${API_KEY_RATE_LIMIT:-60/minute}
   MINIO_ENDPOINT_SSL: ${MINIO_ENDPOINT_SSL:-0}
   LIVE_SERVER_SECRET_KEY: ${LIVE_SERVER_SECRET_KEY:-2FiJk1U2aiVPEQtzLehYGlTSnTnrs7LW}
+  # The API has to reach the live server to update a page: a page is rendered from its
+  # collaborative snapshot, and only the live server can rewrite that snapshot.
+  LIVE_BASE_URL: ${LIVE_BASE_URL:-http://live:3000}
   WEBHOOK_ALLOWED_IPS: ${WEBHOOK_ALLOWED_IPS:-}
   WEBHOOK_ALLOWED_HOSTS: ${WEBHOOK_ALLOWED_HOSTS:-}
 

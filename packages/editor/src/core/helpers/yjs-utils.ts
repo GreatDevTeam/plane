@@ -124,9 +124,35 @@ export const getBinaryDataFromDocumentEditorHTMLString = (descriptionHTML: strin
 };
 
 type TReplaceDocumentEditorContentArgs = {
-  existingBinaryData: Uint8Array;
-  descriptionHTML: string;
+  yDoc: Y.Doc;
+  descriptionHTML?: string;
   title?: string;
+};
+
+/**
+ * @description this function rewrites the content of a document editor Y.Doc in place, leaving the fragments that
+ * were not passed untouched. Only the fragments that actually change are rewritten: rewriting the body with the
+ * HTML stored in the database while the document is being edited would revert whatever is not saved yet, and the
+ * same holds for the title.
+ * @param {TReplaceDocumentEditorContentArgs} args
+ */
+export const replaceDocumentEditorContent = (args: TReplaceDocumentEditorContentArgs): void => {
+  const { yDoc, descriptionHTML, title } = args;
+
+  yDoc.transact(() => {
+    if (descriptionHTML != null) {
+      const contentJSON = generateJSON(descriptionHTML || "<p></p>", DOCUMENT_EDITOR_EXTENSIONS);
+      prosemirrorJSONToYXmlFragment(documentEditorSchema, contentJSON, yDoc.getXmlFragment("default"));
+    }
+    if (title != null) {
+      const titleJSON = generateTitleProsemirrorJson(title);
+      prosemirrorJSONToYXmlFragment(documentEditorSchema, titleJSON, yDoc.getXmlFragment("title"));
+    }
+  });
+};
+
+type TReplaceDocumentEditorBinaryDataContentArgs = Omit<TReplaceDocumentEditorContentArgs, "yDoc"> & {
+  existingBinaryData: Uint8Array;
 };
 
 /**
@@ -134,12 +160,12 @@ type TReplaceDocumentEditorContentArgs = {
  * update of that document instead of an unrelated one. Building a fresh Y.Doc out of the HTML would make every
  * client that still holds the previous state (in memory or in its IndexedDB cache) merge the two versions and end
  * up with both the old and the new content, since Yjs sync is a merge and never a replace.
- * @param {TReplaceDocumentEditorContentArgs} args
+ * @param {TReplaceDocumentEditorBinaryDataContentArgs} args
  * @returns {{ encodedDocument: Uint8Array, incrementalUpdate: Uint8Array }} the full state of the rewritten
  * document and the update that takes the provided document to it
  */
 export const replaceDocumentEditorBinaryDataContent = (
-  args: TReplaceDocumentEditorContentArgs
+  args: TReplaceDocumentEditorBinaryDataContentArgs
 ): {
   encodedDocument: Uint8Array;
   incrementalUpdate: Uint8Array;
@@ -153,14 +179,7 @@ export const replaceDocumentEditorBinaryDataContent = (
   // state of the document before the rewrite, used to compute the update that applies it
   const stateVector = Y.encodeStateVector(yDoc);
 
-  const contentJSON = generateJSON(descriptionHTML ?? "<p></p>", DOCUMENT_EDITOR_EXTENSIONS);
-  yDoc.transact(() => {
-    prosemirrorJSONToYXmlFragment(documentEditorSchema, contentJSON, yDoc.getXmlFragment("default"));
-    if (title != null) {
-      const titleJSON = generateTitleProsemirrorJson(title);
-      prosemirrorJSONToYXmlFragment(documentEditorSchema, titleJSON, yDoc.getXmlFragment("title"));
-    }
-  });
+  replaceDocumentEditorContent({ yDoc, descriptionHTML, title });
 
   return {
     encodedDocument: Y.encodeStateAsUpdate(yDoc),
