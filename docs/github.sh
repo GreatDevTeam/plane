@@ -34,6 +34,9 @@ fi
 
 OWNER="${GH_OWNER:?GH_OWNER not set in .env (repo owner, e.g. an org or user name)}"
 REPO="${GH_REPO:?GH_REPO not set in .env (repo name)}"
+# `gh` reads GH_REPO too, but expects the "[HOST/]OWNER/REPO" form and exits on a bare
+# repo name, so re-export it in that form now that both parts have been captured.
+export GH_REPO="$OWNER/$REPO"
 CI_CHECK_PATTERNS="${PR_CI_CHECK_PATTERNS:-test}"
 
 cmd_pr_number() {
