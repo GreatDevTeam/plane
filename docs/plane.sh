@@ -16,32 +16,60 @@
 #   docs/plane.sh set-pr <id> <pr_url>                  — append PR link to description AND post a comment
 #   docs/plane.sh task-in-progress                      — in-progress task (filtered by PLANE_LABEL); {"done":true} if none
 #   docs/plane.sh create-task <name> [desc] [priority] [backlog|todo]  — create new issue
-#   docs/plane.sh create-page <name> [desc_html]         — create new project page
-#   docs/plane.sh get-page <id>                          — print full page JSON (includes description_html)
-#   docs/plane.sh edit-page <id> [name] [desc_html]      — patch a page's name and/or description (pass "" to skip one)
+#   docs/plane.sh create-page <name> [desc_html|@file]   — create new project page (@file reads desc from a file)
+#   docs/plane.sh main-page [page_name] [env_key]         — get a root doc page by env_key (default PLANE_MAIN_DOC_PAGE_ID), creating it (named page_name) if it does not exist yet; response includes just_created: true/false. Pass a distinct env_key to track more than one root (e.g. separate dev/user doc hierarchies).
+#   docs/plane.sh page-url <id>                          — print the page's web-app URL (for linking it from another page)
+#   docs/plane.sh get-page <id> [out_file]               — print full page JSON; with out_file, write description_html to it instead
+#   docs/plane.sh edit-page <id> [name] [desc_html|@file] — patch a page's name and/or description (pass "" to skip one; @file reads desc from a file)
+#   docs/plane.sh rename-page <id> <name>                 — rename a page without touching its description
 #   docs/plane.sh remove-page <id>                       — delete a page (must be archived first — see archive-page)
 #   docs/plane.sh archive-page <id>                      — archive a page (and descendants); required before remove-page
 #   docs/plane.sh unarchive-page <id>                    — unarchive a page (and descendants)
 #   docs/plane.sh search-pages <query>                   — server-side search for pages by name
-#   docs/plane.sh replace-in-page <id> <search> <replace> — literal (non-regex) search/replace within a page's description_html
 #   docs/plane.sh done-in-period <from> [<to>]          — list tasks in Done state updated within a date range
 #   docs/plane.sh review-done-in-period <from> [<to>]   — grouped text report of Done/Processing/Cancelled tasks updated within a range
 #   docs/plane.sh set-done <id>                          — move issue to Done (operator-triggered only)
 #   docs/plane.sh set-cancelled <id>                     — move issue to Cancelled (operator-triggered only)
 #   docs/plane.sh get-issue <id>                         — print full issue JSON
+#   docs/plane.sh get-task <PROJECT-123>                 — look up an issue by its human-readable ref (e.g. TM-808) and print full issue JSON + comments
 #   docs/plane.sh list-states                            — print all project states
 #   docs/plane.sh list-projects                          — print all workspace projects
+#   docs/plane.sh upload-asset <file> <issue_id> [project_id]              — upload an image/file, attached to the issue; print {asset_id, embed_html}
+#   docs/plane.sh download-asset <asset_id> <out_path> <issue_id> [project_id] — download an asset attached to the issue (e.g. an image embedded in a comment/description)
+#   docs/plane.sh list-images <issue_id>                 — JSON array of asset ids embedded in the issue's description + comments
 #
 # All comment/description bodies sent to Plane must be HTML, not Markdown.
 #
+# Images in comments/descriptions: Plane's editor embeds uploaded images as
+# <image-component src="<asset_id>" width="35%" height="auto" alignment="left"></image-component>
+# — the src attribute is an asset UUID, not a literal URL. To embed a new
+# image, run `upload-asset <file> <issue_id>` and splice its `embed_html` into
+# the HTML you send via add-comment/update-description/append-description. To
+# view an image someone else attached, run `list-images <issue_id>` to find
+# asset ids, then `download-asset <asset_id> <out_path> <issue_id>` and read
+# the file locally.
+#
+# upload-asset/download-asset go through the per-issue work-item-attachments
+# endpoint (not the generic workspace-assets endpoint) because the generic
+# endpoint returns HTTP 500 on this Plane instance (confirmed on two separate
+# projects) — the issue-attachments endpoint is the one that actually works,
+# hence the required <issue_id>.
+#
 # Required in .env: PLANE_HOST, PLANE_TOKEN, PLANE_USERNAME
 # Optional in .env: PLANE_PROJECT_ID       (auto-detected from first project if absent)
+#                   PLANE_MAIN_DOC_PAGE_ID  (id of the project's main Plane doc page, used by main-page as its
+#                                            default env_key; empty until the page has been created once — see
+#                                            how-to-add-plane-pages.md. Projects with more than one doc hierarchy
+#                                            use additional PLANE_*_PAGE_ID keys instead, passed explicitly to
+#                                            main-page — e.g. PLANE_DEV_DOCS_PAGE_ID/PLANE_USER_DOCS_PAGE_ID)
 #                   PLANE_STATE_IN_PROGRESS (default: searches by name "In Progress" in started group)
 #                   PLANE_STATE_REVIEW      (default: searches by name containing "review")
 #                   PLANE_STATE_DONE        (default: searches completed group for name "done")
 #                   PLANE_STATE_CANCELLED   (default: first state in cancelled group)
 #                   PLANE_LABEL             (name or UUID; next-task/task-in-progress only returns issues with this label)
-#                   PLANE_RESPECT_BLOCKERS  (1 to skip next-task candidates blocked by an unresolved "Blocked by: #<seq>" reference)
+#                   PLANE_RESPECT_BLOCKERS  (1 to skip next-task candidates blocked by an unresolved "Blocked by: #<seq>" reference;
+#                                            add "(review)" — e.g. "Blocked by: #<seq> (review)" — to resolve as soon as the
+#                                            blocker reaches a Review-named state instead of waiting for Done/Cancelled)
 
 set -euo pipefail
 
@@ -77,6 +105,34 @@ BASE="https://$PLANE_HOST/api/v1/workspaces/$PLANE_USERNAME"
 
 _curl() {
     curl -sf -H "X-API-Key: $PLANE_TOKEN" -H "Content-Type: application/json" "$@"
+}
+
+# If $1 starts with "@", read and print the rest as a file path; otherwise
+# print $1 unchanged. Mirrors curl's -d @file convention.
+_resolve_at_file() {
+    local val="$1"
+    if [[ "$val" == @* ]]; then
+        local f="${val#@}"
+        if [ ! -f "$f" ]; then
+            echo "ERROR: file not found: $f" >&2
+            exit 1
+        fi
+        cat "$f"
+    else
+        echo -n "$val"
+    fi
+}
+
+# Update or append KEY=VALUE in .env, so a value discovered at runtime
+# (e.g. a newly created page's id) persists for the next loop iteration
+# without a separate manual edit step.
+_persist_env_key() {
+    local key="$1" value="$2"
+    if [ -f .env ] && grep -q "^${key}=" .env; then
+        sed -i "s|^${key}=.*|${key}=${value}|" .env
+    else
+        echo "${key}=${value}" >> .env
+    fi
 }
 
 _project_id() {
@@ -167,6 +223,58 @@ cmd_get_issue() {
     _curl "$BASE/projects/$pid/issues/$issue_id/" | jq "$_STRIP_NOISE"
 }
 
+# Look up an issue by its human-readable ref (project identifier + sequence
+# id, e.g. "TM-808" — the form shown in the Plane UI/URLs), as opposed to
+# get-issue which takes the internal UUID. Resolves the project by matching
+# the ref's prefix against each project's identifier (falls back to the
+# configured/default project if no match is found, in case the ref's prefix
+# does not correspond to a project identifier), then scans that project's
+# issues for a matching sequence_id. Output shape matches next-task: full
+# issue JSON plus its comments.
+cmd_get_task() {
+    local task_ref="$1"
+    if [[ ! "$task_ref" =~ ^([A-Za-z]+)-?([0-9]+)$ ]]; then
+        echo "ERROR: task ref must look like TM-808" >&2
+        exit 1
+    fi
+    local ident="${BASH_REMATCH[1]}"
+    local seq="${BASH_REMATCH[2]}"
+
+    local pid
+    pid=$(_curl "$BASE/projects/" \
+        | jq -r --arg i "$ident" '.results[] | select(.identifier != null and (.identifier | ascii_upcase) == ($i | ascii_upcase)) | .id' \
+        | head -1)
+    if [ -z "$pid" ]; then
+        pid=$(_project_id)
+    fi
+
+    local issues_tmp
+    issues_tmp=$(mktemp)
+    _curl "$BASE/projects/$pid/issues/?per_page=500&page=1" > "$issues_tmp"
+
+    local issue_id
+    issue_id=$(jq -r --argjson seq "$seq" '.results[] | select(.sequence_id == $seq) | .id' "$issues_tmp" | head -1)
+    rm -f "$issues_tmp"
+
+    if [ -z "$issue_id" ]; then
+        echo "ERROR: task $task_ref not found" >&2
+        exit 1
+    fi
+
+    local comments
+    comments=$(_curl "$BASE/projects/$pid/issues/$issue_id/comments/" \
+        | jq '[.results[] | {
+            id,
+            body: (.comment_html // "" | gsub("<[^>]*>"; "") | gsub("^\\s+|\\s+$"; "")),
+            images: [(.comment_html // "") | scan("<(?:image-component|img)[^>]*\\bsrc=\"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\"") | .[0]],
+            created_at
+        }] | sort_by(.created_at)')
+
+    _curl "$BASE/projects/$pid/issues/$issue_id/" | jq \
+        --argjson comments "$comments" \
+        ". + {comments: \$comments} | $_STRIP_NOISE"
+}
+
 cmd_next_task() {
     local pid
     pid=$(_project_id)
@@ -227,24 +335,35 @@ cmd_next_task() {
     # Blocking-relationship gate: Plane's v1 API does not expose issue-relations
     # (blocked_by/blocking) at all, so this approximates it via a text convention —
     # "Blocked by: #<sequence_id>" in description_html — instead of a real relations
-    # API call. Opt in with PLANE_RESPECT_BLOCKERS=1. A referenced sequence_id that
-    # can't be found among the currently-fetched issues fails open (not blocking),
-    # since it's more likely a stale/typo'd reference than an intentional gate.
+    # API call. Opt in with PLANE_RESPECT_BLOCKERS=1. By default a reference resolves
+    # only once the blocker reaches a completed/cancelled state (i.e. Done); appending
+    # "(review)" — e.g. "Blocked by: #<sequence_id> (review)" — loosens that single
+    # reference to resolve as soon as the blocker reaches a state whose name contains
+    # "review" (Done also satisfies it, since Done implies past review). A referenced
+    # sequence_id that can't be found among the currently-fetched issues fails open
+    # (not blocking), since it's more likely a stale/typo'd reference than an
+    # intentional gate.
     local next
     if [ "${PLANE_RESPECT_BLOCKERS:-0}" = "1" ]; then
         local resolved_ids
         resolved_ids=$(echo "$states" | jq -c '[.results[] | select(.group == "completed" or .group == "cancelled") | .id]')
 
+        local resolved_review_ids
+        resolved_review_ids=$(echo "$states" | jq -c '[.results[] | select(.group == "completed" or .group == "cancelled" or (.name | test("review"; "i"))) | .id]')
+
         local seq_to_state
         seq_to_state=$(jq -c '[.results[] | {(.sequence_id | tostring): .state}] | add // {}' "$issues_tmp")
 
-        next=$(printf '%s' "$candidates" | jq -c --argjson resolved "$resolved_ids" --argjson seqmap "$seq_to_state" '
-            def blocked_seq_ids:
+        next=$(printf '%s' "$candidates" | jq -c --argjson resolved "$resolved_ids" --argjson resolved_review "$resolved_review_ids" --argjson seqmap "$seq_to_state" '
+            def blocked_refs:
                 (.description_html // "") |
-                [scan("(?i)blocked[- ]by:?\\s*#?([0-9]+)")] | map(.[0] | tonumber);
+                [scan("(?i)blocked[- ]by:?\\s*#?([0-9]+)(?:\\s*\\(?(review)\\)?)?")] |
+                map({id: (.[0] | tonumber), review: (.[1] != null)});
             first(.[] | select(
-                (blocked_seq_ids | map($seqmap[. | tostring]) | map(select(. != null))) as $blocker_states |
-                ($blocker_states | all(. as $s | $resolved | index($s) != null))
+                (blocked_refs | map(. + {state: $seqmap[.id | tostring]}) | map(select(.state != null))) as $blockers |
+                ($blockers | all(
+                    . as $b | (if $b.review then $resolved_review else $resolved end) | index($b.state) != null
+                ))
             ))
         ')
     else
@@ -269,6 +388,7 @@ cmd_next_task() {
         | jq '[.results[] | {
             id,
             body: (.comment_html // "" | gsub("<[^>]*>"; "") | gsub("^\\s+|\\s+$"; "")),
+            images: [(.comment_html // "") | scan("<(?:image-component|img)[^>]*\\bsrc=\"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\"") | .[0]],
             created_at
         }] | sort_by(.created_at)')
 
@@ -432,6 +552,7 @@ cmd_get_comments() {
         | jq '[.results[] | {
             id,
             body: (.comment_html // "" | gsub("<[^>]*>"; "") | gsub("^\\s+|\\s+$"; "")),
+            images: [(.comment_html // "") | scan("<(?:image-component|img)[^>]*\\bsrc=\"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\"") | .[0]],
             created_at
         }] | sort_by(.created_at)'
 }
@@ -578,6 +699,7 @@ cmd_task_in_progress() {
         | jq '[.results[] | {
             id,
             body: (.comment_html // "" | gsub("<[^>]*>"; "") | gsub("^\\s+|\\s+$"; "")),
+            images: [(.comment_html // "") | scan("<(?:image-component|img)[^>]*\\bsrc=\"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\"") | .[0]],
             created_at
         }] | sort_by(.created_at)')
 
@@ -809,12 +931,16 @@ cmd_create_task() {
 }
 
 # Create a new page in the project. A plain-text description is wrapped in
-# <p>; a string already containing tags is sent through as-is (HTML).
+# <p>; a string already containing tags is sent through as-is (HTML). Prefix
+# description with "@" to read it from a file instead (e.g. @page.html) —
+# mirrors curl's -d @file convention.
 cmd_create_page() {
     local name="${1:?page name required}"
     local description="${2:-}"
     local pid
     pid=$(_project_id)
+
+    description=$(_resolve_at_file "$description")
 
     local desc_html=""
     if [ -n "$description" ]; then
@@ -839,20 +965,92 @@ cmd_create_page() {
 
 cmd_get_page() {
     local page_id="${1:?page_id required}"
+    local out_file="${2:-}"
     local pid
     pid=$(_project_id)
-    _curl "$BASE/projects/$pid/pages/$page_id/" | jq '.'
+    local page
+    page=$(_curl "$BASE/projects/$pid/pages/$page_id/")
+
+    if [ -n "$out_file" ]; then
+        jq -r '.description_html // ""' <<< "$page" > "$out_file"
+        jq -n --arg id "$page_id" --arg f "$out_file" '{id: $id, saved_to: $f}'
+    else
+        jq '.' <<< "$page"
+    fi
+}
+
+# Get a project's root doc page, creating it if it does not exist yet.
+# env_key defaults to PLANE_MAIN_DOC_PAGE_ID (the single-hierarchy case) but
+# any PLANE_* key can be passed — e.g. a dual-hierarchy project tracks two
+# independent roots under PLANE_DEV_DOCS_PAGE_ID/PLANE_USER_DOCS_PAGE_ID,
+# found/created by calling this twice with different (name, env_key) pairs.
+# Fast path: env_key already set in .env -> direct get-page, no search. Slow
+# path (first run only): search for a page named exactly <page_name>; if
+# none is found, create it. Either way, the resolved id is persisted to
+# env_key in .env so every later call takes the fast path. The response
+# always includes "just_created": true/false so the agent knows whether
+# this is a brand-new, still-empty page (safe to populate with landing-page
+# content) or an existing one (must not clobber what is already there).
+cmd_main_page() {
+    local page_name="${1:-}"
+    local env_key="${2:-PLANE_MAIN_DOC_PAGE_ID}"
+    local current_id="${!env_key:-}"
+
+    if [ -n "$current_id" ]; then
+        cmd_get_page "$current_id" | jq '. + {just_created: false}'
+        return
+    fi
+
+    if [ -z "$page_name" ]; then
+        echo "ERROR: $env_key not set in .env and no page name given — run 'main-page <page-name> [$env_key]' once so the page can be found or created." >&2
+        exit 1
+    fi
+
+    local pid
+    pid=$(_project_id)
+
+    local existing_id
+    existing_id=$(_curl -G "$BASE/projects/$pid/pages/search/" --data-urlencode "search=$page_name" \
+        | jq -r --arg n "$page_name" '[.[] | select(.name == $n and .archived_at == null)] | .[0].id // empty')
+
+    local page_id just_created
+    if [ -n "$existing_id" ]; then
+        page_id="$existing_id"
+        just_created=false
+    else
+        page_id=$(_curl -X POST -d "$(jq -n --arg name "$page_name" '{name: $name}')" \
+            "$BASE/projects/$pid/pages/" | jq -r '.id')
+        just_created=true
+    fi
+
+    _persist_env_key "$env_key" "$page_id"
+
+    cmd_get_page "$page_id" | jq --argjson c "$just_created" '. + {just_created: $c}'
+}
+
+# Plane/PageDetail has no url/web_url field, so the web-app link has to be
+# built by hand — used to link a newly created page from the main page (see
+# how-to-add-plane-pages.md: every page must be linked from the main page).
+cmd_page_url() {
+    local page_id="${1:?page_id required}"
+    local pid
+    pid=$(_project_id)
+    echo "https://$PLANE_HOST/$PLANE_USERNAME/projects/$pid/pages/$page_id/"
 }
 
 # Patch a page's name and/or description_html. Either arg may be "" to leave
 # that field untouched. A plain-text description is wrapped in <p>; a string
-# already containing tags is sent through as-is (HTML).
+# already containing tags is sent through as-is (HTML). Prefix description
+# with "@" to read it from a file instead (e.g. @page.html) — mirrors curl's
+# -d @file convention.
 cmd_edit_page() {
     local page_id="${1:?page_id required}"
     local name="${2:-}"
     local description="${3:-}"
     local pid
     pid=$(_project_id)
+
+    description=$(_resolve_at_file "$description")
 
     local desc_html=""
     if [ -n "$description" ]; then
@@ -878,6 +1076,14 @@ cmd_edit_page() {
 
     _curl -X PATCH -d "$payload" \
         "$BASE/projects/$pid/pages/$page_id/" | jq '{id, name, access, description_html}'
+}
+
+# Rename a page without touching its description_html — thin wrapper over
+# edit-page for the common case where only the name is changing.
+cmd_rename_page() {
+    local page_id="${1:?page_id required}"
+    local name="${2:?new name required}"
+    cmd_edit_page "$page_id" "$name" ""
 }
 
 # Delete a page. Plane's API only allows deleting an already-archived page
@@ -919,35 +1125,108 @@ cmd_search_pages() {
         | jq 'map({id, name, access, archived_at, updated_at})'
 }
 
-# Literal (non-regex) search/replace within a page's description_html.
-# Uses jq split/join rather than gsub so regex metacharacters in the search
-# string (., *, etc.) are matched literally.
-cmd_replace_in_page() {
-    local page_id="${1:?page_id required}"
-    local search="${2:?search string required}"
-    local replace="${3:-}"
-    local pid
-    pid=$(_project_id)
 
-    local current_desc
-    current_desc=$(_curl "$BASE/projects/$pid/pages/$page_id/" | jq -r '.description_html // ""')
+# Upload a file as an issue attachment and mark it uploaded, in one shot:
+# create the attachment (presigned S3 POST), stream the file straight to that
+# presigned URL, then PATCH is_uploaded=true. Prints {asset_id, embed_html} —
+# splice embed_html into any HTML sent via add-comment / update-description /
+# append-description / prepend-description to show the image inline. The src
+# attribute of <image-component> is the asset UUID, not a literal URL
+# (Plane's editor resolves it client-side).
+#
+# Goes through /issues/<id>/issue-attachments/ rather than the generic
+# /assets/ endpoint — the generic endpoint returns HTTP 500 on this Plane
+# instance regardless of payload (confirmed against two separate projects on
+# 2026-07-12), while the per-issue attachments endpoint works.
+cmd_upload_asset() {
+    local file_path="${1:?file path required}"
+    local issue_id="${2:?issue_id required}"
+    local project_id="${3:-}"
 
-    local count
-    count=$(jq -n --arg d "$current_desc" --arg s "$search" '($d | split($s) | length) - 1')
+    if [ ! -f "$file_path" ]; then
+        echo "ERROR: file not found: $file_path" >&2
+        exit 1
+    fi
+    if [ -z "$project_id" ]; then
+        project_id=$(_project_id)
+    fi
 
-    if [ "$count" -eq 0 ]; then
-        echo "ERROR: search string not found in page $page_id" >&2
+    local name size mime
+    name=$(basename "$file_path")
+    size=$(stat -c%s "$file_path" 2>/dev/null || stat -f%z "$file_path")
+    mime=$(file -b --mime-type "$file_path")
+
+    local payload
+    payload=$(jq -n --arg name "$name" --arg type "$mime" --argjson size "$size" \
+        '{name: $name, type: $type, size: $size}')
+
+    local resp
+    resp=$(_curl -X POST -d "$payload" "$BASE/projects/$project_id/issues/$issue_id/issue-attachments/")
+
+    local asset_id upload_url
+    asset_id=$(echo "$resp" | jq -r '.asset_id // empty')
+    upload_url=$(echo "$resp" | jq -r '.upload_data.url // empty')
+
+    if [ -z "$asset_id" ] || [ -z "$upload_url" ]; then
+        echo "ERROR: failed to create attachment: $resp" >&2
         exit 1
     fi
 
-    local new_desc
-    new_desc=$(jq -n -r --arg d "$current_desc" --arg s "$search" --arg r "$replace" '$d | split($s) | join($r)')
+    # S3 presigned POST: every policy field must be sent as its own form
+    # field, in order, with the file itself last.
+    local -a form_args=()
+    while IFS=$'\t' read -r key value; do
+        form_args+=(-F "${key}=${value}")
+    done < <(echo "$resp" | jq -r '.upload_data.fields | to_entries[] | "\(.key)\t\(.value)"')
 
-    local payload
-    payload=$(jq -n --arg d "$new_desc" '{description_html: $d}')
+    curl -sf "${form_args[@]}" -F "file=@${file_path};type=${mime}" "$upload_url" -o /dev/null
 
-    _curl -X PATCH -d "$payload" "$BASE/projects/$pid/pages/$page_id/" \
-        | jq --argjson count "$count" '{id, name, replacements: $count}'
+    _curl -X PATCH -d '{"is_uploaded": true}' \
+        "$BASE/projects/$project_id/issues/$issue_id/issue-attachments/${asset_id}/" >/dev/null
+
+    local embed="<image-component src=\"${asset_id}\" width=\"35%\" height=\"auto\" alignment=\"left\"></image-component>"
+    jq -n --arg id "$asset_id" --arg embed "$embed" '{asset_id: $id, embed_html: $embed}'
+}
+
+# Download an asset (e.g. an image embedded in a comment/description) to a
+# local path so it can be viewed. The per-issue attachments endpoint responds
+# with a redirect straight to the presigned download URL (no JSON envelope),
+# unlike the generic /assets/<id>/ endpoint.
+cmd_download_asset() {
+    local asset_id="${1:?asset_id required}"
+    local output_path="${2:?output_path required}"
+    local issue_id="${3:?issue_id required}"
+    local project_id="${4:-}"
+
+    if [ -z "$project_id" ]; then
+        project_id=$(_project_id)
+    fi
+
+    curl -sfL -H "X-API-Key: $PLANE_TOKEN" \
+        "$BASE/projects/$project_id/issues/$issue_id/issue-attachments/${asset_id}/" \
+        -o "$output_path"
+
+    jq -n --arg path "$output_path" '{path: $path}'
+}
+
+# Scan an issue's description_html and all its comments' comment_html for
+# embedded <image-component>/<img> asset ids (src holding a UUID), so the
+# agent has one place to look before manually grepping HTML. Returns a JSON
+# array of unique asset ids — pass each to download-asset to view it.
+cmd_list_images() {
+    local issue_id="${1:?issue_id required}"
+    local pid
+    pid=$(_project_id)
+
+    local desc
+    desc=$(_curl "$BASE/projects/$pid/issues/$issue_id/" | jq -r '.description_html // ""')
+    local comments_html
+    comments_html=$(_curl "$BASE/projects/$pid/issues/$issue_id/comments/" | jq -r '[.results[].comment_html // ""] | join(" ")')
+
+    jq -n --arg d "$desc" --arg c "$comments_html" '
+        ($d + " " + $c) as $html |
+        [$html | scan("<(?:image-component|img)[^>]*\\bsrc=\"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\"") | .[0]] | unique
+    '
 }
 
 # ---------------------------------------------------------------------------
@@ -975,21 +1254,27 @@ case "$CMD" in
     prepend-description) cmd_prepend_description "${1:?issue_id required}" ;;
     create-task)         cmd_create_task "${1:?task name required}" "${2:-}" "${3:-none}" "${4:-backlog}" ;;
     create-page)         cmd_create_page "${1:?page name required}" "${2:-}" ;;
-    get-page)             cmd_get_page "${1:?page_id required}" ;;
+    main-page)            cmd_main_page "${1:-}" "${2:-}" ;;
+    page-url)             cmd_page_url "${1:?page_id required}" ;;
+    get-page)             cmd_get_page "${1:?page_id required}" "${2:-}" ;;
     edit-page)            cmd_edit_page "${1:?page_id required}" "${2:-}" "${3:-}" ;;
+    rename-page)          cmd_rename_page "${1:?page_id required}" "${2:?new name required}" ;;
     remove-page)          cmd_remove_page "${1:?page_id required}" ;;
     archive-page)         cmd_archive_page "${1:?page_id required}" ;;
     unarchive-page)       cmd_unarchive_page "${1:?page_id required}" ;;
     search-pages)         cmd_search_pages "${1:?search query required}" ;;
-    replace-in-page)      cmd_replace_in_page "${1:?page_id required}" "${2:?search string required}" "${3:-}" ;;
     done-in-period)   cmd_done_in_period "${1:?from_date required}" "${2:-}" ;;
     review-done-in-period) cmd_review_done_in_period "${1:?from_date required}" "${2:-}" ;;
     get-issue)        cmd_get_issue "${1:?issue_id required}" ;;
+    get-task)         cmd_get_task "${1:?task ref required, e.g. TM-808}" ;;
     list-states)      cmd_list_states ;;
     list-projects)    cmd_list_projects ;;
+    upload-asset)     cmd_upload_asset "${1:?file path required}" "${2:?issue_id required}" "${3:-}" ;;
+    download-asset)   cmd_download_asset "${1:?asset_id required}" "${2:?output_path required}" "${3:?issue_id required}" "${4:-}" ;;
+    list-images)      cmd_list_images "${1:?issue_id required}" ;;
     *)
         echo "Usage: $0 <command> [args]"
-        echo "Commands: next-task | task-in-progress | set-in-progress <id> | set-review <id> | set-todo <id> | list-review | set-done <id> | set-cancelled <id> | set-branch <id> <branch> | set-pr <id> <pr_url> | add-comment <id> <html> | get-comments <id> | update-description <id> | append-description <id> | prepend-description <id> | create-task <name> [desc] [priority] [backlog|todo] | create-page <name> [desc_html] | get-page <id> | edit-page <id> [name] [desc_html] | remove-page <id> | archive-page <id> | unarchive-page <id> | search-pages <query> | replace-in-page <id> <search> <replace> | done-in-period <from> [<to>] | review-done-in-period <from> [<to>] | get-issue <id> | list-states | list-projects"
+        echo "Commands: next-task | task-in-progress | set-in-progress <id> | set-review <id> | set-todo <id> | list-review | set-done <id> | set-cancelled <id> | set-branch <id> <branch> | set-pr <id> <pr_url> | add-comment <id> <html> | get-comments <id> | update-description <id> | append-description <id> | prepend-description <id> | create-task <name> [desc] [priority] [backlog|todo] | create-page <name> [desc_html|@file] | main-page [page_name] [env_key] | page-url <id> | get-page <id> [out_file] | edit-page <id> [name] [desc_html|@file] | rename-page <id> <name> | remove-page <id> | archive-page <id> | unarchive-page <id> | search-pages <query> | done-in-period <from> [<to>] | review-done-in-period <from> [<to>] | get-issue <id> | get-task <ref, e.g. TM-808> | list-states | list-projects | upload-asset <file> <issue_id> [project_id] | download-asset <asset_id> <out_path> <issue_id> [project_id] | list-images <issue_id>"
         exit 1
         ;;
 esac

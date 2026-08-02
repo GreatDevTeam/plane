@@ -9,7 +9,11 @@ export IS_SANDBOX=1
 MODEL=""
 CONTINUE_MODE=false
 ITERATION=0
-PROMPT_FILE="docs/PLANE.md"
+# The dir this script (and PLANE.md, plane.sh, github.sh, ...) lives in —
+# derived from the script's own location so the same file works from docs/,
+# ralph/, or any other folder (see RALPH_SCRIPT in ralph.md / render.sh).
+RALPH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROMPT_FILE="$RALPH_DIR/PLANE.md"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -49,7 +53,7 @@ if [ -f .env ]; then
     done < .env
 fi
 
-MODEL="${MODEL:-${RALPH_MODEL:-claude-sonnet-4-6}}"
+MODEL="${MODEL:-${RALPH_MODEL:-claude-opus-5}}"
 RALPH_BASE_BRANCH="${RALPH_BASE_BRANCH:-main}"
 RALPH_MAX_LIMIT_PCT="${RALPH_MAX_LIMIT_PCT:-80}"
 RALPH_WAIT_INTERVAL="${RALPH_WAIT_INTERVAL:-60}"
@@ -142,7 +146,7 @@ check_claude_limits() {
 # a genuine test failure demotes the task. PENDING/NONE leaves it in Review.
 sweep_failed_tests() {
     local review_json count
-    review_json=$(docs/plane.sh list-review 2>/dev/null) || return 0
+    review_json=$("$RALPH_DIR/plane.sh" list-review 2>/dev/null) || return 0
     [ -z "$review_json" ] && return 0
     count=$(echo "$review_json" | jq 'length' 2>/dev/null || echo 0)
     [ "${count:-0}" -eq 0 ] && return 0
@@ -154,23 +158,23 @@ sweep_failed_tests() {
         branch=$(echo "$review_json" | jq -r ".[$i].description_html // \"\"" \
             | grep -oP '(?<=Branch: <code>)[^<]+' | tail -1 || echo "")
         [ -z "$branch" ] && continue
-        status=$(docs/github.sh tests-status "$branch" 2>/dev/null || echo "NONE")
+        status=$("$RALPH_DIR/github.sh" tests-status "$branch" 2>/dev/null || echo "NONE")
         if [ "$status" = "FAILURE" ]; then
             printf "\033[90m[%s]\033[0m \033[31mTests failed on #%s (%s) — moving → Todo\033[0m\n" \
                 "$(date +%H:%M:%S)" "$seq" "$branch"
-            pr_url=$(docs/github.sh pr-url "$branch" 2>/dev/null || echo "")
+            pr_url=$("$RALPH_DIR/github.sh" pr-url "$branch" 2>/dev/null || echo "")
             cmt="<p>CI <strong>tests failed</strong> on branch <code>${branch}</code> — moved back to Todo to fix."
             if [ -n "$pr_url" ]; then
                 cmt="${cmt} See <a href=\"${pr_url}/checks\">PR checks</a>."
             fi
             cmt="${cmt}</p>"
-            docs/plane.sh add-comment "$id" "$cmt" 2>/dev/null || true
-            docs/plane.sh set-todo "$id" 2>/dev/null || true
+            "$RALPH_DIR/plane.sh" add-comment "$id" "$cmt" 2>/dev/null || true
+            "$RALPH_DIR/plane.sh" set-todo "$id" 2>/dev/null || true
         fi
     done
 }
 
-LOGS_DIR="docs/ralph-logs/$(date +%Y%m%d-%H%M%S)"
+LOGS_DIR="$RALPH_DIR/ralph-logs/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$LOGS_DIR"
 
 echo -e "\033[1;35m════════════════════════════════════════\033[0m"
@@ -202,7 +206,7 @@ while true; do
 
         # Check for an interrupted in-progress task first (resume after restart)
         IP_RESULT=""
-        if IP_RESULT=$(docs/plane.sh task-in-progress 2>/dev/null); then
+        if IP_RESULT=$("$RALPH_DIR/plane.sh" task-in-progress 2>/dev/null); then
             IP_DONE=$(echo "$IP_RESULT" | jq -r '.done // false' 2>/dev/null || echo "false")
             if [ "$IP_DONE" != "true" ]; then
                 ITER_RESUME=true
@@ -213,7 +217,7 @@ while true; do
 
         if [ "$ITER_RESUME" = "false" ]; then
             NEXT_TASK_CHECK=""
-            if NEXT_TASK_CHECK=$(docs/plane.sh next-task 2>/dev/null); then
+            if NEXT_TASK_CHECK=$("$RALPH_DIR/plane.sh" next-task 2>/dev/null); then
                 TASK_IS_DONE=$(echo "$NEXT_TASK_CHECK" | jq -r '.done // false' 2>/dev/null || echo "false")
             else
                 TASK_IS_DONE="false"
@@ -270,10 +274,22 @@ while true; do
     # Move fresh tasks to In Progress (start); resumed tasks are already In Progress.
     if [ "$ITER_RESUME" = "false" ] && [ -n "$TASK_ID" ]; then
         printf "\033[90m[%s] Starting task %s (→ In Progress)...\033[0m" "$(date +%H:%M:%S)" "$TASK_ID"
-        docs/plane.sh set-in-progress "$TASK_ID" >/dev/null 2>&1 && printf " \033[32mOK\033[0m\n" || printf " \033[33mfailed\033[0m\n"
+        "$RALPH_DIR/plane.sh" set-in-progress "$TASK_ID" >/dev/null 2>&1 && printf " \033[32mOK\033[0m\n" || printf " \033[33mfailed\033[0m\n"
     else
         printf "\033[90m[%s] Resuming task %s (already In Progress)\033[0m\n" "$(date +%H:%M:%S)" "$TASK_ID"
     fi
+
+    # Enrich the task JSON with unresolved GitHub PR review threads (if a branch
+    # is already assigned) so the agent does not have to fetch them itself every
+    # iteration (formerly PLANE.md.tpl step 0.1's manual unresolved-threads call).
+    TASK_BRANCH=$(echo "$TASK_JSON" | jq -r '.description_html // ""' \
+        | grep -oP '(?<=Branch: <code>)[^<]+' | tail -1 || echo "")
+    PR_THREADS="[]"
+    if [ -n "$TASK_BRANCH" ]; then
+        PR_THREADS=$("$RALPH_DIR/github.sh" unresolved-threads "$TASK_BRANCH" 2>/dev/null || echo "[]")
+        [ -z "$PR_THREADS" ] && PR_THREADS="[]"
+    fi
+    TASK_JSON=$(echo "$TASK_JSON" | jq --argjson threads "$PR_THREADS" '. + {pr_unresolved_threads: $threads}')
 
     # Inject the task JSON directly so Claude already has it and does not fetch it.
     {
@@ -429,9 +445,18 @@ while true; do
     printf "\033[90m  tokens: in=%'d  out=%'d  turns=%d  peak ctx: %'d/%'d (%s%%)  cost=\$%s\033[0m\n" \
         "$ITER_IN_TOTAL" "$ITER_OUT" "$ITER_TURNS" "$PEAK_CTX" "$ITER_CTX_WINDOW" "$PEAK_PCT" "$ITER_COST"
 
-    # End of iteration: post stats and move the task to Review — with signal or not.
+    # End of iteration: post stats, then move the task to Review (default) or back to
+    # Todo if the agent signaled <promise>TASK_BLOCKED</promise> (see PLANE.md.tpl
+    # step 3.2.2/9 — the task depends on another, unfinished one) — with signal or not.
+    TASK_BLOCKED=false
+    if grep -q '<promise>TASK_BLOCKED</promise>' "$TMPFILE"; then
+        TASK_BLOCKED=true
+    fi
+
     if [ -n "$TASK_ID" ]; then
-        printf "\033[90m[%s] Finishing task %s (→ Review)...\033[0m" "$(date +%H:%M:%S)" "$TASK_ID"
+        NEXT_STATE_LABEL="Review"
+        [ "$TASK_BLOCKED" = true ] && NEXT_STATE_LABEL="Todo"
+        printf "\033[90m[%s] Finishing task %s (→ %s)...\033[0m" "$(date +%H:%M:%S)" "$TASK_ID" "$NEXT_STATE_LABEL"
         # Upload this iteration's logs (ANSI-stripped) to a SECRET GitHub gist.
         LOG_TXT=$(mktemp)
         {
@@ -447,18 +472,29 @@ while true; do
         GIST_URL=$(gh gist create --filename "$GIST_NAME" --desc "Ralph logs — task #${TASK_SEQ} iter ${ITERATION} (secret)" - < "$LOG_TXT" 2>/dev/null | tail -1 || echo "")
         rm -f "$LOG_TXT"
 
-        # Post stats (+ secret log link if the gist was created) and move the task to Review.
+        # Post stats (+ secret log link if the gist was created) and move the task.
         ITER_COMMENT="<p><code>in=${ITER_IN_TOTAL}</code> <code>out=${ITER_OUT}</code> <code>turns=${ITER_TURNS}</code> <code>peak_ctx=${PEAK_CTX}/${ITER_CTX_WINDOW} (${PEAK_PCT}%)</code> <code>cost=\$${ITER_COST}</code></p>"
         if [ -n "$GIST_URL" ]; then
             ITER_COMMENT="${ITER_COMMENT}<p>Ralph logs (secret gist): <a href=\"${GIST_URL}\">${GIST_URL}</a></p>"
         fi
-        docs/plane.sh add-comment "$TASK_ID" "$ITER_COMMENT" 2>/dev/null || true
-        docs/plane.sh set-review "$TASK_ID" 2>/dev/null || true
+        "$RALPH_DIR/plane.sh" add-comment "$TASK_ID" "$ITER_COMMENT" 2>/dev/null || true
+        if [ "$TASK_BLOCKED" = true ]; then
+            "$RALPH_DIR/plane.sh" set-todo "$TASK_ID" 2>/dev/null || true
+        else
+            "$RALPH_DIR/plane.sh" set-review "$TASK_ID" 2>/dev/null || true
+        fi
         printf " \033[32mOK\033[0m\n"
     fi
 
     rm -f "$PROMPT_INPUT"
 
+    if [ "$TASK_BLOCKED" = true ]; then
+        rm -f "$TMPFILE"
+        echo ""
+        echo -e "\033[90m[$(date +%H:%M:%S)]\033[0m \033[1;33m── Task ${TASK_ID} blocked — moved back to Todo. Starting fresh session (iteration $ITERATION) ──\033[0m"
+        echo ""
+        continue
+    fi
     if grep -q '<promise>TASK_DONE</promise>' "$TMPFILE"; then
         rm -f "$TMPFILE"
         echo ""

@@ -4,21 +4,37 @@
 # of inline `gh api graphql` blocks.
 #
 # Usage (run from repo root):
-#   docs/github.sh pr-number <branch>            — PR number for a branch ("" if none)
-#   docs/github.sh pr-url <branch>               — PR html URL for a branch ("" if none)
-#   docs/github.sh pr-state <branch>             — PR state: OPEN | MERGED | CLOSED | NONE
-#   docs/github.sh tests-status <branch>         — test check only: SUCCESS | FAILURE | PENDING | NONE
-#   docs/github.sh unresolved-threads <branch>   — unresolved review threads as JSON
+#   github.sh pr-number <branch>            — PR number for a branch ("" if none)
+#   github.sh pr-url <branch>               — PR html URL for a branch ("" if none)
+#   github.sh pr-state <branch>             — PR state: OPEN | MERGED | CLOSED | NONE
+#   github.sh tests-status <branch>         — test check only: SUCCESS | FAILURE | PENDING | NONE
+#   github.sh unresolved-threads <branch>   — unresolved review threads as JSON
 #                                                  [{id, path, line, startLine, side, outdated, author, url, body, diffHunk}]
-#   docs/github.sh resolve-thread <thread_id>    — mark a review thread resolved
-#   docs/github.sh create-pr <base> <head> <title> <body>  — create a PR, print its URL
+#   github.sh resolve-thread <thread_id>    — mark a review thread resolved
+#   github.sh create-pr <base> <head> <title> <body>  — create a PR, print its URL
 #
 # Required in .env: GH_OWNER (repo owner/org), GH_REPO (repo name)
+# Optional in .env: PR_CI_CHECK_PATTERNS — comma-separated, case-insensitive
+#   substrings of PR check names to treat as this project's CI signal for
+#   `tests-status` (default: "test"). E.g. "tests,cq" matches both a "Run
+#   tests in container" check and a "cq" code-quality check.
 
 set -euo pipefail
 
+# Load GH_*/PR_* keys from .env if present and not already exported (mirrors
+# the regex-based loader in plane.sh/ralph-plane.sh rather than `source`, to
+# avoid choking on shell-special characters in unrelated .env values).
+if [ -f .env ]; then
+    while IFS='=' read -r key value; do
+        if [[ "$key" =~ ^(GH|PR)_[A-Z_]+$ ]] && [ -z "${!key:-}" ]; then
+            export "$key=$value"
+        fi
+    done < <(grep -E '^(GH|PR)_[A-Z_]+=' .env)
+fi
+
 OWNER="${GH_OWNER:?GH_OWNER not set in .env (repo owner, e.g. an org or user name)}"
 REPO="${GH_REPO:?GH_REPO not set in .env (repo name)}"
+CI_CHECK_PATTERNS="${PR_CI_CHECK_PATTERNS:-test}"
 
 cmd_pr_number() {
     local branch="${1:?branch required}"
@@ -35,12 +51,17 @@ cmd_pr_state() {
     gh pr list --head "$branch" --json state --jq '.[0].state // "NONE"' 2>/dev/null || echo "NONE"
 }
 
-# Conclusion of ONLY the PR check whose name contains "test" (case-insensitive).
-# Prints: SUCCESS | FAILURE | PENDING | NONE
-#   - Build / Code-quality / Deploy checks are ignored on purpose, so a non-test
-#     CI failure with green tests still reports SUCCESS.
-#   - NONE = no PR, the test check has not reported a result yet, or this repo
-#     has no PR-time CI at all (a push-only pipeline never produces a check here).
+# Aggregate conclusion of every PR check whose name matches any pattern in
+# PR_CI_CHECK_PATTERNS (comma list, case-insensitive substring match, default
+# "test"). Prints: SUCCESS | FAILURE | PENDING | NONE
+#   - Checks that match none of the configured patterns are ignored on
+#     purpose, so e.g. a Build/Deploy check failing with green tests+cq still
+#     reports SUCCESS.
+#   - Priority across all matched rows: FAILURE (any fail/cancel) > PENDING
+#     (any pending) > SUCCESS (all matched rows pass) > NONE (no rows matched).
+#   - NONE = no PR, no configured check has reported a result yet, or this
+#     repo has no PR-time CI at all (a push-only pipeline never produces a
+#     check here).
 # Note: this gh (2.46) has no --json on `gh pr checks`; output is TSV
 #   (name<TAB>bucket<TAB>elapsed<TAB>link). bucket ∈ pass|fail|pending|skipping|cancel.
 cmd_tests_status() {
@@ -51,16 +72,25 @@ cmd_tests_status() {
         echo "NONE"
         return
     fi
+    local pattern
+    pattern=$(echo "${CI_CHECK_PATTERNS,,}" | tr ',' '|')
     # `gh pr checks` exits non-zero when any check failed; `|| true` keeps that
-    # from tripping `set -e` (we only care about the test row's bucket).
-    local bucket
-    bucket=$(gh pr checks "$pr" 2>/dev/null | awk -F'\t' 'tolower($1) ~ /test/ {print $2; exit}') || true
-    case "$bucket" in
-        pass)        echo "SUCCESS" ;;
-        fail|cancel) echo "FAILURE" ;;
-        pending)     echo "PENDING" ;;
-        *)           echo "NONE" ;;
-    esac
+    # from tripping `set -e` (we collect all matched rows, not just the first).
+    local buckets
+    buckets=$(gh pr checks "$pr" 2>/dev/null | awk -F'\t' -v pat="$pattern" 'tolower($1) ~ pat {print $2}') || true
+    if [ -z "$buckets" ]; then
+        echo "NONE"
+        return
+    fi
+    if echo "$buckets" | grep -qE '^(fail|cancel)$'; then
+        echo "FAILURE"
+    elif echo "$buckets" | grep -qE '^pending$'; then
+        echo "PENDING"
+    elif echo "$buckets" | grep -qE '^pass$'; then
+        echo "SUCCESS"
+    else
+        echo "NONE"
+    fi
 }
 
 cmd_unresolved_threads() {
