@@ -276,3 +276,73 @@ class TestPageParentIdSupport:
         assert response.status_code == status.HTTP_200_OK
         assert "parent" in response.data
         assert str(response.data["parent"]) == str(parent.id)
+
+
+@pytest.mark.contract
+class TestPageUpdateInvalidatesCollaborativeSnapshot:
+    """
+    The editor renders a page from its collaborative (Yjs) snapshot in
+    description_binary, so an API update must drop the snapshot for the change
+    to be visible in the UI.
+    """
+
+    def get_detail_url(self, workspace_slug, project_id, page_id):
+        return f"/api/v1/workspaces/{workspace_slug}/projects/{project_id}/pages/{page_id}/"
+
+    @pytest.fixture
+    def page_with_snapshot(self, create_page):
+        page = create_page("Page With Snapshot", "<p>old content</p>")
+        page.description_binary = b"stale-binary"
+        page.description_json = {"type": "doc", "content": []}
+        page.save()
+        return page
+
+    @pytest.mark.django_db
+    def test_update_description_html_clears_snapshot(self, api_key_client, workspace, project, page_with_snapshot):
+        url = self.get_detail_url(workspace.slug, project.id, page_with_snapshot.id)
+
+        response = api_key_client.patch(url, {"description_html": "<p>new content</p>"}, format="json")
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["description_html"] == "<p>new content</p>"
+        page_with_snapshot.refresh_from_db()
+        assert page_with_snapshot.description_html == "<p>new content</p>"
+        assert page_with_snapshot.description_binary is None
+        assert page_with_snapshot.description_json == {}
+
+    @pytest.mark.django_db
+    def test_update_name_clears_snapshot(self, api_key_client, workspace, project, page_with_snapshot):
+        # The page title is part of the snapshot, so a rename invalidates it too
+        url = self.get_detail_url(workspace.slug, project.id, page_with_snapshot.id)
+
+        response = api_key_client.patch(url, {"name": "Renamed Page"}, format="json")
+
+        assert response.status_code == status.HTTP_200_OK
+        page_with_snapshot.refresh_from_db()
+        assert page_with_snapshot.name == "Renamed Page"
+        assert page_with_snapshot.description_binary is None
+        assert page_with_snapshot.description_json == {}
+
+    @pytest.mark.django_db
+    def test_update_unrelated_field_keeps_snapshot(self, api_key_client, workspace, project, page_with_snapshot):
+        url = self.get_detail_url(workspace.slug, project.id, page_with_snapshot.id)
+
+        response = api_key_client.patch(url, {"color": "#ff0000"}, format="json")
+
+        assert response.status_code == status.HTTP_200_OK
+        page_with_snapshot.refresh_from_db()
+        assert bytes(page_with_snapshot.description_binary) == b"stale-binary"
+
+    @pytest.mark.django_db
+    def test_update_with_unchanged_values_keeps_snapshot(self, api_key_client, workspace, project, page_with_snapshot):
+        url = self.get_detail_url(workspace.slug, project.id, page_with_snapshot.id)
+
+        response = api_key_client.patch(
+            url,
+            {"name": page_with_snapshot.name, "description_html": page_with_snapshot.description_html},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        page_with_snapshot.refresh_from_db()
+        assert bytes(page_with_snapshot.description_binary) == b"stale-binary"
