@@ -13,9 +13,6 @@ import { Redis } from "@/extensions/redis";
 import { AdminCommand, isApplyDocumentUpdateCommand } from "@/types/admin-commands";
 import type { ApplyDocumentUpdateCommandData } from "@/types/admin-commands";
 
-/** Transaction origin used for updates that did not come from a client connection */
-export const EXTERNAL_UPDATE_ORIGIN = "external-document-update";
-
 /**
  * Apply a Yjs update to a document that is loaded in this server's memory.
  *
@@ -23,13 +20,19 @@ export const EXTERNAL_UPDATE_ORIGIN = "external-document-update";
  * broadcast to every connected client and it becomes part of the state hocuspocus stores back to the database,
  * which would otherwise overwrite the change with the stale in-memory document.
  *
+ * The update is applied without a transaction origin on purpose. hocuspocus runs its store hooks for every update
+ * that carries one, and those hooks write to the API as the user the origin connection belongs to — an update that
+ * comes from the REST API has no such connection, so storing it would fail and show every reader a "could not save
+ * this page" error. The caller persists the document itself, and hocuspocus stores the merged state anyway the next
+ * time the page is edited or unloaded.
+ *
  * @returns whether the document was loaded on this server
  */
 export const applyUpdateToLoadedDocument = (instance: Hocuspocus, docId: string, update: string): boolean => {
   const document = instance.documents.get(docId);
   if (!document) return false;
 
-  Y.applyUpdate(document, convertBase64StringToBinaryData(update), EXTERNAL_UPDATE_ORIGIN);
+  Y.applyUpdate(document, convertBase64StringToBinaryData(update));
   return true;
 };
 

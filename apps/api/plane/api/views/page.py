@@ -28,6 +28,7 @@ from plane.api.serializers import (
 )
 from plane.app.permissions import ProjectPagePermission
 from plane.db.models import Page, Project, ProjectMember
+from plane.utils.live_server import LiveServerUnavailable
 from plane.utils.openapi.decorators import page_docs
 from plane.utils.openapi import (
     CURSOR_PARAMETER,
@@ -295,7 +296,19 @@ class PageDetailAPIEndpoint(BaseAPIView):
                     {"error": "Setting this parent would create a cycle."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            serializer.save()
+            try:
+                serializer.save()
+            except LiveServerUnavailable as e:
+                # The page is rendered from its collaborative snapshot, which only the live server can
+                # rewrite. Saving the HTML or the name on their own would leave the page desynced, so
+                # nothing is saved and the caller is told why.
+                return Response(
+                    {
+                        "error": "The page could not be updated because the collaborative editing "
+                        f"service is unavailable: {e}"
+                    },
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
             page = self.get_queryset().filter(pk=pk).first()
             return Response(PageDetailSerializer(page).data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

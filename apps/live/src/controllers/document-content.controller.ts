@@ -6,6 +6,7 @@
 
 import type { Hocuspocus } from "@hocuspocus/server";
 import type { Request, Response } from "express";
+import * as Y from "yjs";
 import { z } from "zod";
 // plane imports
 import { Controller, Middleware, Post } from "@plane/decorators";
@@ -14,6 +15,7 @@ import {
   convertBinaryDataToBase64String,
   getAllDocumentFormatsFromDocumentEditorBinaryData,
   replaceDocumentEditorBinaryDataContent,
+  replaceDocumentEditorContent,
 } from "@plane/editor";
 import { logger } from "@plane/logger";
 // extensions
@@ -21,11 +23,15 @@ import { applyUpdateAcrossServers } from "@/extensions/document-update-handler";
 // lib
 import { requireSecretKey } from "@/lib/auth-middleware";
 
-const replaceContentSchema = z.object({
-  description_html: z.string(),
-  name: z.string().optional(),
-  description_binary: z.string().nullish(),
-});
+const replaceContentSchema = z
+  .object({
+    description_html: z.string().optional(),
+    name: z.string().optional(),
+    description_binary: z.string().nullish(),
+  })
+  .refine((data) => data.description_html !== undefined || data.name !== undefined, {
+    message: "Either description_html or name has to be provided",
+  });
 
 @Controller("/document")
 export class DocumentContentController {
@@ -38,10 +44,18 @@ export class DocumentContentController {
   /**
    * Rewrite the content of a document that is edited collaboratively, from outside the editor.
    *
-   * The caller sends the snapshot it has stored along with the new HTML and title; the content is replaced inside
-   * that same Yjs document so the result is an update of it rather than an unrelated document. The response is the
-   * snapshot the caller has to persist, and the update is applied to every server that currently holds the
-   * document, so open editors see the change and do not store their stale state back over it.
+   * The content is replaced inside the Yjs document the clients already hold, so that the result is an update of it
+   * rather than an unrelated document — Yjs sync is a merge and never a replace, so a fresh document would leave
+   * every client that cached the page showing the old and the new content at once.
+   *
+   * When this server has the document open, its in-memory copy is the only up to date one (hocuspocus stores it to
+   * the database on a debounce) so the rewrite is applied to it directly: that broadcasts the change to the
+   * connected editors, propagates it to the other servers through the hocuspocus Redis extension and makes it part
+   * of the state that gets stored, instead of being overwritten by it. Otherwise the snapshot sent by the caller is
+   * used as the base and the resulting update is published to whichever server holds the document.
+   *
+   * Only the fields that are present in the request are rewritten, so an update of the body does not revert a title
+   * that was changed in the editor in the meantime, and vice versa.
    */
   @Post("/:documentName/content")
   @Middleware(requireSecretKey)
@@ -51,15 +65,16 @@ export class DocumentContentController {
     try {
       const { description_html, name, description_binary } = replaceContentSchema.parse(req.body);
 
-      const existingBinaryData = description_binary
-        ? new Uint8Array(convertBase64StringToBinaryData(description_binary))
-        : new Uint8Array();
-
-      const { encodedDocument, incrementalUpdate } = replaceDocumentEditorBinaryDataContent({
-        existingBinaryData,
-        descriptionHTML: description_html,
-        title: name,
-      });
+      const loadedDocument = this.hocusPocusServer.documents.get(documentName);
+      const { encodedDocument, incrementalUpdate } = loadedDocument
+        ? this.rewriteLoadedDocument(loadedDocument, description_html, name)
+        : replaceDocumentEditorBinaryDataContent({
+            existingBinaryData: description_binary
+              ? new Uint8Array(convertBase64StringToBinaryData(description_binary))
+              : new Uint8Array(),
+            descriptionHTML: description_html,
+            title: name,
+          });
 
       const { contentBinaryEncoded, contentHTML, contentJSON } = getAllDocumentFormatsFromDocumentEditorBinaryData(
         encodedDocument,
@@ -95,5 +110,24 @@ export class DocumentContentController {
         message: "Internal server error.",
       });
     }
+  }
+
+  /**
+   * Rewrite the content of a document this server currently holds in memory.
+   *
+   * Rewriting the caller's snapshot instead would only delete the content that snapshot knows about: anything the
+   * editors changed since it was stored would survive the rewrite and end up appended to the new content.
+   *
+   * The rewrite carries no transaction origin, for the reason documented on `applyUpdateToLoadedDocument`.
+   */
+  private rewriteLoadedDocument(document: Y.Doc, descriptionHTML: string | undefined, title: string | undefined) {
+    const stateVector = Y.encodeStateVector(document);
+
+    replaceDocumentEditorContent({ yDoc: document, descriptionHTML, title });
+
+    return {
+      encodedDocument: Y.encodeStateAsUpdate(document),
+      incrementalUpdate: Y.encodeStateAsUpdate(document, stateVector),
+    };
   }
 }
