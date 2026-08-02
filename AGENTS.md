@@ -42,3 +42,14 @@ The `peekIssue` state lives in the `issueDetail` MobX store and is **independent
 ### Store refresh signatures
 
 Each store type (project, cycle, module, view) has its own signature for `fetchIssuesWithExistingPagination`. The `refreshIssues` prop on `BaseKanBanRoot` abstracts over these differences — implement it per store type in `use-issues-actions.tsx`.
+
+## Pages (collaborative editor)
+
+A page is **not** rendered from `description_html`. The editor connects to the live server (Hocuspocus/Yjs), which loads the page from the Yjs snapshot in `pages.description_binary` and only converts `description_html` when that snapshot is empty (`apps/live/src/extensions/database.ts`). The page **title** is part of the same snapshot, as the `title` Yjs fragment.
+
+A server-side write to `description_html` or `name` that bypasses the editor therefore has to rewrite the snapshot — and it has to rewrite it **inside the existing Yjs document**, via `POST {LIVE_URL}/document/<page_id>/content` (`apps/api/plane/utils/live_server.py` → `apps/live/src/controllers/document-content.controller.ts`). Building a fresh snapshot out of the HTML instead breaks in two ways:
+
+1. Yjs sync is a merge, never a replace. The browser caches the document in IndexedDB (`packages/editor/src/core/hooks/use-yjs-setup.ts`), so a client that had opened the page before merges the old and the new document and ends up showing both versions — and pushes that merged state back to the server.
+2. While any editor has the page open, the live server holds the document in memory and stores that state back over `description_binary` **and** `description_html`, silently reverting the change. The live endpoint pushes the same Yjs update to every server holding the document (Redis admin channel), so open editors pick the change up instead.
+
+Clearing `description_binary`/`description_json` is only the fallback for when the live server is unreachable: the snapshot is then rebuilt from `description_html` plus the page name the next time the page is opened.

@@ -8,6 +8,7 @@ from rest_framework import serializers
 # Module imports
 from .base import BaseSerializer
 from plane.db.models import Page, PageLabel, Label, ProjectPage, Project
+from plane.utils.live_server import replace_document_content
 
 
 class PageSerializer(BaseSerializer):
@@ -158,15 +159,35 @@ class PageCreateUpdateSerializer(BaseSerializer):
 
         # The editor renders a page from its collaborative (Yjs) snapshot stored in
         # description_binary, not from description_html, and the page title lives in
-        # that snapshot as well. Updating the HTML or the name through the API would
-        # otherwise leave the snapshot untouched and the change would never show up in
-        # the UI. Dropping the snapshot makes the live server rebuild it from
-        # description_html and the page name the next time the page is opened.
+        # that snapshot as well. Leaving the snapshot untouched would make the change
+        # invisible in the UI, and dropping it is not enough either: the live server
+        # would rebuild an unrelated snapshot that clients merge with the one they
+        # already hold. The live server rewrites the content inside the existing
+        # snapshot instead, and hands the update to any editor that has the page open.
         snapshot_fields = ("description_html", "name")
         if any(
             field in validated_data and validated_data[field] != getattr(instance, field) for field in snapshot_fields
         ):
-            instance.description_binary = None
-            instance.description_json = {}
+            self._sync_collaborative_snapshot(instance, validated_data)
 
         return super().update(instance, validated_data)
+
+    def _sync_collaborative_snapshot(self, instance, validated_data):
+        document = replace_document_content(
+            document_id=instance.id,
+            description_html=validated_data.get("description_html", instance.description_html),
+            name=validated_data.get("name", instance.name),
+            description_binary=instance.description_binary,
+        )
+
+        if document is None:
+            # The live server is unreachable or not configured. Dropping the snapshot is the
+            # next best thing: it is rebuilt from description_html when the page is opened.
+            instance.description_binary = None
+            instance.description_json = {}
+            return
+
+        instance.description_binary = document["description_binary"]
+        instance.description_json = document["description_json"]
+        # keep the HTML in sync with the snapshot it was generated from
+        validated_data["description_html"] = document["description_html"]

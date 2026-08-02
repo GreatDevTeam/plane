@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # See the LICENSE file for details.
 
+from unittest import mock
+
 import pytest
 from rest_framework import status
 
@@ -279,11 +281,12 @@ class TestPageParentIdSupport:
 
 
 @pytest.mark.contract
-class TestPageUpdateInvalidatesCollaborativeSnapshot:
+class TestPageUpdateRewritesCollaborativeSnapshot:
     """
     The editor renders a page from its collaborative (Yjs) snapshot in
-    description_binary, so an API update must drop the snapshot for the change
-    to be visible in the UI.
+    description_binary, never from description_html, and the page title is part
+    of that snapshot too. An API update therefore has to rewrite the snapshot
+    through the live server for the change to be visible in the UI.
     """
 
     def get_detail_url(self, workspace_slug, project_id, page_id):
@@ -297,44 +300,92 @@ class TestPageUpdateInvalidatesCollaborativeSnapshot:
         page.save()
         return page
 
+    @pytest.fixture
+    def live_server_call(self):
+        """Stub the live server, returning the snapshot it would have built."""
+        with mock.patch("plane.api.serializers.page.replace_document_content") as patched:
+            patched.return_value = {
+                "description_binary": b"rewritten-binary",
+                "description_html": "<p>new content</p>",
+                "description_json": {"type": "doc", "content": [{"type": "paragraph"}]},
+            }
+            yield patched
+
     @pytest.mark.django_db
-    def test_update_description_html_clears_snapshot(self, api_key_client, workspace, project, page_with_snapshot):
+    def test_update_description_html_rewrites_snapshot(
+        self, api_key_client, workspace, project, page_with_snapshot, live_server_call
+    ):
         url = self.get_detail_url(workspace.slug, project.id, page_with_snapshot.id)
 
         response = api_key_client.patch(url, {"description_html": "<p>new content</p>"}, format="json")
 
         assert response.status_code == status.HTTP_200_OK
-        assert response.data["description_html"] == "<p>new content</p>"
+        # the existing snapshot is handed over so the rewrite is an update of it, not a new document
+        live_server_call.assert_called_once_with(
+            document_id=page_with_snapshot.id,
+            description_html="<p>new content</p>",
+            name="Page With Snapshot",
+            description_binary=b"stale-binary",
+        )
+        page_with_snapshot.refresh_from_db()
+        assert page_with_snapshot.description_html == "<p>new content</p>"
+        assert bytes(page_with_snapshot.description_binary) == b"rewritten-binary"
+        assert page_with_snapshot.description_json == {"type": "doc", "content": [{"type": "paragraph"}]}
+
+    @pytest.mark.django_db
+    def test_update_name_rewrites_snapshot(
+        self, api_key_client, workspace, project, page_with_snapshot, live_server_call
+    ):
+        # The page title is part of the snapshot, so a rename has to go through it too
+        url = self.get_detail_url(workspace.slug, project.id, page_with_snapshot.id)
+
+        response = api_key_client.patch(url, {"name": "Renamed Page"}, format="json")
+
+        assert response.status_code == status.HTTP_200_OK
+        live_server_call.assert_called_once_with(
+            document_id=page_with_snapshot.id,
+            description_html="<p>old content</p>",
+            name="Renamed Page",
+            description_binary=b"stale-binary",
+        )
+        page_with_snapshot.refresh_from_db()
+        assert page_with_snapshot.name == "Renamed Page"
+        assert bytes(page_with_snapshot.description_binary) == b"rewritten-binary"
+
+    @pytest.mark.django_db
+    def test_snapshot_is_dropped_when_live_server_is_unavailable(
+        self, api_key_client, workspace, project, page_with_snapshot, live_server_call
+    ):
+        # Without the live server the snapshot can only be invalidated, so that it is
+        # rebuilt from description_html the next time the page is opened.
+        live_server_call.return_value = None
+        url = self.get_detail_url(workspace.slug, project.id, page_with_snapshot.id)
+
+        response = api_key_client.patch(url, {"description_html": "<p>new content</p>"}, format="json")
+
+        assert response.status_code == status.HTTP_200_OK
         page_with_snapshot.refresh_from_db()
         assert page_with_snapshot.description_html == "<p>new content</p>"
         assert page_with_snapshot.description_binary is None
         assert page_with_snapshot.description_json == {}
 
     @pytest.mark.django_db
-    def test_update_name_clears_snapshot(self, api_key_client, workspace, project, page_with_snapshot):
-        # The page title is part of the snapshot, so a rename invalidates it too
-        url = self.get_detail_url(workspace.slug, project.id, page_with_snapshot.id)
-
-        response = api_key_client.patch(url, {"name": "Renamed Page"}, format="json")
-
-        assert response.status_code == status.HTTP_200_OK
-        page_with_snapshot.refresh_from_db()
-        assert page_with_snapshot.name == "Renamed Page"
-        assert page_with_snapshot.description_binary is None
-        assert page_with_snapshot.description_json == {}
-
-    @pytest.mark.django_db
-    def test_update_unrelated_field_keeps_snapshot(self, api_key_client, workspace, project, page_with_snapshot):
+    def test_update_unrelated_field_keeps_snapshot(
+        self, api_key_client, workspace, project, page_with_snapshot, live_server_call
+    ):
         url = self.get_detail_url(workspace.slug, project.id, page_with_snapshot.id)
 
         response = api_key_client.patch(url, {"color": "#ff0000"}, format="json")
 
         assert response.status_code == status.HTTP_200_OK
+        live_server_call.assert_not_called()
         page_with_snapshot.refresh_from_db()
         assert bytes(page_with_snapshot.description_binary) == b"stale-binary"
 
     @pytest.mark.django_db
-    def test_update_with_unchanged_values_keeps_snapshot(self, api_key_client, workspace, project, page_with_snapshot):
+    def test_update_with_unchanged_values_keeps_snapshot(
+        self, api_key_client, workspace, project, page_with_snapshot, live_server_call
+    ):
         url = self.get_detail_url(workspace.slug, project.id, page_with_snapshot.id)
 
         response = api_key_client.patch(
@@ -344,5 +395,6 @@ class TestPageUpdateInvalidatesCollaborativeSnapshot:
         )
 
         assert response.status_code == status.HTTP_200_OK
+        live_server_call.assert_not_called()
         page_with_snapshot.refresh_from_db()
         assert bytes(page_with_snapshot.description_binary) == b"stale-binary"
