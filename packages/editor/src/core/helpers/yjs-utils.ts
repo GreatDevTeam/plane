@@ -8,7 +8,7 @@ import { Buffer } from "buffer";
 import type { Extensions, JSONContent } from "@tiptap/core";
 import { getSchema } from "@tiptap/core";
 import { generateHTML, generateJSON } from "@tiptap/html";
-import { prosemirrorJSONToYDoc, yXmlFragmentToProseMirrorRootNode } from "y-prosemirror";
+import { prosemirrorJSONToYDoc, prosemirrorJSONToYXmlFragment, yXmlFragmentToProseMirrorRootNode } from "y-prosemirror";
 import * as Y from "yjs";
 // extensions
 import type { TDocumentPayload } from "@plane/types";
@@ -121,6 +121,51 @@ export const getBinaryDataFromDocumentEditorHTMLString = (descriptionHTML: strin
   // convert Y.Doc to Uint8Array format
   const encodedData = Y.encodeStateAsUpdate(transformedData);
   return encodedData;
+};
+
+type TReplaceDocumentEditorContentArgs = {
+  existingBinaryData: Uint8Array;
+  descriptionHTML: string;
+  title?: string;
+};
+
+/**
+ * @description this function rewrites the content of an existing document editor Y.Doc so that the result is an
+ * update of that document instead of an unrelated one. Building a fresh Y.Doc out of the HTML would make every
+ * client that still holds the previous state (in memory or in its IndexedDB cache) merge the two versions and end
+ * up with both the old and the new content, since Yjs sync is a merge and never a replace.
+ * @param {TReplaceDocumentEditorContentArgs} args
+ * @returns {{ encodedDocument: Uint8Array, incrementalUpdate: Uint8Array }} the full state of the rewritten
+ * document and the update that takes the provided document to it
+ */
+export const replaceDocumentEditorBinaryDataContent = (
+  args: TReplaceDocumentEditorContentArgs
+): {
+  encodedDocument: Uint8Array;
+  incrementalUpdate: Uint8Array;
+} => {
+  const { existingBinaryData, descriptionHTML, title } = args;
+
+  const yDoc = new Y.Doc();
+  if (existingBinaryData.byteLength > 0) {
+    Y.applyUpdate(yDoc, existingBinaryData);
+  }
+  // state of the document before the rewrite, used to compute the update that applies it
+  const stateVector = Y.encodeStateVector(yDoc);
+
+  const contentJSON = generateJSON(descriptionHTML ?? "<p></p>", DOCUMENT_EDITOR_EXTENSIONS);
+  yDoc.transact(() => {
+    prosemirrorJSONToYXmlFragment(documentEditorSchema, contentJSON, yDoc.getXmlFragment("default"));
+    if (title != null) {
+      const titleJSON = generateTitleProsemirrorJson(title);
+      prosemirrorJSONToYXmlFragment(documentEditorSchema, titleJSON, yDoc.getXmlFragment("title"));
+    }
+  });
+
+  return {
+    encodedDocument: Y.encodeStateAsUpdate(yDoc),
+    incrementalUpdate: Y.encodeStateAsUpdate(yDoc, stateVector),
+  };
 };
 
 /**

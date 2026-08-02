@@ -65,6 +65,7 @@ export enum AdminCommand {
   FORCE_CLOSE = "force_close",
   HEALTH_CHECK = "health_check",
   RESTART_DOCUMENT = "restart_document",
+  APPLY_DOCUMENT_UPDATE = "apply_document_update",
 }
 
 /**
@@ -89,9 +90,25 @@ export interface HealthCheckCommandData {
 }
 
 /**
+ * Apply document update command data structure
+ *
+ * Carries a Yjs update that every server holding the document in memory has to apply, so a change made
+ * outside the collaborative editor (e.g. through the REST API) reaches the open editors instead of being
+ * overwritten by the in-memory state the next time the document is stored.
+ */
+export interface ApplyDocumentUpdateCommandData {
+  command: AdminCommand.APPLY_DOCUMENT_UPDATE;
+  docId: string;
+  /** base64 encoded Yjs update */
+  update: string;
+  originServer: string;
+  timestamp?: string;
+}
+
+/**
  * Union type for all admin commands
  */
-export type AdminCommandData = ForceCloseCommandData | HealthCheckCommandData;
+export type AdminCommandData = ForceCloseCommandData | HealthCheckCommandData | ApplyDocumentUpdateCommandData;
 
 /**
  * Client force close message structure (sent to clients via sendStateless)
@@ -114,6 +131,17 @@ export type AdminCommandHandler<T extends AdminCommandData = AdminCommandData> =
  */
 export function isForceCloseCommand(data: AdminCommandData): data is ForceCloseCommandData {
   return data.command === AdminCommand.FORCE_CLOSE;
+}
+
+/**
+ * Type guard to check if data is an ApplyDocumentUpdateCommandData
+ */
+export function isApplyDocumentUpdateCommand(data: AdminCommandData): data is ApplyDocumentUpdateCommandData {
+  return (
+    data.command === AdminCommand.APPLY_DOCUMENT_UPDATE &&
+    typeof (data as ApplyDocumentUpdateCommandData).docId === "string" &&
+    typeof (data as ApplyDocumentUpdateCommandData).update === "string"
+  );
 }
 
 /**

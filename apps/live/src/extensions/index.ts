@@ -5,6 +5,7 @@
  */
 
 import { Database } from "./database";
+import { DocumentUpdateHandler } from "./document-update-handler";
 import { ForceCloseHandler } from "./force-close-handler";
 import { Logger } from "./logger";
 import { Redis } from "./redis";
@@ -16,4 +17,5 @@ export const getExtensions = () => [
   new Redis(),
   new TitleSyncExtension(),
   new ForceCloseHandler(), // Must be after Redis to receive broadcasts
+  new DocumentUpdateHandler(), // Must be after Redis to receive broadcasts
 ];
