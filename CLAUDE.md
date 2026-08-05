@@ -141,6 +141,25 @@ A handful of tests (`test_authentication.py` magic-link, `test_cycles.py`, `test
 `test_url.py`, `test_copy_s3_objects.py` — 18 in all) fail on an untouched tree. Confirm a failure
 is yours by re-running it with your changes stashed before chasing it.
 
+## Work item filters (`plane/utils/filters/`)
+
+Two things about `ComplexFilterBackend` + `IssueFilterSet` are easy to get wrong:
+
+- **The allowlist is `filterset_class.base_filters`**, a class attribute built at import time. A
+  filter declared per request (as the `property_<uuid>__<lookup>` custom property filters are, in
+  `IssueFilterSet.__init__`) is invisible to it, so it also needs the
+  `BaseFilterSet.is_dynamic_filter_name` hook — declaring the filter alone gets a
+  `Filtering on field '…' is not allowed`.
+- **A filter added after `super().__init__()` has no `parent`.** `FilterSet.__init__` wires
+  `.parent`/`.model` onto the filters it already knew about, and a filter resolves its `method=`
+  through its parent, so anything added afterwards must set both by hand or the request 500s with
+  `must have a parent FilterSet to find '.filter_x()'`.
+
+Multiple conditions in **one** `.filter()` call against a multi-valued relation must be satisfied by
+the **same** related row. `build_combined_q` ANDs every leaf into a single `Q`, so a filter over a
+one-to-many table (property values, and anything like it) has to be a `Q(pk__in=<subquery>)` per
+condition — a plain join silently matches nothing as soon as there are two conditions.
+
 ## Frontend tests
 
 There are none. `apps/web` has no test runner configured — its `package.json` scripts are only `dev`/`build`/`preview`/`start`/`clean` plus the `check:*`/`fix:*` gates. A web-only change is verified with `check:lint`, `check:format` and `check:types`; do not go looking for a Jest/Vitest setup to extend.
