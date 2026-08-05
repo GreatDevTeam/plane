@@ -27,7 +27,13 @@ cd apps/web && pnpm check:types
 
 ### Formatting
 
-`fix:format` runs oxfmt over the whole app, so it reformats files that were already drifting in `master` as well as the ones you touched. After running it, check `git diff --stat` and revert any file your change did not touch.
+`fix:format` runs oxfmt over the whole app, so it reformats files that were already drifting in `master` as well as the ones you touched. After running it, check `git diff --stat` and revert any file your change did not touch. Simpler: run `npx oxfmt <the files you changed>` from the repo root instead.
+
+### The pre-commit hook denies warnings
+
+`git commit` runs husky → lint-staged → `oxlint --fix --deny-warnings` over the **staged files only**. `pnpm check:lint` passes the repo at ~990 warnings, so a clean `check:lint` does **not** mean the commit will go through: touching a file that already carried a warning fails it, with a diagnostic about code you never wrote.
+
+Silence those with `// oxlint-disable-next-line <rule> -- <why>` on the line the diagnostic's **primary span** starts at (not necessarily the line the message is about — `no-duplicate-enum-values` points at the _first_ member sharing the value, so an `eslint-disable` on the duplicate does not suppress it). The rule name is the part in brackets: `oxc(no-map-spread)` → `no-map-spread`.
 
 ## Issue Board (Kanban)
 
