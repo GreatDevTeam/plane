@@ -12,7 +12,7 @@ import type { TIssueComment, TCommentsOperations } from "@plane/types";
 // plane web imports
 import { CommentBlock, CommentCardDisplay } from "@/plane-web/components/comments";
 // local imports
-import { CommentQuickActions } from "../quick-actions";
+import { CommentEditAction, CommentQuickActions } from "../quick-actions";
 
 type TCommentCard = {
   workspaceSlug: string;
@@ -63,13 +63,15 @@ export const CommentCard = observer(function CommentCard(props: TCommentCard) {
         isEditing={isEditing}
         setIsEditing={setIsEditing}
         renderQuickActions={() => (
-          <CommentQuickActions
-            activityOperations={activityOperations}
-            comment={comment}
-            setEditMode={() => setIsEditing(true)}
-            showAccessSpecifier={showAccessSpecifier}
-            showCopyLinkOption={showCopyLinkOption}
-          />
+          <>
+            {!isEditing && <CommentEditAction comment={comment} setEditMode={() => setIsEditing(true)} />}
+            <CommentQuickActions
+              activityOperations={activityOperations}
+              comment={comment}
+              showAccessSpecifier={showAccessSpecifier}
+              showCopyLinkOption={showCopyLinkOption}
+            />
+          </>
         )}
       />
     </CommentBlock>

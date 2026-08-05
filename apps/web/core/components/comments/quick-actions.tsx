@@ -14,26 +14,47 @@ import { IconButton } from "@plane/propel/icon-button";
 import { LinkIcon, GlobeIcon, LockIcon, EditIcon, TrashIcon } from "@plane/propel/icons";
 import type { TIssueComment, TCommentsOperations } from "@plane/types";
 import type { TContextMenuItem } from "@plane/ui";
-import { CustomMenu } from "@plane/ui";
+import { CustomMenu, Tooltip } from "@plane/ui";
 import { cn } from "@plane/utils";
 // hooks
 import { useUser } from "@/hooks/store/user";
 
+type TCommentEditAction = {
+  comment: TIssueComment;
+  setEditMode: () => void;
+};
+
+export const CommentEditAction = observer(function CommentEditAction(props: TCommentEditAction) {
+  const { comment, setEditMode } = props;
+  // store hooks
+  const { data: currentUser } = useUser();
+  // translation
+  const { t } = useTranslation();
+  // derived values
+  const isAuthor = currentUser?.id === comment.actor;
+
+  if (!isAuthor) return null;
+
+  return (
+    <Tooltip tooltipContent={t("common.actions.edit")}>
+      <IconButton icon={EditIcon} variant="ghost" size="sm" onClick={setEditMode} />
+    </Tooltip>
+  );
+});
+
 type TCommentCard = {
   activityOperations: TCommentsOperations;
   comment: TIssueComment;
-  setEditMode: () => void;
   showAccessSpecifier: boolean;
   showCopyLinkOption: boolean;
 };
 
 export const CommentQuickActions = observer(function CommentQuickActions(props: TCommentCard) {
-  const { activityOperations, comment, setEditMode, showAccessSpecifier, showCopyLinkOption } = props;
+  const { activityOperations, comment, showAccessSpecifier, showCopyLinkOption } = props;
   // store hooks
   const { data: currentUser } = useUser();
   // derived values
   const isAuthor = currentUser?.id === comment.actor;
-  const canEdit = isAuthor;
   const canDelete = isAuthor;
   // translation
   const { t } = useTranslation();
@@ -41,13 +62,6 @@ export const CommentQuickActions = observer(function CommentQuickActions(props: 
   const MENU_ITEMS = useMemo(
     function MENU_ITEMS(): TContextMenuItem[] {
       return [
-        {
-          key: "edit",
-          action: setEditMode,
-          title: t("common.actions.edit"),
-          icon: EditIcon,
-          shouldRender: canEdit,
-        },
         {
           key: "copy_link",
           action: () => activityOperations.copyCommentLink(comment.id),
@@ -80,7 +94,7 @@ export const CommentQuickActions = observer(function CommentQuickActions(props: 
         },
       ];
     },
-    [t, setEditMode, canEdit, showCopyLinkOption, activityOperations, comment, showAccessSpecifier, canDelete]
+    [t, showCopyLinkOption, activityOperations, comment, showAccessSpecifier, canDelete]
   );
 
   return (

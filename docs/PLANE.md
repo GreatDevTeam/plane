@@ -43,6 +43,7 @@ docs/plane.sh list-images <id>                    # JSON array of asset ids embe
 ```
 
 **Images in comments/descriptions.** Plane embeds uploaded images as `<image-component src="<asset_id>" width="35%" height="auto" alignment="left"></image-component>` — `src` is an asset UUID, not a literal URL.
+
 - **To view an image already on the task** (e.g. a screenshot in the description or in a comment): each entry in the injected `comments` array carries an `images` field listing any embedded asset ids (comments-only; the description itself is left as raw `description_html`, so scan it directly for `<image-component src="...">` if you need images from there too — or just run `list-images <id>` to get every image id from both in one call). Then `download-asset <asset_id> <local_path> <id>` and read the local file to view it.
 - **To embed a new image** (e.g. a screenshot you captured to illustrate a bug or a UI change): `upload-asset <file> <id>` uploads it, attached to the task you're already working, and prints `embed_html` — splice that string directly into the HTML you pass to `add-comment`/`update-description`/`append-description`/`prepend-description`.
 
@@ -78,7 +79,7 @@ The task is in the `## Your task` JSON appended to this prompt. It is **already 
 - `name` — task title
 - `description_html` — description (HTML)
 - `priority`
-- `comments` — array of `{id, body, images, created_at}` (may be empty); `images` lists any embedded image asset ids (see *Images in comments/descriptions* above)
+- `comments` — array of `{id, body, images, created_at}` (may be empty); `images` lists any embedded image asset ids (see _Images in comments/descriptions_ above)
 - `pr_unresolved_threads` — unresolved GitHub PR review threads, already fetched by the automation (`[]` if no branch/PR exists yet)
 
 ### 0.1. Sync comments to description checklist
@@ -179,9 +180,11 @@ printf '<hr/><p><strong>Investigation:</strong></p><p>…</p><p><strong>Checklis
 ```
 
 If questions surface during investigation, post them as a comment and stop — this "post and stop" pattern (comment, then emit the completion signal, nothing else) recurs at every stopping point below:
+
 ```bash
 docs/plane.sh add-comment <id> "<p>Question: …</p>"
 ```
+
 ```
 <promise>TASK_DONE</promise>
 ```
@@ -194,7 +197,7 @@ If no questions, continue to implementation using the checklist you just wrote.
 docs/plane.sh add-comment <id> "<p>Technical blockers:</p><ul><li>…</li></ul>"
 ```
 
-3.2.2. **If part of this task's own work needs to be split off into a new task that must finish before you can continue** (e.g. investigation reveals a chunk is out of scope for this task, or has to land first as its own PR) — create that new task and make it a blocker on this one, rather than filing it as an independent follow-up. This is different from the ordinary **New sub-tasks** case (*Task states* above): most tasks you create during implementation are unrelated future work, and this task keeps going without waiting on them — only use this flow when this task genuinely cannot proceed until the new one is done. (The same flow also covers discovering a dependency on an already-existing task, not just one you create here.) Either way this needs no human answer and resolves itself automatically once the blocker is done, so do not use the "post and stop" `TASK_DONE` pattern. Instead:
+3.2.2. **If part of this task's own work needs to be split off into a new task that must finish before you can continue** (e.g. investigation reveals a chunk is out of scope for this task, or has to land first as its own PR) — create that new task and make it a blocker on this one, rather than filing it as an independent follow-up. This is different from the ordinary **New sub-tasks** case (_Task states_ above): most tasks you create during implementation are unrelated future work, and this task keeps going without waiting on them — only use this flow when this task genuinely cannot proceed until the new one is done. (The same flow also covers discovering a dependency on an already-existing task, not just one you create here.) Either way this needs no human answer and resolves itself automatically once the blocker is done, so do not use the "post and stop" `TASK_DONE` pattern. Instead:
 
 ```bash
 NEW=$(docs/plane.sh create-task "<name>" "<desc>" <priority> todo)
@@ -202,16 +205,17 @@ NEW_SEQ=$(echo "$NEW" | jq -r '.sequence_id')
 docs/plane.sh add-comment <id> "<p>Blocked on #${NEW_SEQ} — <reason>.</p>"
 printf '<p>Blocked by: #%s</p>' "$NEW_SEQ" | docs/plane.sh append-description <id>
 ```
+
 ```
 <promise>TASK_BLOCKED</promise>
 ```
 
-Append `(review)` after the sequence id (`Blocked by: #<blocker_sequence_id> (review)`) if it is safe to unblock as soon as the blocker's PR is up for review rather than waiting for it to merge — see *Task states*.
+Append `(review)` after the sequence id (`Blocked by: #<blocker_sequence_id> (review)`) if it is safe to unblock as soon as the blocker's PR is up for review rather than waiting for it to merge — see _Task states_.
 
 3.3. Investigate the relevant code (if not done in 3.2).
 3.4. If questions arise before writing code, post them as a comment and stop the same way.
 3.5. Implement following all project rules in `CLAUDE.md`. After each checklist item, mark it done in the description (step 0.1 #3).
-3.6. Add or update tests for changed functionality.
+3.6. Add or update tests for changed functionality — **where a test suite exists**. `apps/api` has pytest (see _Running API tests_ in `CLAUDE.md`). `apps/web` has **no test runner configured at all**, so a web-only change has no tests to add; verify it through the lint/format/type gates in step 4 instead and do not spend the iteration trying to bootstrap a runner.
 
 ### 3.7. Investigate production errors via Elasticsearch (logs)
 
@@ -227,19 +231,26 @@ docs/elastic.sh indices
 
 ### 4. Run tests and quality gates
 
-**4.1. Run tests for every Django app with changed files.** Identify changed apps with `git diff --name-only HEAD`, then for each app run `make run "python manage.py test <app>"`. All tests must pass.
+Which gates to run depends on what you changed — list it with `git diff --name-only master...HEAD`. This repo has **no `Makefile`**; ignore any `make run "…"` invocation.
 
-**4.2. Run code quality checks:**
+**4.1. Python changes (`apps/api/**`).** Run pytest for the touched test modules and `ruff check`(what CI lints with). Both need Python 3.12 and the running`plane-test-*`containers —`CLAUDE.md` → *Running API tests\* has the exact invocation. `apps/api/run_tests.sh` is broken; call `pytest` directly.
+
+**4.2. JS/TS changes (`apps/web`, `apps/live`, `packages/**`).\*\* From the changed app/package:
+
 ```bash
-make run "mypy ."
-make run "bandit -q -r . -c pyproject.toml -ll -ii"
+pnpm check:lint
+pnpm check:format
+pnpm turbo run build --filter='<app>^...'   # build workspace deps, else check:types is all false TS2307s
+pnpm check:types
 ```
+
+See _Type checking_ and _Formatting_ in `CLAUDE.md` for why the build step is needed and how long to expect. If you run `fix:format`, check `git diff --stat` afterwards and **revert every file your change did not touch** — oxfmt reformats pre-existing drift across the whole app and will otherwise pollute the PR.
 
 Fix all reported issues. **If a test or tool cannot run at all** (Docker/infra/connection failure rather than a code defect), post a comment describing it (step "Communication rules") and stop.
 
 ### 5. Commit and push
 
-**Never push to `master` or `master`.** Always push to the feature branch.
+**Never push to `master` or `preview`.** Always push to the feature branch.
 
 ```bash
 git add -p
@@ -269,7 +280,7 @@ PR_URL=$(docs/github.sh create-pr master <branch> "<task name>" "Plane task: <se
 docs/plane.sh set-pr <id> "$PR_URL"
 ```
 
-`set-pr` posts the comment too (see the CRITICAL note under *Plane API Helper*) — recording the PR is **done** after this call; do not follow it with another `add-comment` about the PR.
+`set-pr` posts the comment too (see the CRITICAL note under _Plane API Helper_) — recording the PR is **done** after this call; do not follow it with another `add-comment` about the PR.
 
 ### 7. Post-task analysis (mandatory — run every iteration, never skip)
 
@@ -287,11 +298,7 @@ docs/plane.sh add-comment <id> "<p>CLAUDE.md / skills / ralph loop suggestions:<
 
 ### 8. Cleanup
 
-Stop only this project's containers:
-
-```bash
-docker compose -f docker-compose.ralph.yml ps -q | xargs -r docker stop
-```
+There is no `docker-compose.ralph.yml` in this repo, and the `plane-test-*` containers are long-lived infrastructure shared across iterations — **do not stop them**. Only clean up containers or dev servers _you_ started during this iteration; if you started none, this step is a no-op.
 
 ### 9. Signal completion
 
@@ -305,6 +312,7 @@ Either signal starts a fresh session for the next task; without one, the loop st
 ## Commit rules
 
 ### Format
+
 ```
 type: short description
 
@@ -313,8 +321,10 @@ type: short description
 ```
 
 ### Types
+
 `feat` · `improvement` · `fix` · `refactor` · `docs` · `test` · `chore`
 
 ### Rules
+
 - Do NOT add "Generated with Claude Code" or similar attribution
 - Do NOT add "Co-Authored-By" lines
