@@ -119,9 +119,18 @@ class IssuePropertyValue(ProjectBaseModel):
     Multi valued properties are several rows. The value lives in a typed column
     rather than in a JSON blob so that filtering, ordering and grouping in later
     phases can use an index.
+
+    A row hangs off either a work item or a workspace draft — the create modal can
+    fill in properties before the work item exists, and a draft lives in its own
+    table. Converting the draft moves the values onto the work item it creates.
     """
 
-    issue = models.ForeignKey("db.Issue", related_name="property_values", on_delete=models.CASCADE)
+    issue = models.ForeignKey(
+        "db.Issue", related_name="property_values", on_delete=models.CASCADE, null=True, blank=True
+    )
+    draft_issue = models.ForeignKey(
+        "db.DraftIssue", related_name="property_values", on_delete=models.CASCADE, null=True, blank=True
+    )
     property = models.ForeignKey("db.IssueProperty", related_name="values", on_delete=models.CASCADE)
     value_text = models.TextField(null=True, blank=True)
     value_decimal = models.FloatField(null=True, blank=True)
@@ -135,6 +144,7 @@ class IssuePropertyValue(ProjectBaseModel):
     class Meta:
         indexes = [
             models.Index(fields=["issue", "property"], name="ipv_issue_property_idx"),
+            models.Index(fields=["draft_issue", "property"], name="ipv_draft_property_idx"),
             models.Index(fields=["property", "value_uuid"], name="ipv_property_uuid_idx"),
             models.Index(fields=["property", "value_decimal"], name="ipv_property_decimal_idx"),
             models.Index(fields=["property", "value_datetime"], name="ipv_property_datetime_idx"),
@@ -146,7 +156,7 @@ class IssuePropertyValue(ProjectBaseModel):
         ordering = ("created_at",)
 
     def __str__(self):
-        return f"{self.issue} - {self.property}"
+        return f"{self.issue or self.draft_issue} - {self.property}"
 
 
 class IssuePropertyActivity(ProjectBaseModel):

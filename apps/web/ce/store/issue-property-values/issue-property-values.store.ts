@@ -34,6 +34,15 @@ export interface IIssuePropertyValuesStore {
     projectId: string,
     workItemId: string
   ) => Promise<TIssuePropertyValues>;
+  fetchDraftPropertyValues: (workspaceSlug: string, draftId: string) => Promise<TIssuePropertyValues>;
+  /** Writes every submitted property at once, as the create/update modal does on save. */
+  replacePropertyValues: (
+    workspaceSlug: string,
+    projectId: string,
+    workItemId: string,
+    values: TIssuePropertyValues,
+    isDraft?: boolean
+  ) => Promise<TIssuePropertyValues>;
   updatePropertyValue: (
     workspaceSlug: string,
     projectId: string,
@@ -63,6 +72,8 @@ export class IssuePropertyValuesStore implements IIssuePropertyValuesStore {
       // actions
       clearPropertyError: action,
       fetchWorkItemPropertyValues: action,
+      fetchDraftPropertyValues: action,
+      replacePropertyValues: action,
       updatePropertyValue: action,
     });
 
@@ -97,6 +108,40 @@ export class IssuePropertyValuesStore implements IIssuePropertyValuesStore {
       set(this.fetchedMap, [workItemId], true);
     });
     return values;
+  };
+
+  fetchDraftPropertyValues = async (workspaceSlug: string, draftId: string) => {
+    const values = await this.issuePropertyService.getDraftPropertyValues(workspaceSlug, draftId);
+    runInAction(() => {
+      set(this.valuesMap, [draftId], values);
+      set(this.fetchedMap, [draftId], true);
+    });
+    return values;
+  };
+
+  /**
+   * Writes every submitted property in one request, as the create/update modal does
+   * once the work item exists. Unlike the sidebar there is nothing to roll back — the
+   * values were only ever in the modal's form state — so a rejection is thrown on for
+   * the modal to render against its own fields.
+   */
+  replacePropertyValues = async (
+    workspaceSlug: string,
+    projectId: string,
+    workItemId: string,
+    values: TIssuePropertyValues,
+    isDraft: boolean = false
+  ) => {
+    const updatedValues = isDraft
+      ? await this.issuePropertyService.updateDraftPropertyValues(workspaceSlug, workItemId, values)
+      : await this.issuePropertyService.updateIssuePropertyValues(workspaceSlug, projectId, workItemId, values);
+
+    runInAction(() => {
+      set(this.valuesMap, [workItemId], updatedValues);
+      set(this.fetchedMap, [workItemId], true);
+      unset(this.errorMap, [workItemId]);
+    });
+    return updatedValues;
   };
 
   /**

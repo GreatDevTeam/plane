@@ -5,16 +5,9 @@
  */
 
 import { observer } from "mobx-react";
-import { CalendarDays, Info, Link2, Mail, Paperclip, Type } from "lucide-react";
+import { Info } from "lucide-react";
 // plane imports
 import { useTranslation } from "@plane/i18n";
-import {
-  BooleanPropertyIcon,
-  DropdownPropertyIcon,
-  HashPropertyIcon,
-  MembersPropertyIcon,
-  RelationPropertyIcon,
-} from "@plane/propel/icons";
 import { Tooltip } from "@plane/propel/tooltip";
 import type { TIssueProperty, TIssuePropertyValue } from "@plane/types";
 // components
@@ -24,13 +17,7 @@ import { usePlatformOS } from "@/hooks/use-platform-os";
 // plane web hooks
 import { useIssuePropertyValues } from "@/plane-web/hooks/store";
 // local imports
-import { WorkItemBooleanPropertyValue } from "./boolean-value";
-import { WorkItemDatetimePropertyValue } from "./datetime-value";
-import { WorkItemMemberPropertyValue } from "./member-value";
-import { WorkItemOptionPropertyValue } from "./option-value";
-import { WorkItemTextPropertyValue } from "./text-value";
-import type { TWorkItemPropertyValueProps } from "./types";
-import { WorkItemRelationPropertyValue } from "./work-item-value";
+import { WorkItemPropertyValueEditor, workItemPropertyIcon } from "./editor";
 
 type TWorkItemPropertyValueRootProps = {
   property: TIssueProperty;
@@ -38,29 +25,6 @@ type TWorkItemPropertyValueRootProps = {
   projectId: string;
   workItemId: string;
   isEditable: boolean;
-};
-
-const propertyIcon = (property: TIssueProperty) => {
-  switch (property.property_type) {
-    case "URL":
-      return Link2;
-    case "EMAIL":
-      return Mail;
-    case "DECIMAL":
-      return HashPropertyIcon;
-    case "BOOLEAN":
-      return BooleanPropertyIcon;
-    case "DATETIME":
-      return CalendarDays;
-    case "OPTION":
-      return DropdownPropertyIcon;
-    case "FILE":
-      return Paperclip;
-    case "RELATION":
-      return property.relation_type === "USER" ? MembersPropertyIcon : RelationPropertyIcon;
-    default:
-      return Type;
-  }
 };
 
 /** One custom property of a work item — its label, its editor and its error. */
@@ -82,43 +46,9 @@ export const WorkItemPropertyValueRoot = observer(function WorkItemPropertyValue
     updatePropertyValue(workspaceSlug, projectId, workItemId, property.id, nextValues).catch(() => {});
   };
 
-  const editorProps: TWorkItemPropertyValueProps = {
-    property,
-    values,
-    disabled: !isEditable,
-    hasError: Boolean(error),
-    onChange: handleChange,
-  };
-
-  const renderEditor = () => {
-    switch (property.property_type) {
-      case "BOOLEAN":
-        return <WorkItemBooleanPropertyValue {...editorProps} />;
-      case "DATETIME":
-        return <WorkItemDatetimePropertyValue {...editorProps} />;
-      case "OPTION":
-        return <WorkItemOptionPropertyValue {...editorProps} />;
-      case "RELATION":
-        return property.relation_type === "USER" ? (
-          <WorkItemMemberPropertyValue {...editorProps} workspaceSlug={workspaceSlug} projectId={projectId} />
-        ) : (
-          <WorkItemRelationPropertyValue {...editorProps} workspaceSlug={workspaceSlug} projectId={projectId} />
-        );
-      // files are stored as an asset id the sidebar has no uploader for yet
-      case "FILE":
-        return (
-          <span className="flex h-7.5 items-center px-2 text-body-xs-regular text-placeholder">
-            {t("work_item_properties.unsupported")}
-          </span>
-        );
-      default:
-        return <WorkItemTextPropertyValue {...editorProps} />;
-    }
-  };
-
   return (
     <SidebarPropertyListItem
-      icon={propertyIcon(property)}
+      icon={workItemPropertyIcon(property)}
       label={property.display_name}
       appendElement={
         <>
@@ -136,7 +66,15 @@ export const WorkItemPropertyValueRoot = observer(function WorkItemPropertyValue
       }
       childrenClassName="flex-col items-stretch"
     >
-      {renderEditor()}
+      <WorkItemPropertyValueEditor
+        property={property}
+        values={values}
+        disabled={!isEditable}
+        hasError={Boolean(error)}
+        onChange={handleChange}
+        workspaceSlug={workspaceSlug}
+        projectId={projectId}
+      />
       {error ? (
         <p className="px-2 text-caption-sm-regular text-danger-primary">{error}</p>
       ) : (

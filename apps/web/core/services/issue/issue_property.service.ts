@@ -45,6 +45,32 @@ export class IssuePropertyService extends APIService {
   }
 
   /**
+   * The values of one workspace draft. A draft lives in its own table, so the create
+   * modal saves against a separate endpoint; converting the draft carries them over.
+   */
+  async getDraftPropertyValues(workspaceSlug: string, draftId: string): Promise<TIssuePropertyValues> {
+    return this.get(`/api/workspaces/${workspaceSlug}/draft-issues/${draftId}/issue-property-values/`)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async updateDraftPropertyValues(
+    workspaceSlug: string,
+    draftId: string,
+    propertyValues: TIssuePropertyValues
+  ): Promise<TIssuePropertyValues> {
+    return this.post(`/api/workspaces/${workspaceSlug}/draft-issues/${draftId}/issue-property-values/`, {
+      property_values: propertyValues,
+    })
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  /**
    * Replaces the values of the submitted properties and returns the full map back.
    * Properties that are not in `propertyValues` are left alone, so a single edit in
    * the sidebar does not wipe the rest of the form. A rejected value comes back as a

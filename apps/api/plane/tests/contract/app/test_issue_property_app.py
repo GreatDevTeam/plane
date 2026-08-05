@@ -6,6 +6,7 @@ import pytest
 from rest_framework import status
 
 from plane.db.models import (
+    DraftIssue,
     Issue,
     IssueProperty,
     IssuePropertyActivity,
@@ -16,6 +17,8 @@ from plane.db.models import (
     ProjectIssueType,
     ProjectMember,
     State,
+    User,
+    WorkspaceMember,
 )
 from plane.utils.issue_type import get_or_create_default_issue_type
 
@@ -71,6 +74,20 @@ def values_url(slug, project_id, issue_id):
 
 def bulk_values_url(slug, project_id):
     return f"/api/workspaces/{slug}/projects/{project_id}/issue-property-values/"
+
+
+def draft_values_url(slug, draft_id):
+    return f"/api/workspaces/{slug}/draft-issues/{draft_id}/issue-property-values/"
+
+
+def make_draft(project, state, issue_type, author, name="Draft"):
+    # `created_by` is stamped from the request context, so a draft built straight off
+    # the model has to be told who wrote it — drafts are private to their author
+    draft = DraftIssue(
+        name=name, project=project, workspace=project.workspace, state=state, type=issue_type
+    )
+    draft.save(created_by_id=author.id)
+    return draft
 
 
 @pytest.mark.contract
@@ -669,3 +686,154 @@ class TestBulkIssuePropertyValueEndpoint:
 
         assert response.status_code == status.HTTP_200_OK
         assert response.data == {}
+
+
+@pytest.mark.contract
+class TestDraftIssuePropertyValueEndpoint:
+    """The create modal fills in custom fields before the work item exists, so a draft
+    saved out of it keeps them in its own table until it is converted."""
+
+    @pytest.fixture
+    def draft_issue(self, project, state, issue_type, create_user):
+        return make_draft(project, state, issue_type, create_user)
+
+    @pytest.mark.django_db
+    def test_read_returns_an_empty_list_per_property(self, session_client, workspace, draft_issue, issue_type):
+        issue_property = make_property(issue_type)
+
+        response = session_client.get(draft_values_url(workspace.slug, draft_issue.id))
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data == {str(issue_property.id): []}
+
+    @pytest.mark.django_db
+    def test_replace_stores_the_value_against_the_draft(self, session_client, workspace, draft_issue, issue_type):
+        issue_property = make_property(issue_type)
+
+        response = session_client.post(
+            draft_values_url(workspace.slug, draft_issue.id),
+            {"property_values": {str(issue_property.id): ["High"]}},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data == {str(issue_property.id): ["High"]}
+        value = IssuePropertyValue.objects.get(draft_issue=draft_issue, property=issue_property)
+        assert value.value_text == "High"
+        assert value.issue_id is None
+
+    @pytest.mark.django_db
+    def test_replace_overwrites_the_previous_value(self, session_client, workspace, draft_issue, issue_type):
+        issue_property = make_property(issue_type)
+        session_client.post(
+            draft_values_url(workspace.slug, draft_issue.id),
+            {"property_values": {str(issue_property.id): ["High"]}},
+            format="json",
+        )
+
+        response = session_client.post(
+            draft_values_url(workspace.slug, draft_issue.id),
+            {"property_values": {str(issue_property.id): ["Low"]}},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data == {str(issue_property.id): ["Low"]}
+        assert IssuePropertyValue.objects.filter(draft_issue=draft_issue, property=issue_property).count() == 1
+
+    @pytest.mark.django_db
+    def test_the_same_validation_applies(self, session_client, workspace, draft_issue, issue_type):
+        issue_property = make_property(issue_type, property_type="DECIMAL", settings={"max": 5})
+
+        response = session_client.post(
+            draft_values_url(workspace.slug, draft_issue.id),
+            {"property_values": {str(issue_property.id): [9]}},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert str(issue_property.id) in response.data
+
+    @pytest.mark.django_db
+    def test_a_draft_is_private_to_whoever_wrote_it(self, session_client, workspace, project, state, issue_type):
+        author = User.objects.create(username="other", email="other@example.com")
+        WorkspaceMember.objects.create(workspace=workspace, member=author, role=20)
+        foreign_draft = make_draft(project, state, issue_type, author, name="Someone else's")
+
+        response = session_client.get(draft_values_url(workspace.slug, foreign_draft.id))
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    @pytest.mark.django_db
+    def test_a_draft_without_a_project_cannot_hold_values(
+        self, session_client, workspace, issue_type, create_user, project
+    ):
+        issue_property = make_property(issue_type)
+        projectless = DraftIssue(name="No project", workspace=workspace, type=issue_type)
+        projectless.save(created_by_id=create_user.id)
+
+        response = session_client.post(
+            draft_values_url(workspace.slug, projectless.id),
+            {"property_values": {str(issue_property.id): ["High"]}},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    @pytest.mark.django_db
+    def test_a_draft_records_no_activity(self, session_client, workspace, draft_issue, issue_type):
+        issue_property = make_property(issue_type)
+
+        session_client.post(
+            draft_values_url(workspace.slug, draft_issue.id),
+            {"property_values": {str(issue_property.id): ["High"]}},
+            format="json",
+        )
+
+        assert IssuePropertyActivity.objects.filter(property=issue_property).count() == 0
+
+    @pytest.mark.django_db
+    def test_converting_the_draft_carries_the_values_onto_the_work_item(
+        self, session_client, workspace, project, draft_issue, issue_type
+    ):
+        issue_property = make_property(issue_type)
+        session_client.post(
+            draft_values_url(workspace.slug, draft_issue.id),
+            {"property_values": {str(issue_property.id): ["High"]}},
+            format="json",
+        )
+
+        response = session_client.post(
+            f"/api/workspaces/{workspace.slug}/draft-to-issue/{draft_issue.id}/",
+            {"name": "Converted", "project_id": str(project.id), "type_id": str(issue_type.id)},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED
+        issue = Issue.objects.get(pk=response.data["id"])
+        value = IssuePropertyValue.objects.get(property=issue_property)
+        assert value.issue_id == issue.id
+        assert value.draft_issue_id is None
+        assert value.value_text == "High"
+
+    @pytest.mark.django_db
+    def test_converting_to_another_type_drops_the_values_of_the_old_one(
+        self, session_client, workspace, project, draft_issue, issue_type
+    ):
+        issue_property = make_property(issue_type)
+        other_type = IssueType.objects.create(workspace=workspace, name="Bug")
+        ProjectIssueType.objects.create(project=project, workspace=workspace, issue_type=other_type)
+        session_client.post(
+            draft_values_url(workspace.slug, draft_issue.id),
+            {"property_values": {str(issue_property.id): ["High"]}},
+            format="json",
+        )
+
+        response = session_client.post(
+            f"/api/workspaces/{workspace.slug}/draft-to-issue/{draft_issue.id}/",
+            {"name": "Converted", "project_id": str(project.id), "type_id": str(other_type.id)},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED
+        assert IssuePropertyValue.objects.filter(property=issue_property, issue__isnull=False).count() == 0

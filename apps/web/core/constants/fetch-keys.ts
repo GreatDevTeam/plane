@@ -94,6 +94,9 @@ export const WORK_ITEM_TYPE_PROPERTIES = (workspaceSlug: string, issueTypeId: st
 export const WORK_ITEM_PROPERTY_VALUES = (workspaceSlug: string, projectId: string, workItemId: string) =>
   `WORK_ITEM_PROPERTY_VALUES_${workspaceSlug.toUpperCase()}_${projectId.toUpperCase()}_${workItemId.toUpperCase()}`;
 
+export const DRAFT_WORK_ITEM_PROPERTY_VALUES = (workspaceSlug: string, draftId: string) =>
+  `DRAFT_WORK_ITEM_PROPERTY_VALUES_${workspaceSlug.toUpperCase()}_${draftId.toUpperCase()}`;
+
 export const WORKSPACE_SIDEBAR_PREFERENCES = (workspaceSlug: string) =>
   `WORKSPACE_SIDEBAR_PREFERENCES_${workspaceSlug.toUpperCase()}`;
 

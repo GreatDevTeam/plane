@@ -6,6 +6,7 @@
 
 export * from "./boolean-value";
 export * from "./datetime-value";
+export * from "./editor";
 export * from "./member-value";
 export * from "./option-value";
 export * from "./root";

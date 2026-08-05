@@ -18,6 +18,7 @@ from .. import BaseViewSet
 from plane.app.permissions import ROLE, allow_permission
 from plane.app.serializers import IssuePropertyOptionSerializer, IssuePropertySerializer
 from plane.db.models import (
+    DraftIssue,
     Issue,
     IssueProperty,
     IssuePropertyActionEnum,
@@ -185,33 +186,33 @@ class IssuePropertyValueMixin:
     def properties_of(self, issue_type_ids):
         return IssueProperty.objects.filter(issue_type_id__in=issue_type_ids).order_by("sort_order", "created_at")
 
-    def values_map(self, issue_ids, properties):
-        """``{issue_id: {property_id: [value, …]}}`` for the given work items."""
+    def values_map(self, owner_ids, properties, owner_field="issue"):
+        """``{owner_id: {property_id: [value, …]}}`` for the given work items or drafts."""
         properties_by_id = {issue_property.id: issue_property for issue_property in properties}
 
         values = defaultdict(lambda: defaultdict(list))
         rows = IssuePropertyValue.objects.filter(
-            issue_id__in=issue_ids, property_id__in=properties_by_id.keys()
+            **{f"{owner_field}_id__in": owner_ids}, property_id__in=properties_by_id.keys()
         ).order_by("created_at")
 
         for row in rows:
             issue_property = properties_by_id[row.property_id]
             value = serialize_value(issue_property, row)
             if value is not None:
-                values[str(row.issue_id)][str(row.property_id)].append(value)
+                values[str(getattr(row, f"{owner_field}_id"))][str(row.property_id)].append(value)
 
         # A work item with no value for a property still has to carry the empty
         # list, otherwise the client cannot tell "not loaded" from "not set"
         return {
-            str(issue_id): {
-                str(issue_property.id): values[str(issue_id)].get(str(issue_property.id), [])
+            str(owner_id): {
+                str(issue_property.id): values[str(owner_id)].get(str(issue_property.id), [])
                 for issue_property in properties
             }
-            for issue_id in issue_ids
+            for owner_id in owner_ids
         }
 
-    def replace_values(self, issue, property_values, actor):
-        """Replace the values of the submitted properties on one work item.
+    def replace_values(self, issue, property_values, actor, owner_field="issue"):
+        """Replace the values of the submitted properties on one work item or draft.
 
         Properties that are not in the payload are left alone, so a partial save
         from the detail sidebar does not wipe the rest of the form.
@@ -234,10 +235,11 @@ class IssuePropertyValueMixin:
             return None, errors
 
         epoch = int(timezone.now().timestamp())
+        owner_filter = {f"{owner_field}_id": issue.id}
         with transaction.atomic():
             for property_id, values in coerced.items():
                 issue_property = properties[property_id]
-                existing = list(IssuePropertyValue.objects.filter(issue_id=issue.id, property_id=property_id))
+                existing = list(IssuePropertyValue.objects.filter(**owner_filter, property_id=property_id))
                 old_values = [serialize_value(issue_property, row) for row in existing]
                 new_values = [
                     serialize_value(
@@ -250,11 +252,11 @@ class IssuePropertyValueMixin:
                 if old_values == new_values:
                     continue
 
-                IssuePropertyValue.objects.filter(issue_id=issue.id, property_id=property_id).delete()
+                IssuePropertyValue.objects.filter(**owner_filter, property_id=property_id).delete()
                 IssuePropertyValue.objects.bulk_create(
                     [
                         IssuePropertyValue(
-                            issue_id=issue.id,
+                            **owner_filter,
                             property_id=property_id,
                             project_id=issue.project_id,
                             workspace_id=issue.workspace_id,
@@ -265,6 +267,11 @@ class IssuePropertyValueMixin:
                     ],
                     batch_size=100,
                 )
+
+                # A draft has no activity feed, and `IssuePropertyActivity.issue`
+                # cannot point at one — the values are recorded when it converts
+                if owner_field != "issue":
+                    continue
 
                 IssuePropertyActivity.objects.create(
                     issue_id=issue.id,
@@ -278,7 +285,7 @@ class IssuePropertyValueMixin:
                     epoch=epoch,
                 )
 
-        return self.values_map([issue.id], properties.values())[str(issue.id)], None
+        return self.values_map([issue.id], properties.values(), owner_field)[str(issue.id)], None
 
     @staticmethod
     def action_for(old_values, new_values):
@@ -320,6 +327,60 @@ class IssuePropertyValueViewSet(IssuePropertyValueMixin, BaseViewSet):
             )
 
         values, errors = self.replace_values(issue, property_values, request.user)
+        if errors:
+            return Response(errors, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(values, status=status.HTTP_200_OK)
+
+
+class DraftIssuePropertyValueViewSet(IssuePropertyValueMixin, BaseViewSet):
+    """Read and replace the property values of one workspace draft.
+
+    The create modal fills in custom fields before the work item exists, so a draft
+    saved out of it has to keep them; converting the draft carries them over
+    (``WorkspaceDraftIssueViewSet.create_draft_to_issue``).
+    """
+
+    model = IssuePropertyValue
+
+    def get_draft_issue(self, request, slug, draft_id):
+        # drafts are private to whoever wrote them, as everywhere else
+        return DraftIssue.objects.filter(workspace__slug=slug, pk=draft_id, created_by=request.user).first()
+
+    @allow_permission([ROLE.ADMIN, ROLE.MEMBER, ROLE.GUEST], level="WORKSPACE")
+    def list(self, request, slug, draft_id):
+        draft_issue = self.get_draft_issue(request, slug, draft_id)
+        if draft_issue is None:
+            return Response({"error": "Draft not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        properties = self.properties_of([draft_issue.type_id])
+        return Response(
+            self.values_map([draft_issue.id], properties, "draft_issue")[str(draft_issue.id)],
+            status=status.HTTP_200_OK,
+        )
+
+    @allow_permission([ROLE.ADMIN, ROLE.MEMBER, ROLE.GUEST], level="WORKSPACE")
+    def create(self, request, slug, draft_id):
+        draft_issue = self.get_draft_issue(request, slug, draft_id)
+        if draft_issue is None:
+            return Response({"error": "Draft not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # values are validated against the project the draft is filed under, and
+        # stored on a row that needs one
+        if not draft_issue.project_id:
+            return Response(
+                {"error": "Project is required to set property values."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        property_values = request.data.get("property_values", request.data)
+        if not isinstance(property_values, dict):
+            return Response(
+                {"error": "property_values has to be a map of property id to values"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        values, errors = self.replace_values(draft_issue, property_values, request.user, "draft_issue")
         if errors:
             return Response(errors, status=status.HTTP_400_BAD_REQUEST)
 

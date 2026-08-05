@@ -6,6 +6,7 @@ from django.urls import path
 
 from plane.app.views import (
     BulkIssuePropertyValueViewSet,
+    DraftIssuePropertyValueViewSet,
     IssuePropertyOptionViewSet,
     IssuePropertyValueViewSet,
     IssuePropertyViewSet,
@@ -42,5 +43,10 @@ urlpatterns = [
         "workspaces/<str:slug>/projects/<uuid:project_id>/issue-property-values/",
         BulkIssuePropertyValueViewSet.as_view({"get": "list"}),
         name="bulk-issue-property-values",
+    ),
+    path(
+        "workspaces/<str:slug>/draft-issues/<uuid:draft_id>/issue-property-values/",
+        DraftIssuePropertyValueViewSet.as_view({"get": "list", "post": "create"}),
+        name="draft-issue-property-values",
     ),
 ]

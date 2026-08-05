@@ -88,6 +88,7 @@ from .state.base import StateViewSet, IntakeStateEndpoint
 from .issue_type.base import IssueTypeViewSet, ProjectIssueTypeViewSet
 from .issue_property.base import (
     BulkIssuePropertyValueViewSet,
+    DraftIssuePropertyValueViewSet,
     IssuePropertyOptionViewSet,
     IssuePropertyValueViewSet,
     IssuePropertyViewSet,

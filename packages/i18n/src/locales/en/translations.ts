@@ -2748,6 +2748,7 @@ export default {
     select_member: "Select a member",
     select_work_item: "Select a work item",
     unsupported: "Not editable here yet",
+    values_could_not_be_saved: "The custom fields could not be saved.",
   },
   // Navigation customization
   customize_navigation: "Customize navigation",
