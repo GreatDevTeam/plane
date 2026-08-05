@@ -4,6 +4,7 @@
 
 # Django imports
 from django.conf import settings
+from django.contrib.postgres.indexes import HashIndex
 from django.db import models
 from django.db.models import Q
 
@@ -149,6 +150,12 @@ class IssuePropertyValue(ProjectBaseModel):
             models.Index(fields=["property", "value_decimal"], name="ipv_property_decimal_idx"),
             models.Index(fields=["property", "value_datetime"], name="ipv_property_datetime_idx"),
             models.Index(fields=["property", "value_boolean"], name="ipv_property_boolean_idx"),
+            # hash rather than btree: a text value has no length bound, and a btree
+            # entry over ~2704 bytes is refused outright, so a long value would fail
+            # to save. A hash index only answers `=`, which is the only lookup a text
+            # value is filtered by that an index can serve at all — `icontains` needs
+            # a trigram index, which is worth adding only once it is hot.
+            HashIndex(fields=["value_text"], name="ipv_value_text_hash_idx"),
         ]
         verbose_name = "Issue Property Value"
         verbose_name_plural = "Issue Property Values"

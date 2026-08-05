@@ -8,6 +8,11 @@ from datetime import timedelta
 
 from django.utils import timezone
 
+from plane.utils.custom_property_filter import (
+    custom_property_issue_ids,
+    parse_custom_property_param,
+)
+
 # The date from pattern
 pattern = re.compile(r"\d+_(weeks|months)$")
 
@@ -425,6 +430,40 @@ def filter_logged_by(params, issue_filter, method, prefix=""):
     return issue_filter
 
 
+def filter_custom_properties(params, issue_filter, method, prefix=""):
+    """Filter by user defined properties, passed as ``property_<uuid>=a,b``.
+
+    This path hands its caller a flat kwargs dict that is splatted into a single
+    ``.filter()``, so — as in ``IssueFilterSet.filter_custom_property`` — one property
+    per join would be as far as it goes. The per property subqueries are chained into
+    each other instead and land under a single ``pk__in`` key, which keeps the dict
+    contract every call site relies on.
+    """
+    matched_ids = None
+
+    for key in sorted(params.keys()):
+        property_id = parse_custom_property_param(key)
+        if not property_id:
+            continue
+
+        raw = params.get(key)
+        values = [item.strip() for item in raw.split(",")] if method == "GET" else list(raw or [])
+        values = [item for item in values if item not in ("", "null")]
+        if not values:
+            continue
+
+        lookup = "in" if len(values) > 1 else "exact"
+        matched = custom_property_issue_ids(property_id, lookup, values if len(values) > 1 else values[0])
+        if matched_ids is not None:
+            matched = matched.filter(issue_id__in=matched_ids)
+        matched_ids = matched
+
+    if matched_ids is not None:
+        issue_filter[f"{prefix}pk__in"] = matched_ids
+
+    return issue_filter
+
+
 def issue_filters(query_params, method, prefix=""):
     issue_filter = {}
 
@@ -460,4 +499,8 @@ def issue_filters(query_params, method, prefix=""):
         if key in query_params:
             func = value
             func(query_params, issue_filter, method, prefix)
+
+    # user defined properties cannot be listed above — their keys carry a property id
+    filter_custom_properties(query_params, issue_filter, method, prefix)
+
     return issue_filter
