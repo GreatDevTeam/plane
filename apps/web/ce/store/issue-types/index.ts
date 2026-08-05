@@ -4,6 +4,4 @@
  * See the LICENSE file for details.
  */
 
-export * from "./use-issue-types";
-export * from "./use-page-store";
-export * from "./use-page";
+export * from "./issue-types.store";

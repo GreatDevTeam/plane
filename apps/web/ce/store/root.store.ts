@@ -6,15 +6,19 @@
 
 // store
 import { CoreRootStore } from "@/store/root.store";
+import type { IIssueTypesStore } from "./issue-types";
+import { IssueTypesStore } from "./issue-types";
 import type { ITimelineStore } from "./timeline";
 import { TimeLineStore } from "./timeline";
 
 export class RootStore extends CoreRootStore {
   timelineStore: ITimelineStore;
+  issueTypes: IIssueTypesStore;
 
   constructor() {
     super();
 
     this.timelineStore = new TimeLineStore(this);
+    this.issueTypes = new IssueTypesStore(this);
   }
 }

@@ -41,6 +41,7 @@ from plane.db.models import (
 )
 from plane.db.models.intake import IntakeIssueStatus
 from plane.utils.host import base_host
+from plane.utils.issue_type import get_or_create_default_issue_type
 
 
 class ProjectViewSet(BaseViewSet):
@@ -288,6 +289,9 @@ class ProjectViewSet(BaseViewSet):
                     for state in DEFAULT_STATES
                 ]
             )
+
+            # Every project gets the workspace default work item type enabled
+            get_or_create_default_issue_type(serializer.instance, created_by_id=request.user.id)
 
             project = self.get_queryset().filter(pk=serializer.data["id"]).first()
 
