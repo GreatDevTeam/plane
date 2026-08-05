@@ -32,6 +32,8 @@ class IssueExportSerializer(IssueSerializer):
     links = serializers.SerializerMethodField()
     relations = serializers.SerializerMethodField()
     subscribers = serializers.SerializerMethodField()
+    type_name = serializers.CharField(source='type.name', read_only=True, default="")
+    property_values = serializers.SerializerMethodField()
 
     class Meta(IssueSerializer.Meta):
         fields = [
@@ -63,10 +65,23 @@ class IssueExportSerializer(IssueSerializer):
             "link_count",
             "attachment_count",
             "is_draft",
+            "type_name",
+            "property_values",
         ]
 
     def get_identifier(self, obj):
         return f"{obj.project.identifier}-{obj.sequence_id}"
+
+    def get_property_values(self, obj):
+        """The custom field values of the work item, keyed by the field's display name.
+
+        Resolved for the whole export at once and handed in through the context —
+        rendering option, member and relation labels one work item at a time would be
+        a query per row. An export built without the index simply carries no values
+        rather than falling back to that.
+        """
+        index = self.context.get("property_values_index") or {}
+        return index.get(str(obj.id), {})
 
     def get_assignees(self, obj):
         return [u.full_name for u in obj.assignees.all() if u.is_active]

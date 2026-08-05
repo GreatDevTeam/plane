@@ -837,3 +837,66 @@ class TestDraftIssuePropertyValueEndpoint:
 
         assert response.status_code == status.HTTP_201_CREATED
         assert IssuePropertyValue.objects.filter(property=issue_property, issue__isnull=False).count() == 0
+
+
+def activities_url(slug, project_id, issue_id):
+    return f"/api/workspaces/{slug}/projects/{project_id}/issues/{issue_id}/issue-property-activities/"
+
+
+@pytest.mark.contract
+class TestIssuePropertyActivityEndpoint:
+    @pytest.mark.django_db
+    def test_lists_the_activities_of_the_work_item(self, session_client, workspace, project, issue, issue_type):
+        issue_property = make_property(issue_type)
+        url = values_url(workspace.slug, project.id, issue.id)
+        session_client.post(url, {"property_values": {str(issue_property.id): ["High"]}}, format="json")
+        session_client.post(url, {"property_values": {str(issue_property.id): ["Low"]}}, format="json")
+
+        response = session_client.get(activities_url(workspace.slug, project.id, issue.id))
+
+        assert response.status_code == status.HTTP_200_OK
+        assert [activity["action"] for activity in response.json()] == ["created", "updated"]
+        assert response.json()[1]["old_value"] == "High"
+        assert response.json()[1]["new_value"] == "Low"
+        assert response.json()[1]["property_id"] == str(issue_property.id)
+
+    @pytest.mark.django_db
+    def test_only_returns_what_the_feed_has_not_seen(self, session_client, workspace, project, issue, issue_type):
+        issue_property = make_property(issue_type)
+        url = values_url(workspace.slug, project.id, issue.id)
+        session_client.post(url, {"property_values": {str(issue_property.id): ["High"]}}, format="json")
+
+        first = IssuePropertyActivity.objects.get(issue=issue)
+        session_client.post(url, {"property_values": {str(issue_property.id): ["Low"]}}, format="json")
+
+        response = session_client.get(
+            activities_url(workspace.slug, project.id, issue.id), {"created_at__gt": first.created_at.isoformat()}
+        )
+
+        assert [activity["action"] for activity in response.json()] == ["updated"]
+
+    @pytest.mark.django_db
+    def test_an_option_is_recorded_by_name_not_by_id(self, session_client, workspace, project, issue, issue_type):
+        issue_property = make_property(issue_type, name="priority", display_name="Priority", property_type="OPTION")
+        option = IssuePropertyOption.objects.create(
+            workspace=workspace, property=issue_property, name="Blocker", sort_order=1
+        )
+
+        session_client.post(
+            values_url(workspace.slug, project.id, issue.id),
+            {"property_values": {str(issue_property.id): [str(option.id)]}},
+            format="json",
+        )
+
+        activity = IssuePropertyActivity.objects.get(issue=issue, property=issue_property)
+        assert activity.new_value == "Blocker"
+        assert str(activity.new_identifier) == str(option.id)
+
+    @pytest.mark.django_db
+    def test_a_non_member_cannot_read_the_activities(self, api_client, workspace, project, issue):
+        outsider = User.objects.create(email="outsider@example.com", username="outsider")
+        api_client.force_authenticate(user=outsider)
+
+        response = api_client.get(activities_url(workspace.slug, project.id, issue.id))
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN

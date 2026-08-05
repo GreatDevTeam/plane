@@ -89,6 +89,7 @@ from .issue_type.base import IssueTypeViewSet, ProjectIssueTypeViewSet
 from .issue_property.base import (
     BulkIssuePropertyValueViewSet,
     DraftIssuePropertyValueViewSet,
+    IssuePropertyActivityViewSet,
     IssuePropertyOptionViewSet,
     IssuePropertyValueViewSet,
     IssuePropertyViewSet,

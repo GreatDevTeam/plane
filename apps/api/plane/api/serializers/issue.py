@@ -31,6 +31,7 @@ from plane.utils.content_validator import (
     validate_html_content,
     validate_binary_data,
 )
+from plane.utils.issue_property import property_values_index
 from plane.utils.issue_type import get_default_issue_type
 
 from .base import BaseSerializer
@@ -67,11 +68,30 @@ class IssueSerializer(BaseSerializer):
     type_id = serializers.PrimaryKeyRelatedField(
         source="type", queryset=IssueType.objects.all(), required=False, allow_null=True
     )
+    property_values = serializers.SerializerMethodField()
 
     class Meta:
         model = Issue
         read_only_fields = ["id", "workspace", "project", "updated_by", "updated_at"]
         exclude = ["description_json", "description_stripped"]
+
+    def get_property_values(self, obj):
+        """The custom field values of the work item, keyed by the field's api name.
+
+        Ids rather than labels, so that what a webhook delivers is what the create and
+        update endpoints take back. Resolved for every work item the serializer was
+        handed at once — a list endpoint would otherwise run a query per row — and
+        cached on the shared context so the children of a list serializer build it
+        only once between them.
+        """
+        index = self.context.get("property_values_index")
+        if index is None:
+            instances = self.parent.instance if isinstance(self.parent, serializers.ListSerializer) else obj
+            issue_ids = [issue.id for issue in instances] if hasattr(instances, "__iter__") else [instances.id]
+            index = property_values_index(issue_ids, key="name", as_labels=False)
+            self.context["property_values_index"] = index
+
+        return index.get(str(obj.id), {})
 
     def validate(self, data):
         if (

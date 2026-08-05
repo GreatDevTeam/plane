@@ -7,7 +7,6 @@ from collections import defaultdict
 
 # Django imports
 from django.db import transaction
-from django.utils import timezone
 
 # Third party imports
 from rest_framework import status
@@ -16,18 +15,21 @@ from rest_framework.response import Response
 # Module imports
 from .. import BaseViewSet
 from plane.app.permissions import ROLE, allow_permission
-from plane.app.serializers import IssuePropertyOptionSerializer, IssuePropertySerializer
+from plane.app.serializers import (
+    IssuePropertyActivitySerializer,
+    IssuePropertyOptionSerializer,
+    IssuePropertySerializer,
+)
 from plane.db.models import (
     DraftIssue,
     Issue,
     IssueProperty,
-    IssuePropertyActionEnum,
     IssuePropertyActivity,
     IssuePropertyOption,
     IssuePropertyValue,
     IssueType,
 )
-from plane.utils.issue_property import PropertyValueError, coerce_values, serialize_value, value_field_for
+from plane.utils.issue_property import properties_of, replace_property_values, values_map
 
 # A page of the board is 100 work items; the cap keeps a hand written url from
 # turning into an unbounded `IN (...)`
@@ -181,119 +183,20 @@ class IssuePropertyOptionViewSet(BaseViewSet):
 
 
 class IssuePropertyValueMixin:
-    """Shared reading and writing of property values."""
+    """Shared reading and writing of property values.
+
+    The implementation lives in ``plane.utils.issue_property`` — the public API writes
+    the same values through it, so it cannot hang off a view.
+    """
 
     def properties_of(self, issue_type_ids):
-        return IssueProperty.objects.filter(issue_type_id__in=issue_type_ids).order_by("sort_order", "created_at")
+        return properties_of(issue_type_ids)
 
     def values_map(self, owner_ids, properties, owner_field="issue"):
-        """``{owner_id: {property_id: [value, …]}}`` for the given work items or drafts."""
-        properties_by_id = {issue_property.id: issue_property for issue_property in properties}
-
-        values = defaultdict(lambda: defaultdict(list))
-        rows = IssuePropertyValue.objects.filter(
-            **{f"{owner_field}_id__in": owner_ids}, property_id__in=properties_by_id.keys()
-        ).order_by("created_at")
-
-        for row in rows:
-            issue_property = properties_by_id[row.property_id]
-            value = serialize_value(issue_property, row)
-            if value is not None:
-                values[str(getattr(row, f"{owner_field}_id"))][str(row.property_id)].append(value)
-
-        # A work item with no value for a property still has to carry the empty
-        # list, otherwise the client cannot tell "not loaded" from "not set"
-        return {
-            str(owner_id): {
-                str(issue_property.id): values[str(owner_id)].get(str(issue_property.id), [])
-                for issue_property in properties
-            }
-            for owner_id in owner_ids
-        }
+        return values_map(owner_ids, properties, owner_field)
 
     def replace_values(self, issue, property_values, actor, owner_field="issue"):
-        """Replace the values of the submitted properties on one work item or draft.
-
-        Properties that are not in the payload are left alone, so a partial save
-        from the detail sidebar does not wipe the rest of the form.
-        """
-        properties = {str(issue_property.id): issue_property for issue_property in self.properties_of([issue.type_id])}
-
-        coerced = {}
-        errors = {}
-        for property_id, raw_values in property_values.items():
-            issue_property = properties.get(str(property_id))
-            if issue_property is None:
-                errors[str(property_id)] = "The property does not belong to the work item type"
-                continue
-            try:
-                coerced[str(property_id)] = coerce_values(issue_property, raw_values, issue.project)
-            except PropertyValueError as error:
-                errors[error.property_id] = error.message
-
-        if errors:
-            return None, errors
-
-        epoch = int(timezone.now().timestamp())
-        owner_filter = {f"{owner_field}_id": issue.id}
-        with transaction.atomic():
-            for property_id, values in coerced.items():
-                issue_property = properties[property_id]
-                existing = list(IssuePropertyValue.objects.filter(**owner_filter, property_id=property_id))
-                old_values = [serialize_value(issue_property, row) for row in existing]
-                new_values = [
-                    serialize_value(
-                        issue_property,
-                        IssuePropertyValue(**{value_field_for(issue_property.property_type): value}),
-                    )
-                    for value in values
-                ]
-
-                if old_values == new_values:
-                    continue
-
-                IssuePropertyValue.objects.filter(**owner_filter, property_id=property_id).delete()
-                IssuePropertyValue.objects.bulk_create(
-                    [
-                        IssuePropertyValue(
-                            **owner_filter,
-                            property_id=property_id,
-                            project_id=issue.project_id,
-                            workspace_id=issue.workspace_id,
-                            created_by=actor,
-                            **{value_field_for(issue_property.property_type): value},
-                        )
-                        for value in values
-                    ],
-                    batch_size=100,
-                )
-
-                # A draft has no activity feed, and `IssuePropertyActivity.issue`
-                # cannot point at one — the values are recorded when it converts
-                if owner_field != "issue":
-                    continue
-
-                IssuePropertyActivity.objects.create(
-                    issue_id=issue.id,
-                    property_id=issue_property.id,
-                    project_id=issue.project_id,
-                    workspace_id=issue.workspace_id,
-                    actor=actor,
-                    action=self.action_for(old_values, new_values),
-                    old_value=", ".join(str(value) for value in old_values) or None,
-                    new_value=", ".join(str(value) for value in new_values) or None,
-                    epoch=epoch,
-                )
-
-        return self.values_map([issue.id], properties.values(), owner_field)[str(issue.id)], None
-
-    @staticmethod
-    def action_for(old_values, new_values):
-        if not old_values:
-            return IssuePropertyActionEnum.CREATED
-        if not new_values:
-            return IssuePropertyActionEnum.DELETED
-        return IssuePropertyActionEnum.UPDATED
+        return replace_property_values(issue, property_values, actor, owner_field)
 
 
 class IssuePropertyValueViewSet(IssuePropertyValueMixin, BaseViewSet):
@@ -431,3 +334,38 @@ class BulkIssuePropertyValueViewSet(IssuePropertyValueMixin, BaseViewSet):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class IssuePropertyActivityViewSet(BaseViewSet):
+    """The audit trail of one work item's property changes, for its activity feed.
+
+    Kept off the work item activity endpoint: that one reads ``IssueActivity``, and a
+    property change is a row of its own table, so the feed merges the two client side
+    the way it already merges activities with comments.
+    """
+
+    model = IssuePropertyActivity
+    serializer_class = IssuePropertyActivitySerializer
+
+    @allow_permission([ROLE.ADMIN, ROLE.MEMBER, ROLE.GUEST])
+    def list(self, request, slug, project_id, issue_id):
+        # The feed polls with the timestamp of the last row it holds, so a refresh
+        # asks only for what it has not seen
+        filters = {}
+        if request.GET.get("created_at__gt") is not None:
+            filters["created_at__gt"] = request.GET.get("created_at__gt")
+
+        activities = (
+            IssuePropertyActivity.objects.filter(
+                workspace__slug=slug,
+                project_id=project_id,
+                issue_id=issue_id,
+                project__project_projectmember__member=request.user,
+                project__project_projectmember__is_active=True,
+                project__archived_at__isnull=True,
+            )
+            .filter(**filters)
+            .order_by("created_at")
+        )
+
+        return Response(IssuePropertyActivitySerializer(activities, many=True).data, status=status.HTTP_200_OK)
