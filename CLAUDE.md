@@ -106,11 +106,34 @@ Hand over only the fields that changed: the live server rewrites just the fragme
 
 ```bash
 cd apps/api && DATABASE_URL="postgresql://plane:plane@<plane-test-db ip>:5432/plane" \
-  REDIS_URL="redis://<plane-test-redis ip>:6379/" SECRET_KEY="test" \
-  pytest plane/tests/contract/api/test_pages.py
+  REDIS_URL="redis://<plane-test-redis ip>:6379/" \
+  AMQP_URL="amqp://plane:plane@<plane-test-mq ip>:5672/plane" \
+  WEB_URL="http://localhost:3000" SECRET_KEY="test" \
+  /root/.venvs/plane312/bin/python -m pytest plane/tests/contract/api/test_pages.py
 ```
 
+`AMQP_URL` and `WEB_URL` are **not optional**: any endpoint that fires `issue_activity.delay(...)`
+returns a `500` without them (kombu cannot reach the broker, `base_host()` raises
+`ImproperlyConfigured`), and the failure looks nothing like the missing setting. The broker
+credentials are `plane:plane` on vhost `plane`, not the rabbitmq `guest` defaults — read them off
+the container with `docker inspect plane-test-mq-1` rather than guessing.
+
+Neither `ruff` nor a 3.12 `python` is on `PATH`; both live in `/root/.venvs/plane312/bin/`.
+
+`pytest` **reuses** the test database, so a migration you just wrote is silently not applied and
+every test touching the new column fails on `column … does not exist`. Pass `--create-db` after
+adding a migration.
+
+`Model.objects.create(created_by=user)` does **not** set `created_by`: `BaseModel.save()`
+overwrites it from the thread-local request user, which is unset in a test, so the row lands with
+`created_by=None`. Build the instance and call `instance.save(created_by_id=user.id)` instead —
+this bites on any model whose endpoint scopes by author (drafts, for one).
+
 `apps/api/run_tests.sh` is broken (it execs a `tests/run_tests.sh` that does not exist) — call `pytest` directly. CI lints with `ruff check`.
+
+A handful of tests (`test_authentication.py` magic-link, `test_cycles.py`, `test_api_token.py`,
+`test_url.py`, `test_copy_s3_objects.py` — 18 in all) fail on an untouched tree. Confirm a failure
+is yours by re-running it with your changes stashed before chasing it.
 
 ## Frontend tests
 
@@ -131,6 +154,9 @@ There are none. `apps/web` has no test runner configured — its `package.json` 
 - **Imports**: `workspace:*` for internal packages, `catalog:` for external deps
 - **TypeScript**: Strict mode; all files must be typed
 - **Formatting**: oxfmt — run `pnpm fix:format`
-- **Linting**: OxLint with shared `.oxlintrc.json`
+- **Linting**: OxLint with shared `.oxlintrc.json`. `pnpm check:lint` reports warnings but still
+  exits `0`, while the husky pre-commit hook runs `oxlint --fix --deny-warnings` over the staged
+  files — so a warning that already existed in a file you touched blocks the commit even though
+  the repo-wide gate passed. Run `npx oxlint --deny-warnings <changed paths>` before committing.
 - **Naming**: camelCase for variables/functions, PascalCase for components/types
 - **Components**: Build in `@plane/ui` with Storybook for isolated development
