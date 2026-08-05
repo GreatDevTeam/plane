@@ -96,3 +96,10 @@ export type TBulkIssuePropertyValues = Record<string, TIssuePropertyValues>;
  * visibility on the card and its spreadsheet column can be toggled like a built-in one.
  */
 export type TIssuePropertyDisplayKey = `property_${string}`;
+
+/**
+ * How a custom property is keyed among the filter properties of a layout. It is the same
+ * key as the display one — the backend reads `property_<uuid>__<operator>` off the filter
+ * expression and rewrites it onto the property's own value column.
+ */
+export type TIssuePropertyFilterKey = TIssuePropertyDisplayKey;

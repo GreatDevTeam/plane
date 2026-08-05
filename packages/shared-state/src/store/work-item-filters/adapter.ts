@@ -17,6 +17,7 @@ import type {
   TWorkItemFilterExpressionData,
   TWorkItemFilterProperty,
 } from "@plane/types";
+import { WORK_ITEM_PROPERTY_DISPLAY_KEY_PREFIX } from "@plane/constants";
 import { LOGICAL_OPERATOR, MULTI_VALUE_OPERATORS, WORK_ITEM_FILTER_PROPERTY_KEYS } from "@plane/types";
 import { createConditionNode, createAndGroupNode, isAndGroupNode, isConditionNode } from "@plane/utils";
 // local imports
@@ -165,9 +166,12 @@ class WorkItemFiltersAdapter extends FilterAdapter<TWorkItemFilterProperty, TWor
     const property = key.substring(0, lastDoubleUnderscoreIndex);
     const operator = key.substring(lastDoubleUnderscoreIndex + 2);
 
-    // Validate property is in allowed list
+    // Validate property is a built-in one or a user defined work item property
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if (!WORK_ITEM_FILTER_PROPERTY_KEYS.includes(property as any) && !property.startsWith("customproperty_")) {
+    if (
+      !WORK_ITEM_FILTER_PROPERTY_KEYS.includes(property as any) &&
+      !property.startsWith(WORK_ITEM_PROPERTY_DISPLAY_KEY_PREFIX)
+    ) {
       return false;
     }
 

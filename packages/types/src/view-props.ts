@@ -6,7 +6,7 @@
 
 import type { IProjectMemberNavigationPreferences } from "./project";
 import type { TIssue } from "./issues/issue";
-import type { TIssuePropertyDisplayKey } from "./issues/issue-property";
+import type { TIssuePropertyDisplayKey, TIssuePropertyFilterKey } from "./issues/issue-property";
 import type { LOGICAL_OPERATOR, TSupportedOperators } from "./rich-filters";
 import type { CompleteOrEmpty } from "./utils";
 
@@ -111,7 +111,16 @@ export const WORK_ITEM_FILTER_PROPERTY_KEYS = [
   "created_at",
   "updated_at",
 ] as const;
-export type TWorkItemFilterProperty = (typeof WORK_ITEM_FILTER_PROPERTY_KEYS)[number];
+
+/** The filter properties every work item has, whatever its type. */
+export type TWorkItemBuiltInFilterProperty = (typeof WORK_ITEM_FILTER_PROPERTY_KEYS)[number];
+
+/**
+ * A work item is also filtered by the user defined properties of its type, which cannot
+ * be enumerated ahead of time — they are keyed `property_<uuid>`, the same key their
+ * display toggle and their spreadsheet column use.
+ */
+export type TWorkItemFilterProperty = TWorkItemBuiltInFilterProperty | TIssuePropertyFilterKey;
 
 export type TWorkItemFilterConditionKey = `${TWorkItemFilterProperty}__${TSupportedOperators}`;
 
