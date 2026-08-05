@@ -4,6 +4,14 @@
 
 This is a monorepo (pnpm workspaces + Turborepo). Frontend lives in `apps/web`, shared UI in `packages/ui`, shared state in `packages/shared-state`.
 
+### The CE/EE extension seam (`@/plane-web/*` → `apps/web/ce/*`)
+
+This repo is the community edition of Plane. Everything upstream gates behind a paid edition is imported through `@/plane-web/...`, which `apps/web/tsconfig.json` maps to `./ce/*` — so the call sites in `apps/web/core/` are the real upstream ones, already wired into the board, card, spreadsheet, create/update modal, detail sidebar, filter bar and activity feed, and the file under `apps/web/ce/` they resolve to is a **no-op stub** returning `null` / `<></>` / `{}`.
+
+The practical consequence: a feature that looks like "build it from scratch" is usually "fill in the stub". Before designing anything, grep for the feature under `apps/web/ce/` — if a stub exists, implement it there and the feature lights up at every call site without touching core rendering code. Conversely, a component under `ce/` that returns an empty fragment is not dead code; deleting it breaks the import.
+
+Three closed unions are the gate on anything that needs a per-field filter or column, and they have to be widened before a stub can do useful work: `WORK_ITEM_FILTER_PROPERTY_KEYS` (`packages/types/src/view-props.ts`), `EXTENDED_FILTER_FIELD_TYPE` (`packages/types/src/rich-filters/field-types/extended.ts` — the designated slot for non-core filter editors), and `IIssueDisplayProperties` / `ISSUE_DISPLAY_PROPERTIES_KEYS`. Server side the equivalent gate is `IssueFilterSet`.
+
 ## Development Commands
 
 - `pnpm dev` — Start all dev servers (web:3000, admin:3001)
