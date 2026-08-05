@@ -54,6 +54,22 @@ if [ -f .env ]; then
 fi
 
 MODEL="${MODEL:-${RALPH_MODEL:-claude-opus-5}}"
+
+# Resolve a short model name (opus, sonnet, haiku, fable) to its full model
+# id. Anything that is not one of these short names passes through unchanged,
+# so a full id (e.g. claude-sonnet-5, claude-haiku-4-5-20251001) also works —
+# this lets a task's "Model: <name>" override (see below) accept either form.
+resolve_model_alias() {
+    local name
+    name=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+    case "$name" in
+        opus)   echo "claude-opus-5" ;;
+        sonnet) echo "claude-sonnet-5" ;;
+        haiku)  echo "claude-haiku-4-5-20251001" ;;
+        fable)  echo "claude-fable-5" ;;
+        *)      echo "$1" ;;
+    esac
+}
 RALPH_BASE_BRANCH="${RALPH_BASE_BRANCH:-main}"
 RALPH_MAX_LIMIT_PCT="${RALPH_MAX_LIMIT_PCT:-80}"
 RALPH_WAIT_INTERVAL="${RALPH_WAIT_INTERVAL:-60}"
@@ -179,7 +195,7 @@ mkdir -p "$LOGS_DIR"
 
 echo -e "\033[1;35m════════════════════════════════════════\033[0m"
 echo -e "\033[1;35m  Ralph (Plane.so)\033[0m"
-echo -e "\033[1;35m  Model: $MODEL\033[0m"
+echo -e "\033[1;35m  Model: $MODEL (default -- a task can override via Model: <name> in its description)\033[0m"
 echo -e "\033[1;35m  Continue mode: $CONTINUE_MODE\033[0m"
 echo -e "\033[1;35m  Prompt file: $PROMPT_FILE\033[0m"
 echo -e "\033[1;35m  Logs: $LOGS_DIR\033[0m"
@@ -291,6 +307,18 @@ while true; do
     fi
     TASK_JSON=$(echo "$TASK_JSON" | jq --argjson threads "$PR_THREADS" '. + {pr_unresolved_threads: $threads}')
 
+    # Per-task model override: a task's description may contain "Model: <name>"
+    # (short name like opus/sonnet/haiku/fable, or a full model id) to run just
+    # this task on a different model than RALPH_MODEL — e.g. a cheap/simple
+    # follow-up task on haiku. Falls back to the configured default when absent.
+    TASK_MODEL_RAW=$(echo "$TASK_JSON" | jq -r '.description_html // ""' \
+        | grep -ioP '(?<=model:)[[:space:]]*\K[a-z0-9._-]+' | tail -1 || echo "")
+    ITER_MODEL="$MODEL"
+    if [ -n "$TASK_MODEL_RAW" ]; then
+        ITER_MODEL=$(resolve_model_alias "$TASK_MODEL_RAW")
+        echo -e "\033[90m  model override: ${TASK_MODEL_RAW} → ${ITER_MODEL}\033[0m"
+    fi
+
     # Inject the task JSON directly so Claude already has it and does not fetch it.
     {
         echo ""
@@ -349,7 +377,7 @@ while true; do
             printf "\033[90m[%s]\033[0m %s\n" "$(date +%H:%M:%S)" "$line"
             echo "$line" >> "$TMPFILE"
         fi
-    done < <(cat "$PROMPT_INPUT" | claude --model "$MODEL" --print --verbose --dangerously-skip-permissions --output-format stream-json 2>/dev/null \
+    done < <(cat "$PROMPT_INPUT" | claude --model "$ITER_MODEL" --print --verbose --dangerously-skip-permissions --output-format stream-json 2>/dev/null \
         | tee "$RAWFILE" \
         | grep --line-buffered '^{' \
         | jq --unbuffered -r '
