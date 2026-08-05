@@ -86,6 +86,12 @@ from .workspace.sticky import WorkspaceStickyViewSet
 from .state.base import StateViewSet, IntakeStateEndpoint
 
 from .issue_type.base import IssueTypeViewSet, ProjectIssueTypeViewSet
+from .issue_property.base import (
+    BulkIssuePropertyValueViewSet,
+    IssuePropertyOptionViewSet,
+    IssuePropertyValueViewSet,
+    IssuePropertyViewSet,
+)
 from .view.base import (
     WorkspaceViewViewSet,
     WorkspaceViewIssuesViewSet,
