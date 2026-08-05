@@ -17,10 +17,11 @@ Development loop using Plane.so as the task board. **The task you must work on i
 
 You never call state-transition commands yourself — signal the outcome via the promise markers in step 9 (`TASK_DONE` → Review, `TASK_BLOCKED` → Todo) and the loop performs the actual transition. Do **not** call `set-in-progress`, `set-review`, `set-todo`, `set-done`, or `set-cancelled`.
 
-- **Re-queue on test failure:** before each iteration the loop moves any **Review** task whose PR's `Run tests in container` check(s) **failed** back to **Todo** (only checks configured via `PR_CI_CHECK_PATTERNS` count — other checks are ignored). A re-picked task continues on its existing branch/PR — see _Iteration detection_.
-- **New sub-tasks** you create default to **Backlog** (staging); pass `todo` as `create-task`'s 4th arg instead if the task is ready to be picked up immediately rather than needing manual triage.
+- **Re-queue on test failure:** before each iteration the loop moves any **Review** task whose PR's `Run tests in container` check(s) **failed** back to **Todo** (only checks configured via `PR_CI_CHECK_PATTERNS` count — other checks are ignored). A re-picked task continues on its existing branch/PR — see _Iteration detection_. A task with no PR (see step 1 — a task requiring no repository changes skips branch/PR entirely) is never affected by this rule; that is expected, not a sign the loop missed it.
+- **New sub-tasks** you create default to **Backlog** (staging); pass `todo` as `create-task`'s 4th arg instead if the task is ready to be picked up immediately rather than needing manual triage. A new task also defaults to **this project's own label** — if this Plane project's board is shared with a sibling project split by label (e.g. the task is explicitly for that sibling, not this one), pass that sibling's label as `create-task`'s 5th arg instead of leaving it on this project's label, or the sibling's loop will never see it. Naming conventions for which labels route to an agent loop vary by Plane board — never assume a format from another project (e.g. do not assume a `ralph-<name>`-style prefix). A label nobody's loop is configured to watch will never be picked up by anyone. **Always run `docs/plane.sh list-labels` first and copy the sibling's exact name from there — never guess it, even if a name seems obvious.** **Always pass this task's own `<id>` as `create-task`'s 6th arg** so a link to the new task is automatically added to this task's description — do this for every sub-task you create, not just blocking ones (step 3.2.2).
 - **Blocking one task on another:** if a task cannot start until another one finishes, put `Blocked by: #<sequence_id>` in its description — `next-task` skips it until the blocker reaches Done/Cancelled. If it is safe to unblock as soon as the blocker's PR is up for review (e.g. a shared interface is already stable and will not change before merge), write `Blocked by: #<sequence_id> (review)` instead — it then unblocks once the blocker reaches its Review state. Default to the plain (Done-gated) form; only use `(review)` when you are confident merge-time changes to the blocker cannot affect the blocked task.
 - **This task blocked on another:** if partway through you discover this task itself cannot proceed until another task finishes (see step 3.2.2), add `Blocked by: #<sequence_id>` to its own description using the same convention, then end the iteration with `<promise>TASK_BLOCKED</promise>` instead of `<promise>TASK_DONE</promise>`. The loop moves it back to **Todo** instead of Review, so `next-task` automatically skips it until the blocker resolves rather than it sitting in Review waiting on a human.
+- **Per-task model override:** a task's description can contain `Model: <name>` (e.g. `Model: opus`, `Model: sonnet`, `Model: haiku`, `Model: fable`, or a full model id like `claude-sonnet-5`) to run just that task on a different model than the loop's configured default. The loop reads this from the description before starting the iteration, so it has no effect if added mid-iteration — it only takes effect the next time the task starts (including on a re-pick after `TASK_BLOCKED`). Use this when creating a sub-task that is simple/cheap enough for a smaller model (e.g. `Model: haiku` on a small, well-specified follow-up).
 
 ## Plane API Helper
 
@@ -31,12 +32,14 @@ docs/plane.sh add-comment <id> "<html>"           # Post an HTML comment on the 
 docs/plane.sh get-comments <id>                    # List all comments [{id,body,created_at}]
 docs/plane.sh get-issue <id>                       # Full issue JSON
 docs/plane.sh get-task <ref>                       # Look up an issue by human-readable ref (e.g. TM-808) instead of its internal id
+docs/plane.sh list-labels                          # List this project's labels [{id,name}] — use to find a sibling project's exact label name for create-task; naming conventions vary per board, so always check here rather than guessing
 docs/plane.sh update-description <id>              # Replace description_html (reads HTML from stdin)
 docs/plane.sh append-description <id>             # Append HTML to END of description (reads from stdin)
 docs/plane.sh prepend-description <id>            # Prepend HTML to START of description (reads from stdin)
 docs/plane.sh set-branch <id> <branch>            # Append branch tag to description AND post a comment
 docs/plane.sh set-pr <id> <pr_url>                # Append PR link to description AND post a comment
-docs/plane.sh create-task <name> [desc] [priority] [backlog|todo]   # Create new task (default: backlog); put "Blocked by: #<seq>" or "Blocked by: #<seq> (review)" in desc to gate it on another task
+docs/plane.sh create-task <name> [desc] [priority] [backlog|todo] [label] [link_from_id]   # Create new task (priority: urgent|high|medium|low|none, default none — any other value is rejected loudly; default state: backlog, this project's own label — pass [label] to target a sibling project's label instead); with [link_from_id], also appends a link to the new task onto that task's description — pass <id> to link it from the task you are already working; put "Blocked by: #<seq>" or "Blocked by: #<seq> (review)" in desc to gate it on another task
+docs/plane.sh task-url <id>                        # Print an issue's web-app URL, e.g. to link an existing task (not just one you just created) from a comment
 docs/plane.sh upload-asset <file> <id> [project_id]       # Upload an image/file, attached to the task; prints {asset_id, embed_html}
 docs/plane.sh download-asset <asset_id> <out_path> <id> [project_id] # Download an asset attached to the task, to view it
 docs/plane.sh list-images <id>                    # JSON array of asset ids embedded in the task's description + comments
@@ -131,6 +134,8 @@ docs/plane.sh add-comment <id> "<p>Answer: …</p>"
 
 ### 1. Create a git branch
 
+**If the task requires no repository changes** (e.g. Plane-pages-only docs work, a test/verification task, or investigation that concludes nothing needs to change in this repo): skip steps 1–6 entirely — no branch, no test/quality-gate run, no commit, no PR — post a comment summarizing what was found/done instead, then go straight to step 7 (post-task analysis — still mandatory, never skipped) and step 9 (signal completion). This task will never be re-queued by *Re-queue on test failure* above, since it has no PR/CI checks to key off — that is expected, not a loop failure.
+
 If `description_html` mentions a specific branch (e.g. "implement in branch X" or "branch: X"), use that name. Otherwise generate one.
 
 Branch name format: `feature/{sequence_id}_{name_slug}`
@@ -197,11 +202,12 @@ docs/plane.sh add-comment <id> "<p>Technical blockers:</p><ul><li>…</li></ul>"
 3.2.2. **If part of this task's own work needs to be split off into a new task that must finish before you can continue** (e.g. investigation reveals a chunk is out of scope for this task, or has to land first as its own PR) — create that new task and make it a blocker on this one, rather than filing it as an independent follow-up. This is different from the ordinary **New sub-tasks** case (*Task states* above): most tasks you create during implementation are unrelated future work, and this task keeps going without waiting on them — only use this flow when this task genuinely cannot proceed until the new one is done. (The same flow also covers discovering a dependency on an already-existing task, not just one you create here.) Either way this needs no human answer and resolves itself automatically once the blocker is done, so do not use the "post and stop" `TASK_DONE` pattern. Instead:
 
 ```bash
-NEW=$(docs/plane.sh create-task "<name>" "<desc>" <priority> todo)
+NEW=$(docs/plane.sh create-task "<name>" "<desc>" <priority> todo "" <id>)
 NEW_SEQ=$(echo "$NEW" | jq -r '.sequence_id')
 docs/plane.sh add-comment <id> "<p>Blocked on #${NEW_SEQ} — <reason>.</p>"
 printf '<p>Blocked by: #%s</p>' "$NEW_SEQ" | docs/plane.sh append-description <id>
 ```
+`create-task`'s 6th arg (`<id>`, the task you are already working) auto-appends a clickable link to the new task onto this task's description — the empty `""` 5th arg keeps the default label; pass an explicit sibling label there instead if the new task is for a different project (see *Task states*).
 ```
 <promise>TASK_BLOCKED</promise>
 ```
@@ -227,12 +233,18 @@ docs/elastic.sh indices
 
 ### 4. Run tests and quality gates
 
-**4.1. Run tests for every Django app with changed files.** Identify changed apps with `git diff --name-only HEAD`, then for each app run `make run "python manage.py test <app>"`. All tests must pass.
+**4.1. Run the test suite.** This repo tests with `pytest` (`apps/api/pytest.ini`). There is no Makefile — run everything (tests and lint) inside Docker Compose via `docker-compose-local.yml`; check that file for the correct service name, e.g.:
 
-**4.2. Run code quality checks:**
 ```bash
-make run "mypy ."
-make run "bandit -q -r . -c pyproject.toml -ll -ii"
+docker compose -f docker-compose-local.yml run --rm <service> pytest
+```
+
+All tests must pass.
+
+**4.2. Run code quality checks:** This repo lints with `ruff check` only — no mypy, no bandit. Run it the same way, inside the same compose file:
+
+```bash
+docker compose -f docker-compose-local.yml run --rm <service> ruff check
 ```
 
 Fix all reported issues. **If a test or tool cannot run at all** (Docker/infra/connection failure rather than a code defect), post a comment describing it (step "Communication rules") and stop.
@@ -273,11 +285,12 @@ docs/plane.sh set-pr <id> "$PR_URL"
 
 ### 7. Post-task analysis (mandatory — run every iteration, never skip)
 
-Before signalling done, you must reflect on this iteration against all three of the following:
+Before signalling done, you must reflect on this iteration against all four of the following:
 
 - **`CLAUDE.md`** — was a rule, convention, or constraint missing, wrong, or out of date?
 - **The skills** (if the repo has any, e.g. `.claude/skills/`) — was a recurring/procedural task missing a skill, or did an existing skill mislead you?
 - **The ralph loop itself** — this `PLANE.md` prompt, and the `plane.sh`/`github.sh`/other helper scripts alongside it — was a step ambiguous, a helper command missing, or something in the loop unnecessary or out of order?
+- **Command discoverability** — for every shell command you ran this iteration, ralph-related (`plane.sh`, `github.sh`, other helper scripts) or project-related (a build/test/lint/deploy script, etc.): could you tell how to invoke it correctly from its documented usage/help text alone, or did you have to open and read the `.sh` file's source to get the invocation right? Needing to read the source to use a command correctly is itself a finding — flag it (missing `--help`/usage comment, undocumented flag, `CLAUDE.md` not mentioning the script at all).
 
 The reflection itself is never skipped. Only post a comment if it turned up something concrete to suggest — do not post a comment that just says nothing was found:
 
@@ -287,11 +300,7 @@ docs/plane.sh add-comment <id> "<p>CLAUDE.md / skills / ralph loop suggestions:<
 
 ### 8. Cleanup
 
-Stop only this project's containers:
-
-```bash
-docker compose -f docker-compose.ralph.yml ps -q | xargs -r docker stop
-```
+No project-specific cleanup required.
 
 ### 9. Signal completion
 
