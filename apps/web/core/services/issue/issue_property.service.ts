@@ -1,0 +1,70 @@
+/**
+ * Copyright (c) 2023-present Plane Software, Inc. and contributors
+ * SPDX-License-Identifier: AGPL-3.0-only
+ * See the LICENSE file for details.
+ */
+
+import { API_BASE_URL } from "@plane/constants";
+import type { TIssueProperty, TIssuePropertyOption, TIssuePropertyValues } from "@plane/types";
+// services
+import { APIService } from "@/services/api.service";
+
+export class IssuePropertyService extends APIService {
+  constructor() {
+    super(API_BASE_URL);
+  }
+
+  /** The properties defined on one work item type. */
+  async getIssueTypeProperties(workspaceSlug: string, issueTypeId: string): Promise<TIssueProperty[]> {
+    return this.get(`/api/workspaces/${workspaceSlug}/issue-types/${issueTypeId}/issue-properties/`)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  /** The choices of one `OPTION` property. */
+  async getIssuePropertyOptions(workspaceSlug: string, propertyId: string): Promise<TIssuePropertyOption[]> {
+    return this.get(`/api/workspaces/${workspaceSlug}/issue-properties/${propertyId}/options/`)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async getIssuePropertyValues(
+    workspaceSlug: string,
+    projectId: string,
+    issueId: string
+  ): Promise<TIssuePropertyValues> {
+    return this.get(`/api/workspaces/${workspaceSlug}/projects/${projectId}/issues/${issueId}/issue-property-values/`)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  /**
+   * Replaces the values of the submitted properties and returns the full map back.
+   * Properties that are not in `propertyValues` are left alone, so a single edit in
+   * the sidebar does not wipe the rest of the form. A rejected value comes back as a
+   * `400` shaped `{ "<property_id>": "<message>" }`.
+   */
+  async updateIssuePropertyValues(
+    workspaceSlug: string,
+    projectId: string,
+    issueId: string,
+    propertyValues: TIssuePropertyValues
+  ): Promise<TIssuePropertyValues> {
+    return this.post(
+      `/api/workspaces/${workspaceSlug}/projects/${projectId}/issues/${issueId}/issue-property-values/`,
+      {
+        property_values: propertyValues,
+      }
+    )
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+}

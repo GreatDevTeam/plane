@@ -88,6 +88,12 @@ export const WORKSPACE_STATES = (workspaceSlug: string) => `WORKSPACE_STATES_${w
 
 export const WORKSPACE_ISSUE_TYPES = (workspaceSlug: string) => `WORKSPACE_ISSUE_TYPES_${workspaceSlug.toUpperCase()}`;
 
+export const WORK_ITEM_TYPE_PROPERTIES = (workspaceSlug: string, issueTypeId: string) =>
+  `WORK_ITEM_TYPE_PROPERTIES_${workspaceSlug.toUpperCase()}_${issueTypeId.toUpperCase()}`;
+
+export const WORK_ITEM_PROPERTY_VALUES = (workspaceSlug: string, projectId: string, workItemId: string) =>
+  `WORK_ITEM_PROPERTY_VALUES_${workspaceSlug.toUpperCase()}_${projectId.toUpperCase()}_${workItemId.toUpperCase()}`;
+
 export const WORKSPACE_SIDEBAR_PREFERENCES = (workspaceSlug: string) =>
   `WORKSPACE_SIDEBAR_PREFERENCES_${workspaceSlug.toUpperCase()}`;
 

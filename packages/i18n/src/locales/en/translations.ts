@@ -2739,6 +2739,16 @@ export default {
       help: "Help",
     },
   },
+  // Custom properties on a work item
+  work_item_properties: {
+    required: "Required",
+    empty: "Empty",
+    remove_value: "Remove value",
+    select_option: "Select an option",
+    select_member: "Select a member",
+    select_work_item: "Select a work item",
+    unsupported: "Not editable here yet",
+  },
   // Navigation customization
   customize_navigation: "Customize navigation",
   personal: "Personal",
