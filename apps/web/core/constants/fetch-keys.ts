@@ -91,6 +91,9 @@ export const WORKSPACE_ISSUE_TYPES = (workspaceSlug: string) => `WORKSPACE_ISSUE
 export const WORK_ITEM_TYPE_PROPERTIES = (workspaceSlug: string, issueTypeId: string) =>
   `WORK_ITEM_TYPE_PROPERTIES_${workspaceSlug.toUpperCase()}_${issueTypeId.toUpperCase()}`;
 
+export const PROJECT_WORK_ITEM_PROPERTIES = (workspaceSlug: string, projectId: string) =>
+  `PROJECT_WORK_ITEM_PROPERTIES_${workspaceSlug.toUpperCase()}_${projectId.toUpperCase()}`;
+
 export const WORK_ITEM_PROPERTY_VALUES = (workspaceSlug: string, projectId: string, workItemId: string) =>
   `WORK_ITEM_PROPERTY_VALUES_${workspaceSlug.toUpperCase()}_${projectId.toUpperCase()}_${workItemId.toUpperCase()}`;
 

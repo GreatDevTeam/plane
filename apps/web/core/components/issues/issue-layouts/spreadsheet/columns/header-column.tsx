@@ -13,7 +13,10 @@ import { useTranslation } from "@plane/i18n";
 // types
 import type { IIssueDisplayFilterOptions, IIssueDisplayProperties, TIssueOrderByOptions } from "@plane/types";
 import { CustomMenu, Row } from "@plane/ui";
+import { getWorkItemPropertyIdFromDisplayKey } from "@plane/utils";
 import useLocalStorage from "@/hooks/use-local-storage";
+// plane web components
+import { WorkItemPropertyHeaderColumn } from "@/plane-web/components/issues/issue-layouts/property-values";
 import { SpreadSheetPropertyIcon } from "../../utils";
 
 interface Props {
@@ -37,6 +40,8 @@ export function HeaderColumn(props: Props) {
     ""
   );
   const propertyDetails = SPREADSHEET_PROPERTY_DETAILS[property];
+  // a user defined property has no sort options of its own to render
+  const workItemPropertyId = getWorkItemPropertyIdFromDisplayKey(property);
 
   const handleOrderBy = (order: TIssueOrderByOptions, itemKey: string) => {
     handleDisplayFilterUpdate({ order_by: order });
@@ -44,6 +49,8 @@ export function HeaderColumn(props: Props) {
     setSelectedMenuItem(`${order}_${itemKey}`);
     setActiveSortingProperty(order === "-created_at" ? "" : itemKey);
   };
+
+  if (workItemPropertyId) return <WorkItemPropertyHeaderColumn propertyId={workItemPropertyId} />;
 
   if (!propertyDetails) return null;
 

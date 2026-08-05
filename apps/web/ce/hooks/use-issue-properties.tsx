@@ -9,6 +9,7 @@ import type { TIssueServiceType } from "@plane/types";
 // constants
 import {
   DRAFT_WORK_ITEM_PROPERTY_VALUES,
+  PROJECT_WORK_ITEM_PROPERTIES,
   WORK_ITEM_PROPERTY_VALUES,
   WORK_ITEM_TYPE_PROPERTIES,
 } from "@/constants/fetch-keys";
@@ -43,6 +44,24 @@ export const useWorkItemPropertiesById = (
     workspaceSlug && projectId && workItemId
       ? () => fetchWorkItemPropertyValues(workspaceSlug, projectId, workItemId)
       : null,
+    { revalidateIfStale: false, revalidateOnFocus: false }
+  );
+};
+
+/**
+ * Every property defined in a project, which is what a `property_<uuid>` display
+ * toggle needs: the key names a property without saying which work item type it
+ * belongs to, so the whole project is loaded rather than a single type.
+ */
+export const useProjectWorkItemProperties = (
+  workspaceSlug: string | null | undefined,
+  projectId: string | null | undefined
+) => {
+  const { fetchProjectProperties } = useIssueProperties();
+
+  useSWR(
+    workspaceSlug && projectId ? PROJECT_WORK_ITEM_PROPERTIES(workspaceSlug, projectId) : null,
+    workspaceSlug && projectId ? () => fetchProjectProperties(workspaceSlug, projectId) : null,
     { revalidateIfStale: false, revalidateOnFocus: false }
   );
 };

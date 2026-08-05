@@ -5,7 +5,12 @@
  */
 
 import { API_BASE_URL } from "@plane/constants";
-import type { TIssueProperty, TIssuePropertyOption, TIssuePropertyValues } from "@plane/types";
+import type {
+  TBulkIssuePropertyValues,
+  TIssueProperty,
+  TIssuePropertyOption,
+  TIssuePropertyValues,
+} from "@plane/types";
 // services
 import { APIService } from "@/services/api.service";
 
@@ -38,6 +43,25 @@ export class IssuePropertyService extends APIService {
     issueId: string
   ): Promise<TIssuePropertyValues> {
     return this.get(`/api/workspaces/${workspaceSlug}/projects/${projectId}/issues/${issueId}/issue-property-values/`)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  /**
+   * The values of a page of work items in one request. The board and spreadsheet
+   * payloads have to stay cheap, so the values are fetched separately rather than
+   * joined into the work item query; the endpoint is capped at 500 ids.
+   */
+  async getBulkIssuePropertyValues(
+    workspaceSlug: string,
+    projectId: string,
+    issueIds: string[]
+  ): Promise<TBulkIssuePropertyValues> {
+    return this.get(`/api/workspaces/${workspaceSlug}/projects/${projectId}/issue-property-values/`, {
+      params: { issue_ids: issueIds.join(",") },
+    })
       .then((response) => response?.data)
       .catch((error) => {
         throw error?.response?.data;

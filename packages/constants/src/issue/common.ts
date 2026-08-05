@@ -33,6 +33,7 @@ export enum EIssueGroupByToServerOptions {
   "cycle" = "cycle_id",
   "module" = "issue_module__module_id",
   "target_date" = "target_date",
+  // oxlint-disable-next-line no-duplicate-enum-values -- team_project below intentionally shares it
   "project" = "project_id",
   "created_by" = "created_by",
   // eslint-disable-next-line @typescript-eslint/no-duplicate-enum-values
@@ -139,6 +140,15 @@ export const ISSUE_ORDER_BY_OPTIONS: {
   { key: "-priority", titleTranslationKey: "common.priority" },
 ];
 
+/**
+ * What a user defined work item property's display property key starts with. The key
+ * itself is `property_<uuid>`, so unlike the built-in keys below it cannot be listed
+ * ahead of time — a layout picks its custom keys out of the display properties it was
+ * saved with.
+ */
+export const WORK_ITEM_PROPERTY_DISPLAY_KEY_PREFIX = "property_";
+
+/** The built-in display properties. Custom ones are keyed by `WORK_ITEM_PROPERTY_DISPLAY_KEY_PREFIX`. */
 export const ISSUE_DISPLAY_PROPERTIES_KEYS: (keyof IIssueDisplayProperties)[] = [
   "assignee",
   "start_date",

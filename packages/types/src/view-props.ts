@@ -6,6 +6,7 @@
 
 import type { IProjectMemberNavigationPreferences } from "./project";
 import type { TIssue } from "./issues/issue";
+import type { TIssuePropertyDisplayKey } from "./issues/issue-property";
 import type { LOGICAL_OPERATOR, TSupportedOperators } from "./rich-filters";
 import type { CompleteOrEmpty } from "./utils";
 
@@ -175,6 +176,12 @@ export interface IIssueDisplayProperties {
   modules?: boolean;
   cycle?: boolean;
   issue_type?: boolean;
+  /**
+   * One entry per user defined work item property, keyed `property_<uuid>`. Unlike the
+   * built-in keys these cannot be enumerated ahead of time, so they are typed as a
+   * pattern — see `TIssuePropertyDisplayKey`.
+   */
+  [key: TIssuePropertyDisplayKey]: boolean | undefined;
 }
 
 export type TIssueKanbanFilters = {

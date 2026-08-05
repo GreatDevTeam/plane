@@ -17,6 +17,7 @@ import { MultipleSelectGroup } from "@/components/core/multiple-select";
 import { useProject } from "@/hooks/store/use-project";
 // plane web components
 import { IssueBulkOperationsRoot } from "@/plane-web/components/issues/bulk-operations";
+import { useAdditionalSpreadsheetColumns } from "@/plane-web/components/issues/issue-layouts/utils";
 // plane web hooks
 import { useBulkOperationStatus } from "@/plane-web/hooks/use-bulk-operation-status";
 // local imports
@@ -66,16 +67,19 @@ export const SpreadsheetView = observer(function SpreadsheetView(props: Props) {
   const { currentProjectDetails } = useProject();
   // plane web hooks
   const isBulkOperationsEnabled = useBulkOperationStatus();
+  const additionalColumnsList = useAdditionalSpreadsheetColumns(displayProperties, isWorkspaceLevel);
 
   const isEstimateEnabled: boolean = currentProjectDetails?.estimate !== null;
 
-  const spreadsheetColumnsList = isWorkspaceLevel
+  const builtInColumnsList = isWorkspaceLevel
     ? SPREADSHEET_PROPERTY_LIST
     : SPREADSHEET_PROPERTY_LIST.filter((property) => {
         if (property === "cycle" && !currentProjectDetails?.cycle_view) return false;
         if (property === "modules" && !currentProjectDetails?.module_view) return false;
         return true;
       });
+  // the columns of the user defined properties, appended after the built-in ones
+  const spreadsheetColumnsList = [...builtInColumnsList, ...additionalColumnsList];
 
   if (!issueIds || issueIds.length === 0) return <></>;
   return (

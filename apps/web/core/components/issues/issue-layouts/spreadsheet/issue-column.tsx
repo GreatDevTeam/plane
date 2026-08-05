@@ -9,7 +9,7 @@ import { observer } from "mobx-react";
 // types
 import type { IIssueDisplayProperties, TIssue } from "@plane/types";
 // components
-import { SPREADSHEET_COLUMNS } from "@/plane-web/components/issues/issue-layouts/utils";
+import { getSpreadsheetColumn } from "@/plane-web/components/issues/issue-layouts/utils";
 import { shouldRenderColumn } from "@/helpers/issue-filter.helper";
 import { WithDisplayPropertiesHOC } from "../properties/with-display-properties-HOC";
 
@@ -29,7 +29,7 @@ export const IssueColumn = observer(function IssueColumn(props: Props) {
 
   const shouldRenderProperty = shouldRenderColumn(property);
 
-  const Column = SPREADSHEET_COLUMNS[property];
+  const Column = getSpreadsheetColumn(property);
 
   if (!Column) return null;
 

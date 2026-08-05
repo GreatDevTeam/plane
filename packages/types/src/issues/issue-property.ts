@@ -84,3 +84,15 @@ export type TIssuePropertyValue = string | number | boolean;
  * item's type is present, so an empty list means "not set" rather than "not loaded".
  */
 export type TIssuePropertyValues = Record<string, TIssuePropertyValue[]>;
+
+/**
+ * The values of a page of work items, keyed by work item id and then by property id.
+ * A work item only carries the properties of its own type.
+ */
+export type TBulkIssuePropertyValues = Record<string, TIssuePropertyValues>;
+
+/**
+ * How a custom property is keyed among the display properties of a layout, so that its
+ * visibility on the card and its spreadsheet column can be toggled like a built-in one.
+ */
+export type TIssuePropertyDisplayKey = `property_${string}`;

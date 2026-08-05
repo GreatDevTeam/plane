@@ -12,7 +12,7 @@ import type { TIssueProperty, TIssuePropertyOption } from "@plane/types";
 // services
 import { IssuePropertyService } from "@/services/issue";
 // store
-import type { CoreRootStore } from "@/store/root.store";
+import type { RootStore } from "@/plane-web/store/root.store";
 
 /** Returned for a type whose properties have not been fetched — a stable identity, so
  * that reading it in a component does not look like a change on every render. */
@@ -33,6 +33,11 @@ export interface IIssuePropertiesStore {
   getPropertyOptionById: (optionId: string | null | undefined) => TIssuePropertyOption | undefined;
   // fetch actions
   fetchIssueTypeProperties: (workspaceSlug: string, issueTypeId: string) => Promise<TIssueProperty[]>;
+  /** Fetches a work item type's properties once, however many callers ask for them. */
+  ensureIssueTypeProperties: (workspaceSlug: string | null | undefined, issueTypeId: string | null | undefined) => void;
+  /** The properties of every work item type the project has enabled. */
+  fetchProjectProperties: (workspaceSlug: string, projectId: string) => Promise<TIssueProperty[]>;
+  getProjectProperties: (projectId: string | null | undefined) => TIssueProperty[];
 }
 
 export class IssuePropertiesStore implements IIssuePropertiesStore {
@@ -42,12 +47,14 @@ export class IssuePropertiesStore implements IIssuePropertiesStore {
   propertyIdsByIssueTypeId: Record<string, string[]> = {};
   optionIdsByPropertyId: Record<string, string[]> = {};
   fetchedIssueTypeMap: Record<string, boolean> = {};
-  // root store
-  rootStore: CoreRootStore;
+  // root store — the work item types the properties hang off live on the plane web store
+  rootStore: RootStore;
   // services
   issuePropertyService: IssuePropertyService;
+  // the types whose properties are already being read, so a re-render does not read them twice
+  private inFlightIssueTypeIds: Set<string> = new Set();
 
-  constructor(_rootStore: CoreRootStore) {
+  constructor(_rootStore: RootStore) {
     makeObservable(this, {
       propertyMap: observable,
       optionMap: observable,
@@ -56,6 +63,7 @@ export class IssuePropertiesStore implements IIssuePropertiesStore {
       fetchedIssueTypeMap: observable,
       // actions
       fetchIssueTypeProperties: action,
+      fetchProjectProperties: action,
     });
 
     this.rootStore = _rootStore;
@@ -94,6 +102,49 @@ export class IssuePropertiesStore implements IIssuePropertiesStore {
     if (!optionId) return undefined;
     return this.optionMap[optionId];
   });
+
+  /**
+   * The active properties of every work item type the project has enabled, in the
+   * order their columns and chips are rendered in.
+   */
+  getProjectProperties = computedFn((projectId: string | null | undefined) => {
+    if (!projectId) return [];
+    return this.rootStore.issueTypes
+      .getProjectIssueTypes(projectId)
+      .flatMap((issueType) => this.getActiveIssueTypeProperties(issueType.id));
+  });
+
+  /**
+   * Called from render paths — a card only knows the type of the work item it renders,
+   * and every card of that type asks for the same properties.
+   */
+  ensureIssueTypeProperties = (workspaceSlug: string | null | undefined, issueTypeId: string | null | undefined) => {
+    if (!workspaceSlug || !issueTypeId) return;
+    if (this.fetchedIssueTypeMap[issueTypeId] || this.inFlightIssueTypeIds.has(issueTypeId)) return;
+
+    this.inFlightIssueTypeIds.add(issueTypeId);
+    this.fetchIssueTypeProperties(workspaceSlug, issueTypeId)
+      // a failed read is not remembered, so the next render tries again
+      .catch(() => {})
+      .finally(() => this.inFlightIssueTypeIds.delete(issueTypeId));
+  };
+
+  /**
+   * What the spreadsheet and the display property toggles need: a saved `property_<uuid>`
+   * toggle names a property without saying which type it belongs to, so the whole project
+   * is loaded rather than a single type.
+   */
+  fetchProjectProperties = async (workspaceSlug: string, projectId: string) => {
+    const issueTypes = await this.rootStore.issueTypes.fetchProjectIssueTypes(workspaceSlug, projectId);
+    const properties = await Promise.all(
+      issueTypes.map((issueType) =>
+        this.fetchedIssueTypeMap[issueType.id]
+          ? this.getIssueTypeProperties(issueType.id)
+          : this.fetchIssueTypeProperties(workspaceSlug, issueType.id)
+      )
+    );
+    return properties.flat();
+  };
 
   /**
    * Fetches the properties of a work item type together with the options of every

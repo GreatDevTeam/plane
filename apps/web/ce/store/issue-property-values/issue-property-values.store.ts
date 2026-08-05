@@ -4,7 +4,7 @@
  * See the LICENSE file for details.
  */
 
-import { set, unset } from "lodash-es";
+import { chunk, set, unset } from "lodash-es";
 import { action, makeObservable, observable, runInAction } from "mobx";
 import { computedFn } from "mobx-utils";
 // plane imports
@@ -17,6 +17,12 @@ import type { CoreRootStore } from "@/store/root.store";
 /** Returned for a property with no value — a stable identity, so that reading it in a
  * component does not look like a change on every render. */
 const EMPTY_VALUES: TIssuePropertyValue[] = [];
+
+/** What the bulk endpoint accepts in one request. */
+const MAX_BULK_WORK_ITEM_IDS = 500;
+
+/** Neither a workspace slug nor a uuid can hold it. */
+const BATCH_KEY_SEPARATOR = "::";
 
 export interface IIssuePropertyValuesStore {
   // observables
@@ -35,6 +41,12 @@ export interface IIssuePropertyValuesStore {
     workItemId: string
   ) => Promise<TIssuePropertyValues>;
   fetchDraftPropertyValues: (workspaceSlug: string, draftId: string) => Promise<TIssuePropertyValues>;
+  /** Queues one work item for the next bulk read — what the card and the spreadsheet call. */
+  ensureWorkItemPropertyValues: (
+    workspaceSlug: string | null | undefined,
+    projectId: string | null | undefined,
+    workItemId: string | null | undefined
+  ) => void;
   /** Writes every submitted property at once, as the create/update modal does on save. */
   replacePropertyValues: (
     workspaceSlug: string,
@@ -63,6 +75,11 @@ export class IssuePropertyValuesStore implements IIssuePropertyValuesStore {
   rootStore: CoreRootStore;
   // services
   issuePropertyService: IssuePropertyService;
+  // the work items waiting for the next bulk read, grouped by workspace and project
+  private pendingIds: Record<string, Set<string>> = {};
+  // every work item that is queued or in flight, so a re-render does not queue it twice
+  private queuedIds: Set<string> = new Set();
+  private flushHandle: ReturnType<typeof setTimeout> | undefined = undefined;
 
   constructor(_rootStore: CoreRootStore) {
     makeObservable(this, {
@@ -108,6 +125,31 @@ export class IssuePropertyValuesStore implements IIssuePropertyValuesStore {
       set(this.fetchedMap, [workItemId], true);
     });
     return values;
+  };
+
+  /**
+   * A card asks for the values of the one work item it renders; the ids collected in
+   * the same tick are read back as a single bulk request per project, so scrolling a
+   * page of work items into view costs one request rather than one per card.
+   */
+  ensureWorkItemPropertyValues = (
+    workspaceSlug: string | null | undefined,
+    projectId: string | null | undefined,
+    workItemId: string | null | undefined
+  ) => {
+    if (!workspaceSlug || !projectId || !workItemId) return;
+    if (this.fetchedMap[workItemId] || this.queuedIds.has(workItemId)) return;
+
+    const batchKey = `${workspaceSlug}${BATCH_KEY_SEPARATOR}${projectId}`;
+    if (!this.pendingIds[batchKey]) this.pendingIds[batchKey] = new Set();
+    this.pendingIds[batchKey].add(workItemId);
+    this.queuedIds.add(workItemId);
+
+    if (this.flushHandle !== undefined) return;
+    this.flushHandle = setTimeout(() => {
+      this.flushHandle = undefined;
+      this.flushPendingValues();
+    }, 0);
   };
 
   fetchDraftPropertyValues = async (workspaceSlug: string, draftId: string) => {
@@ -186,6 +228,40 @@ export class IssuePropertyValuesStore implements IIssuePropertyValuesStore {
     const missingIds = workItemIds.filter((workItemId) => !this.rootStore.issue.issues.getIssueById(workItemId));
     if (missingIds.length === 0) return;
     await this.rootStore.issue.issues.getIssues(workspaceSlug, projectId, missingIds);
+  };
+
+  /** Reads every queued work item back, one request per project and per 500 ids. */
+  private flushPendingValues = async () => {
+    const pending = this.pendingIds;
+    this.pendingIds = {};
+
+    await Promise.all(
+      Object.entries(pending).flatMap(([batchKey, ids]) => {
+        const [workspaceSlug, projectId] = batchKey.split(BATCH_KEY_SEPARATOR);
+        return chunk(Array.from(ids), MAX_BULK_WORK_ITEM_IDS).map((batch) =>
+          this.readPropertyValueBatch(workspaceSlug, projectId, batch)
+        );
+      })
+    );
+  };
+
+  private readPropertyValueBatch = async (workspaceSlug: string, projectId: string, workItemIds: string[]) => {
+    try {
+      const values = await this.issuePropertyService.getBulkIssuePropertyValues(workspaceSlug, projectId, workItemIds);
+      runInAction(() => {
+        // a work item the response left out has no values to show, and asking for it
+        // again on the next render would loop
+        workItemIds.forEach((workItemId) => {
+          set(this.valuesMap, [workItemId], values[workItemId] ?? {});
+          set(this.fetchedMap, [workItemId], true);
+        });
+      });
+    } catch {
+      // dropped from the queue rather than remembered as fetched, so the next render
+      // of the same card tries again
+    } finally {
+      workItemIds.forEach((workItemId) => this.queuedIds.delete(workItemId));
+    }
   };
 
   private errorMessage = (error: unknown, propertyId: string) => {
