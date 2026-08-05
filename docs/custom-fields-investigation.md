@@ -142,6 +142,32 @@ a default type seeded per project (backfilling `Issue.type_id` for existing rows
 - Activity: emit `IssuePropertyActivity` from the value endpoints so the detail feed has
   something to render.
 
+#### What phase 1 shipped
+
+All under `/api/` (the app API, not the public `/api/v1/` one), in
+`apps/api/plane/app/urls/issue_property.py`:
+
+| Endpoint                                                                   | Methods                       | Who                              |
+| -------------------------------------------------------------------------- | ----------------------------- | -------------------------------- |
+| `workspaces/<slug>/issue-types/<issue_type_id>/issue-properties/[<pk>/]`   | `GET` `POST` `PATCH` `DELETE` | read: any member, write: admin   |
+| `workspaces/<slug>/issue-properties/<property_id>/options/[<pk>/]`         | `GET` `POST` `PATCH` `DELETE` | read: any member, write: admin   |
+| `workspaces/<slug>/projects/<id>/issues/<issue_id>/issue-property-values/` | `GET` `POST`                  | read: any member, write: ≥member |
+| `workspaces/<slug>/projects/<id>/issue-property-values/?issue_ids=a,b,…`   | `GET`                         | any member                       |
+
+Values are exchanged as `{"<property_id>": [value, …]}` — always a list, even for a
+single-valued property, and always present for every property of the work item's type so the
+client can tell "not set" from "not loaded". The bulk endpoint nests that one level deeper
+(`{"<issue_id>": {"<property_id>": […]}}`), gives each work item only the properties of its
+own type, and is capped at 500 ids.
+
+`POST`ing values replaces only the properties named in the payload (`{"property_values": {…}}`,
+or the body itself), so a partial save from the sidebar does not wipe the rest of the form; an
+empty list clears a property. Values are coerced into the typed column that matches
+`property_type` and validated against `is_required`, `is_multi`, the option/member/work item
+they point at, and the `settings` bounds (`min`, `max`, `max_length`) — a rejection comes back
+as `{"<property_id>": "<message>"}` with a `400`. `property_type` is immutable once set, since
+the stored values live in the column of the original type.
+
 ### 3. Frontend
 
 - New MobX stores (`issue-types`, `issue-properties`, `issue-property-values`) registered on
