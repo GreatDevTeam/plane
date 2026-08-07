@@ -87,6 +87,7 @@ export const BaseKanBanRoot = observer(function BaseKanBanRoot(props: IBaseKanBa
   const deleteAreaRef = useRef<HTMLDivElement | null>(null);
   const scrollableContainerRef = useRef<HTMLDivElement | null>(null);
   const pendingScrollRestoreRef = useRef<number | null>(null);
+  const pendingColumnScrollsRef = useRef<Map<string, number> | null>(null);
 
   const [isDragOverDelete, setIsDragOverDelete] = useState(false);
   // states
@@ -116,6 +117,14 @@ export const BaseKanBanRoot = observer(function BaseKanBanRoot(props: IBaseKanBa
       if (loader !== "mutation" && loader !== "init-loader" && loader !== "pagination") {
         scrollableContainerRef.current.scrollLeft = pendingScrollRestoreRef.current;
         pendingScrollRestoreRef.current = null;
+
+        if (pendingColumnScrollsRef.current) {
+          pendingColumnScrollsRef.current.forEach((scrollTop, id) => {
+            const el = document.getElementById(id);
+            if (el) el.scrollTop = scrollTop;
+          });
+          pendingColumnScrollsRef.current = null;
+        }
       }
     }
   });
@@ -128,6 +137,17 @@ export const BaseKanBanRoot = observer(function BaseKanBanRoot(props: IBaseKanBa
     // runs, and the listener never attaches. Reading directly is always correct because
     // background refreshes only fire while the board is visible (init-loader guard skips them).
     pendingScrollRestoreRef.current = scrollableContainerRef.current?.scrollLeft ?? 0;
+
+    // Save the vertical scroll position of each kanban column so it can be
+    // restored after the background refresh re-renders the board.
+    if (scrollableContainerRef.current) {
+      const scrollMap = new Map<string, number>();
+      scrollableContainerRef.current.querySelectorAll<HTMLElement>("[data-kanban-column]").forEach((el) => {
+        if (el.scrollTop > 0) scrollMap.set(el.id, el.scrollTop);
+      });
+      if (scrollMap.size > 0) pendingColumnScrollsRef.current = scrollMap;
+    }
+
     await refreshIssues();
   }, [refreshIssues]);
 

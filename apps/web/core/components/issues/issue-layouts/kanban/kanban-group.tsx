@@ -279,6 +279,7 @@ export const KanbanGroup = observer(function KanbanGroup(props: IKanbanGroup) {
   return (
     <div
       id={`${groupId}__${sub_group_id}`}
+      data-kanban-column
       className={cn(
         "relative h-full min-h-[120px] transition-all",
         { "rounded-sm bg-layer-1": isDraggingOverColumn },
