@@ -314,11 +314,16 @@ export enum EActivityFilterType {
   STATE = "STATE",
   ASSIGNEE = "ASSIGNEE",
   DEFAULT = "DEFAULT",
+  ISSUE_ADDITIONAL_PROPERTIES_ACTIVITY = "ISSUE_ADDITIONAL_PROPERTIES_ACTIVITY",
 }
 
 export type TActivityFilters = EActivityFilterType;
 
-export type TActivityFilterOptionsKey = Exclude<TActivityFilters, EActivityFilterType.DEFAULT>;
+/** A custom field change has no chip of its own — it rides along with the updates one. */
+export type TActivityFilterOptionsKey = Exclude<
+  TActivityFilters,
+  EActivityFilterType.DEFAULT | EActivityFilterType.ISSUE_ADDITIONAL_PROPERTIES_ACTIVITY
+>;
 
 export const ACTIVITY_FILTER_TYPE_OPTIONS: Record<TActivityFilterOptionsKey, { labelTranslationKey: string }> = {
   [EActivityFilterType.ACTIVITY]: {
@@ -353,9 +358,13 @@ export const filterActivityOnSelectedFilters = (
   activity: TIssueActivityComment[],
   filters: TActivityFilters[]
 ): TIssueActivityComment[] =>
-  activity.filter((activity) => {
-    if (activity.activity_type === EActivityFilterType.DEFAULT) return true;
-    return filters.includes(activity.activity_type as TActivityFilters);
+  activity.filter((activityItem) => {
+    if (activityItem.activity_type === EActivityFilterType.DEFAULT) return true;
+    // a custom field change is an update like any other, so it shows with them
+    // rather than adding a filter of its own
+    if (activityItem.activity_type === EActivityFilterType.ISSUE_ADDITIONAL_PROPERTIES_ACTIVITY)
+      return filters.includes(EActivityFilterType.ACTIVITY);
+    return filters.includes(activityItem.activity_type as TActivityFilters);
   });
 
 export const ENABLE_ISSUE_DEPENDENCIES = false;

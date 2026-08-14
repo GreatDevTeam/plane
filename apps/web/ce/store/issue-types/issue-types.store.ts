@@ -21,6 +21,7 @@ export interface IIssueTypesStore {
   // computed actions
   getIssueTypeById: (issueTypeId: string | null | undefined) => TIssueType | undefined;
   getProjectIssueTypes: (projectId: string | null | undefined) => TIssueType[];
+  getAllProjectIssueTypes: (projectId: string | null | undefined) => TIssueType[];
   getProjectIssueTypeIds: (projectId: string | null | undefined) => string[];
   getProjectDefaultIssueType: (projectId: string | null | undefined) => TIssueType | undefined;
   // fetch actions
@@ -73,6 +74,18 @@ export class IssueTypesStore implements IIssueTypesStore {
       Object.values(this.issueTypeMap).filter(
         (issueType) => issueType.is_active && issueType.project_ids?.includes(projectId)
       ),
+      ["level", "name"]
+    );
+  });
+
+  /**
+   * The same list without the `is_active` filter — the settings screen has to show a
+   * deactivated type in order to let it be turned back on.
+   */
+  getAllProjectIssueTypes = computedFn((projectId: string | null | undefined) => {
+    if (!projectId) return [];
+    return sortBy(
+      Object.values(this.issueTypeMap).filter((issueType) => issueType.project_ids?.includes(projectId)),
       ["level", "name"]
     );
   });

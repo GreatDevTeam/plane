@@ -8,7 +8,12 @@ import { set, sortBy } from "lodash-es";
 import { action, makeObservable, observable, runInAction } from "mobx";
 import { computedFn } from "mobx-utils";
 // plane imports
-import type { TIssueProperty, TIssuePropertyOption } from "@plane/types";
+import type {
+  TIssueProperty,
+  TIssuePropertyOption,
+  TIssuePropertyOptionPayload,
+  TIssuePropertyPayload,
+} from "@plane/types";
 // services
 import { IssuePropertyService } from "@/services/issue";
 // store
@@ -30,6 +35,7 @@ export interface IIssuePropertiesStore {
   getIssueTypeProperties: (issueTypeId: string | null | undefined) => TIssueProperty[];
   getActiveIssueTypeProperties: (issueTypeId: string | null | undefined) => TIssueProperty[];
   getPropertyOptions: (propertyId: string | null | undefined) => TIssuePropertyOption[];
+  getAllPropertyOptions: (propertyId: string | null | undefined) => TIssuePropertyOption[];
   getPropertyOptionById: (optionId: string | null | undefined) => TIssuePropertyOption | undefined;
   // fetch actions
   fetchIssueTypeProperties: (workspaceSlug: string, issueTypeId: string) => Promise<TIssueProperty[]>;
@@ -38,6 +44,31 @@ export interface IIssuePropertiesStore {
   /** The properties of every work item type the project has enabled. */
   fetchProjectProperties: (workspaceSlug: string, projectId: string) => Promise<TIssueProperty[]>;
   getProjectProperties: (projectId: string | null | undefined) => TIssueProperty[];
+  // crud actions — the project settings screen defines the fields
+  createIssueProperty: (
+    workspaceSlug: string,
+    issueTypeId: string,
+    data: TIssuePropertyPayload
+  ) => Promise<TIssueProperty>;
+  updateIssueProperty: (
+    workspaceSlug: string,
+    issueTypeId: string,
+    propertyId: string,
+    data: TIssuePropertyPayload
+  ) => Promise<TIssueProperty>;
+  deleteIssueProperty: (workspaceSlug: string, issueTypeId: string, propertyId: string) => Promise<void>;
+  createPropertyOption: (
+    workspaceSlug: string,
+    propertyId: string,
+    data: TIssuePropertyOptionPayload
+  ) => Promise<TIssuePropertyOption>;
+  updatePropertyOption: (
+    workspaceSlug: string,
+    propertyId: string,
+    optionId: string,
+    data: TIssuePropertyOptionPayload
+  ) => Promise<TIssuePropertyOption>;
+  deletePropertyOption: (workspaceSlug: string, propertyId: string, optionId: string) => Promise<void>;
 }
 
 export class IssuePropertiesStore implements IIssuePropertiesStore {
@@ -64,6 +95,12 @@ export class IssuePropertiesStore implements IIssuePropertiesStore {
       // actions
       fetchIssueTypeProperties: action,
       fetchProjectProperties: action,
+      createIssueProperty: action,
+      updateIssueProperty: action,
+      deleteIssueProperty: action,
+      createPropertyOption: action,
+      updatePropertyOption: action,
+      deletePropertyOption: action,
     });
 
     this.rootStore = _rootStore;
@@ -96,6 +133,13 @@ export class IssuePropertiesStore implements IIssuePropertiesStore {
       optionIds.map((optionId) => this.optionMap[optionId]).filter((option) => option?.is_active),
       ["sort_order", "created_at"]
     );
+  });
+
+  /** The same list including the deactivated options, for the settings screen. */
+  getAllPropertyOptions = computedFn((propertyId: string | null | undefined) => {
+    if (!propertyId) return [];
+    const optionIds = this.optionIdsByPropertyId[propertyId] ?? EMPTY_IDS;
+    return sortBy(optionIds.map((optionId) => this.optionMap[optionId]).filter(Boolean), ["sort_order", "created_at"]);
   });
 
   getPropertyOptionById = computedFn((optionId: string | null | undefined) => {
@@ -180,5 +224,82 @@ export class IssuePropertiesStore implements IIssuePropertiesStore {
     );
 
     return properties;
+  };
+
+  createIssueProperty = async (workspaceSlug: string, issueTypeId: string, data: TIssuePropertyPayload) => {
+    const property = await this.issuePropertyService.createIssueProperty(workspaceSlug, issueTypeId, data);
+    runInAction(() => {
+      set(this.propertyMap, [property.id], property);
+      set(
+        this.propertyIdsByIssueTypeId,
+        [issueTypeId],
+        [...(this.propertyIdsByIssueTypeId[issueTypeId] ?? []), property.id]
+      );
+    });
+    return property;
+  };
+
+  updateIssueProperty = async (
+    workspaceSlug: string,
+    issueTypeId: string,
+    propertyId: string,
+    data: TIssuePropertyPayload
+  ) => {
+    const property = await this.issuePropertyService.updateIssueProperty(workspaceSlug, issueTypeId, propertyId, data);
+    runInAction(() => set(this.propertyMap, [property.id], property));
+    return property;
+  };
+
+  deleteIssueProperty = async (workspaceSlug: string, issueTypeId: string, propertyId: string) => {
+    await this.issuePropertyService.deleteIssueProperty(workspaceSlug, issueTypeId, propertyId);
+    runInAction(() => {
+      delete this.propertyMap[propertyId];
+      set(
+        this.propertyIdsByIssueTypeId,
+        [issueTypeId],
+        (this.propertyIdsByIssueTypeId[issueTypeId] ?? []).filter((id) => id !== propertyId)
+      );
+    });
+  };
+
+  createPropertyOption = async (workspaceSlug: string, propertyId: string, data: TIssuePropertyOptionPayload) => {
+    const option = await this.issuePropertyService.createIssuePropertyOption(workspaceSlug, propertyId, data);
+    runInAction(() => {
+      set(this.optionMap, [option.id], option);
+      set(this.optionIdsByPropertyId, [propertyId], [...(this.optionIdsByPropertyId[propertyId] ?? []), option.id]);
+    });
+    return option;
+  };
+
+  updatePropertyOption = async (
+    workspaceSlug: string,
+    propertyId: string,
+    optionId: string,
+    data: TIssuePropertyOptionPayload
+  ) => {
+    const option = await this.issuePropertyService.updateIssuePropertyOption(workspaceSlug, propertyId, optionId, data);
+    // only one option of a property can be the default one — the endpoint clears the
+    // rest, so the ones held here have to follow
+    runInAction(() => {
+      if (option.is_default) {
+        (this.optionIdsByPropertyId[propertyId] ?? []).forEach((id) => {
+          if (id !== option.id && this.optionMap[id]?.is_default) set(this.optionMap, [id, "is_default"], false);
+        });
+      }
+      set(this.optionMap, [option.id], option);
+    });
+    return option;
+  };
+
+  deletePropertyOption = async (workspaceSlug: string, propertyId: string, optionId: string) => {
+    await this.issuePropertyService.deleteIssuePropertyOption(workspaceSlug, propertyId, optionId);
+    runInAction(() => {
+      delete this.optionMap[optionId];
+      set(
+        this.optionIdsByPropertyId,
+        [propertyId],
+        (this.optionIdsByPropertyId[propertyId] ?? []).filter((id) => id !== optionId)
+      );
+    });
   };
 }

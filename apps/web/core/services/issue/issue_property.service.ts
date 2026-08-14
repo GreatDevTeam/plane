@@ -8,7 +8,10 @@ import { API_BASE_URL } from "@plane/constants";
 import type {
   TBulkIssuePropertyValues,
   TIssueProperty,
+  TIssuePropertyActivity,
   TIssuePropertyOption,
+  TIssuePropertyPayload,
+  TIssuePropertyOptionPayload,
   TIssuePropertyValues,
 } from "@plane/types";
 // services
@@ -31,6 +34,92 @@ export class IssuePropertyService extends APIService {
   /** The choices of one `OPTION` property. */
   async getIssuePropertyOptions(workspaceSlug: string, propertyId: string): Promise<TIssuePropertyOption[]> {
     return this.get(`/api/workspaces/${workspaceSlug}/issue-properties/${propertyId}/options/`)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async createIssueProperty(
+    workspaceSlug: string,
+    issueTypeId: string,
+    data: TIssuePropertyPayload
+  ): Promise<TIssueProperty> {
+    return this.post(`/api/workspaces/${workspaceSlug}/issue-types/${issueTypeId}/issue-properties/`, data)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async updateIssueProperty(
+    workspaceSlug: string,
+    issueTypeId: string,
+    propertyId: string,
+    data: TIssuePropertyPayload
+  ): Promise<TIssueProperty> {
+    return this.patch(
+      `/api/workspaces/${workspaceSlug}/issue-types/${issueTypeId}/issue-properties/${propertyId}/`,
+      data
+    )
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async deleteIssueProperty(workspaceSlug: string, issueTypeId: string, propertyId: string): Promise<void> {
+    return this.delete(`/api/workspaces/${workspaceSlug}/issue-types/${issueTypeId}/issue-properties/${propertyId}/`)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async createIssuePropertyOption(
+    workspaceSlug: string,
+    propertyId: string,
+    data: TIssuePropertyOptionPayload
+  ): Promise<TIssuePropertyOption> {
+    return this.post(`/api/workspaces/${workspaceSlug}/issue-properties/${propertyId}/options/`, data)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async updateIssuePropertyOption(
+    workspaceSlug: string,
+    propertyId: string,
+    optionId: string,
+    data: TIssuePropertyOptionPayload
+  ): Promise<TIssuePropertyOption> {
+    return this.patch(`/api/workspaces/${workspaceSlug}/issue-properties/${propertyId}/options/${optionId}/`, data)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async deleteIssuePropertyOption(workspaceSlug: string, propertyId: string, optionId: string): Promise<void> {
+    return this.delete(`/api/workspaces/${workspaceSlug}/issue-properties/${propertyId}/options/${optionId}/`)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  /** The audit trail of one work item's property changes, for its activity feed. */
+  async getIssuePropertyActivities(
+    workspaceSlug: string,
+    projectId: string,
+    issueId: string,
+    params?: { created_at__gt?: string }
+  ): Promise<TIssuePropertyActivity[]> {
+    return this.get(
+      `/api/workspaces/${workspaceSlug}/projects/${projectId}/issues/${issueId}/issue-property-activities/`,
+      { params }
+    )
       .then((response) => response?.data)
       .catch((error) => {
         throw error?.response?.data;

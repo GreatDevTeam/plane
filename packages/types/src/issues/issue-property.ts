@@ -103,3 +103,52 @@ export type TIssuePropertyDisplayKey = `property_${string}`;
  * expression and rewrites it onto the property's own value column.
  */
 export type TIssuePropertyFilterKey = TIssuePropertyDisplayKey;
+
+/** What a work item's property change reads as in the activity feed. */
+export type TIssuePropertyActivityAction = "created" | "updated" | "deleted";
+
+/**
+ * One entry of the property audit trail. `old_value` / `new_value` carry the text the
+ * values read as when the change was made — an option, a member and a relation by
+ * name, not by id, so a later rename does not rewrite what the feed says happened.
+ */
+export type TIssuePropertyActivity = {
+  id: string;
+  issue_id: string;
+  property_id: string;
+  action: TIssuePropertyActivityAction;
+  old_value: string | null;
+  new_value: string | null;
+  old_identifier: string | null;
+  new_identifier: string | null;
+  comment: string;
+  actor: string | null;
+  epoch: number | null;
+  project_id: string;
+  workspace_id: string;
+  created_at: string;
+};
+
+/** What the settings screen sends when it defines or edits a custom field. */
+export type TIssuePropertyPayload = Partial<
+  Pick<
+    TIssueProperty,
+    | "name"
+    | "display_name"
+    | "description"
+    | "property_type"
+    | "relation_type"
+    | "is_required"
+    | "is_active"
+    | "is_multi"
+    | "default_value"
+    | "settings"
+    | "sort_order"
+    | "logo_props"
+  >
+>;
+
+/** What the settings screen sends when it defines or edits a choice of an `OPTION` field. */
+export type TIssuePropertyOptionPayload = Partial<
+  Pick<TIssuePropertyOption, "name" | "description" | "is_active" | "is_default" | "sort_order" | "logo_props">
+>;

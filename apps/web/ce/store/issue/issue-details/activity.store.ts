@@ -15,12 +15,13 @@ import type {
   TIssueActivity,
   TIssueActivityMap,
   TIssueActivityIdMap,
+  TIssuePropertyActivity,
   TIssueServiceType,
 } from "@plane/types";
 import { EIssueServiceType } from "@plane/types";
 // plane web constants
 // services
-import { IssueActivityService } from "@/services/issue";
+import { IssueActivityService, IssuePropertyService } from "@/services/issue";
 // store
 import type { CoreRootStore } from "@/store/root.store";
 
@@ -41,9 +42,11 @@ export interface IIssueActivityStore extends IIssueActivityStoreActions {
   loader: TActivityLoader;
   activities: TIssueActivityIdMap;
   activityMap: TIssueActivityMap;
+  propertyActivityMap: Record<string, TIssuePropertyActivity>;
   // helper methods
   getActivitiesByIssueId: (issueId: string) => string[] | undefined;
   getActivityById: (activityId: string) => TIssueActivity | undefined;
+  getPropertyActivityById: (activityId: string) => TIssuePropertyActivity | undefined;
   getActivityAndCommentsByIssueId: (issueId: string, sortOrder: E_SORT_ORDER) => TIssueActivityComment[] | undefined;
 }
 
@@ -52,9 +55,13 @@ export class IssueActivityStore implements IIssueActivityStore {
   loader: TActivityLoader = "fetch";
   activities: TIssueActivityIdMap = {};
   activityMap: TIssueActivityMap = {};
+  /** custom field changes live in their own table, so the feed reads them separately */
+  propertyActivities: Record<string, string[]> = {};
+  propertyActivityMap: Record<string, TIssuePropertyActivity> = {};
   // services
   serviceType;
   issueActivityService;
+  issuePropertyService;
 
   constructor(
     protected store: CoreRootStore,
@@ -65,12 +72,15 @@ export class IssueActivityStore implements IIssueActivityStore {
       loader: observable.ref,
       activities: observable,
       activityMap: observable,
+      propertyActivities: observable,
+      propertyActivityMap: observable,
       // actions
       fetchActivities: action,
     });
     this.serviceType = serviceType;
     // services
     this.issueActivityService = new IssueActivityService(this.serviceType);
+    this.issuePropertyService = new IssuePropertyService();
   }
 
   // helper methods
@@ -82,6 +92,11 @@ export class IssueActivityStore implements IIssueActivityStore {
   getActivityById = (activityId: string) => {
     if (!activityId) return undefined;
     return this.activityMap[activityId] ?? undefined;
+  };
+
+  getPropertyActivityById = (activityId: string) => {
+    if (!activityId) return undefined;
+    return this.propertyActivityMap[activityId] ?? undefined;
   };
 
   protected buildActivityAndCommentItems(issueId: string): TIssueActivityComment[] | undefined {
@@ -125,6 +140,16 @@ export class IssueActivityStore implements IIssueActivityStore {
       });
     });
 
+    (this.propertyActivities[issueId] ?? []).forEach((activityId) => {
+      const activity = this.getPropertyActivityById(activityId);
+      if (!activity) return;
+      activityComments.push({
+        id: activity.id,
+        activity_type: EActivityFilterType.ISSUE_ADDITIONAL_PROPERTIES_ACTIVITY,
+        created_at: activity.created_at,
+      });
+    });
+
     return activityComments;
   }
 
@@ -155,14 +180,17 @@ export class IssueActivityStore implements IIssueActivityStore {
         if (currentActivity) props = { created_at__gt: currentActivity.created_at };
       }
 
-      const activities = await this.issueActivityService.getIssueActivities(workspaceSlug, projectId, issueId, props);
+      const [activities] = await Promise.all([
+        this.issueActivityService.getIssueActivities(workspaceSlug, projectId, issueId, props),
+        this.fetchPropertyActivities(workspaceSlug, projectId, issueId),
+      ]);
 
       const activityIds = activities.map((activity) => activity.id);
 
       runInAction(() => {
-        update(this.activities, issueId, (currentActivityIds) => {
-          if (!currentActivityIds) return activityIds;
-          return uniq(concat(currentActivityIds, activityIds));
+        update(this.activities, issueId, (knownActivityIds) => {
+          if (!knownActivityIds) return activityIds;
+          return uniq(concat(knownActivityIds, activityIds));
         });
         activities.forEach((activity) => {
           set(this.activityMap, activity.id, activity);
@@ -174,6 +202,41 @@ export class IssueActivityStore implements IIssueActivityStore {
     } catch (error) {
       this.loader = undefined;
       throw error;
+    }
+  }
+
+  /**
+   * The custom field changes of the work item, merged into the feed alongside the
+   * activities and the comments. Read incrementally the same way, and kept from
+   * breaking the rest of the feed if it fails — the values themselves are shown on
+   * the sidebar whether or not their history loads.
+   */
+  private async fetchPropertyActivities(workspaceSlug: string, projectId: string, issueId: string) {
+    try {
+      const knownIds = this.propertyActivities[issueId] ?? [];
+      const last = this.getPropertyActivityById(knownIds[knownIds.length - 1]);
+      const params = last ? { created_at__gt: last.created_at } : undefined;
+
+      const activities = await this.issuePropertyService.getIssuePropertyActivities(
+        workspaceSlug,
+        projectId,
+        issueId,
+        params
+      );
+
+      runInAction(() => {
+        update(this.propertyActivities, issueId, (currentIds) =>
+          uniq(
+            concat(
+              currentIds ?? [],
+              activities.map((activity) => activity.id)
+            )
+          )
+        );
+        activities.forEach((activity) => set(this.propertyActivityMap, activity.id, activity));
+      });
+    } catch {
+      // the feed still renders without them
     }
   }
 }
