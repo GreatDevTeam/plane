@@ -118,7 +118,14 @@ Hand over only the fields that changed: the live server rewrites just the fragme
 
 ## Running API tests
 
-`apps/api` needs Python 3.12 (the code uses `X | Y` type syntax); the container's default `python3` is 3.9. Postgres/Redis come from the running `plane-test-*` containers:
+`apps/api` needs Python 3.12 (the code uses `X | Y` type syntax); the container's default `python3` is 3.9. Postgres/Redis come from the `plane-test-*` containers, which are usually **stopped** — start them first and read their IPs off docker rather than assuming they are absent:
+
+```bash
+docker start plane-test-db-1 plane-test-redis-1 plane-test-mq-1
+docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' plane-test-db-1
+```
+
+`docker ps` without `-a` hides them, which reads as "the test infra does not exist on this machine" and tempts you to skip the suite entirely. It exists; it is just not running.
 
 ```bash
 cd apps/api && DATABASE_URL="postgresql://plane:plane@<plane-test-db ip>:5432/plane" \
@@ -139,6 +146,22 @@ Neither `ruff` nor a 3.12 `python` is on `PATH`; both live in `/root/.venvs/plan
 `pytest` **reuses** the test database, so a migration you just wrote is silently not applied and
 every test touching the new column fails on `column … does not exist`. Pass `--create-db` after
 adding a migration.
+
+The same `--reuse-db` makes an **interrupted** run poison the next one: a killed suite leaves rows
+behind, and the following run reports hundreds of `duplicate key value violates unique constraint
+"users_username_key"` errors that have nothing to do with your change. Any run with errors in the
+hundreds is this, not a regression — rerun with `--create-db`, or
+`docker exec plane-test-db-1 psql -U plane -d plane -c 'DROP DATABASE IF EXISTS test_plane;'`.
+
+The `plane-test-*` containers get SIGKILLed (`Exited (137)`) a few minutes into a long run on this
+host, which surfaces as `psycopg.OperationalError: consuming input failed: server closed the
+connection unexpectedly` on every test after that point. Check `docker ps -a` before believing a
+mass failure, and prefer running one test file at a time over the whole suite in one go.
+
+**Master is not green.** A full-suite run on `origin/master` fails ~18 tests (cycles, magic-link
+auth, `test_url`, `copy_s3_objects`). Never read "tests fail" as "my branch broke something" —
+baseline the same files against a master worktree (`git worktree add /tmp/plane-master origin/master`)
+and compare the failure sets.
 
 `Model.objects.create(created_by=user)` does **not** set `created_by`: `BaseModel.save()`
 overwrites it from the thread-local request user, which is unset in a test, so the row lands with

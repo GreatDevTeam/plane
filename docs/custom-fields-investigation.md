@@ -4,6 +4,12 @@ _Plane task #890. Investigates what it takes to have user-defined custom fields
 ("custom properties") on work items, visible in filters, board, work item card,
 detail view and API._
 
+> **Status: delivered.** Every phase proposed below has shipped on
+> `feature/890_investigate-how-we-can-implementenable-custom` (PR #18). The rest of this
+> document is the original investigation, kept as the rationale for how the feature is
+> shaped; see [Rollout](#rollout--what-actually-shipped) at the end for what each phase
+> landed and where the code lives.
+
 ## Verdict
 
 Custom fields are an **Enterprise-edition feature of upstream Plane**. This repo is the
@@ -208,3 +214,38 @@ otherwise proceed in parallel.
 - **Filter performance** on `IssuePropertyValue` subqueries at workspace scope needs indexes
   on `(property_id, value_*)` and `(issue_id, property_id)`; worth a query plan check before
   phase 5 ships.
+
+## Rollout — what actually shipped
+
+All seven phases landed on `feature/890_investigate-how-we-can-implementenable-custom` (PR #18),
+one commit per phase, in order:
+
+| Phase | Commit(s)                  | What landed                                                                                           |
+| ----- | -------------------------- | ----------------------------------------------------------------------------------------------------- |
+| 0     | `5899f04b0e`               | Work item type CRUD, default-type seeding + backfill, `type_id` on the list payload, type chip/select |
+| 1     | `206981f259`               | `IssueProperty` / `IssuePropertyOption` / `IssuePropertyValue` + admin CRUD API                       |
+| 2     | `2b5a79ba77`               | Values read/write on the detail sidebar and peek view                                                 |
+| 3     | `9a5a51eb4a`               | Create/update modal, via the pre-existing modal context contract                                      |
+| 4     | `664b684e57`               | Cards and spreadsheet columns, incl. display-property toggles                                         |
+| 5     | `989e0abe24`, `2e6dd5e3ef` | Filtering — `IssueFilterSet` backend plus the widened frontend unions                                 |
+| 6     | `f787f90f42`, `1ca4955301` | Activity feed, export, webhooks, public-API values, work item types settings UI                       |
+
+Migrations added: `0122_seed_default_issue_types`, `0123_issue_property_models`,
+`0124_issue_property_value_draft_issue`, `0125_issue_property_value_text_index`.
+
+Two design points settled during the rollout that the proposal above left open:
+
+- **A field's type is immutable once created.** Values live in the column matching the original
+  type, so the settings UI offers the type dropdown only while creating and never sends
+  `property_type` on update.
+- **The `name` is the API key.** It is what the export column header, the webhook payload and the
+  public API address a field by, so it is edited separately from the display name (defaulting to a
+  slug of it, and no longer following once edited by hand).
+
+The "import" half of phase 6 is the **public REST API**, not a file importer: this repo has no work
+item CSV/JSON import (`plane/utils/porters` only exports), so `property_values` is accepted on public
+API work item create/update as the round-trip counterpart of the export.
+
+Verification at wrap-up: the 113 tests the rollout added all pass against a freshly created test DB;
+`ruff check` reports the same 5 pre-existing errors as `master`; `check:types` and `check:lint` are
+clean. The remaining full-suite failures are `master`'s own (see _Running API tests_ in `CLAUDE.md`).
