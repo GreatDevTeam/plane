@@ -31,6 +31,8 @@ import { IssueLayoutHOC } from "../issue-layout-HOC";
 import type { IQuickActionProps, TRenderQuickActions } from "../list/list-view-types";
 //components
 import { getSourceFromDropPayload } from "../utils";
+import type { TKanbanColumnScroll } from "./column-scroll";
+import { captureKanbanColumnScrolls, restoreKanbanColumnScrolls } from "./column-scroll";
 import { KanBan } from "./default";
 import { KanBanSwimLanes } from "./swimlanes";
 
@@ -68,9 +70,10 @@ export const BaseKanBanRoot = observer(function BaseKanBanRoot(props: IBaseKanBa
   const storeType = useIssueStoreType() as KanbanStoreType;
   const { allowPermissions } = useUserPermissions();
   const { issueMap, issuesFilter, issues } = useIssues(storeType);
+  const issueDetailStore = useIssueDetail(isEpic ? EIssueServiceType.EPICS : EIssueServiceType.ISSUES);
   const {
     issue: { getIssueById },
-  } = useIssueDetail(isEpic ? EIssueServiceType.EPICS : EIssueServiceType.ISSUES);
+  } = issueDetailStore;
   const {
     fetchIssues,
     fetchNextIssues,
@@ -86,7 +89,9 @@ export const BaseKanBanRoot = observer(function BaseKanBanRoot(props: IBaseKanBa
 
   const deleteAreaRef = useRef<HTMLDivElement | null>(null);
   const scrollableContainerRef = useRef<HTMLDivElement | null>(null);
-  const pendingScrollRestoreRef = useRef<number | null>(null);
+  const pendingScrollRestoreRef = useRef<{ left: number; top: number } | null>(null);
+  const pendingColumnScrollsRef = useRef<Map<string, TKanbanColumnScroll> | null>(null);
+  const cancelColumnScrollRestoreRef = useRef<(() => void) | null>(null);
 
   const [isDragOverDelete, setIsDragOverDelete] = useState(false);
   // states
@@ -111,25 +116,43 @@ export const BaseKanBanRoot = observer(function BaseKanBanRoot(props: IBaseKanBa
   // During "mutation" the store briefly clears groupedIssueIds — we skip restoration
   // then so the position is applied once the final data render lands.
   useLayoutEffect(() => {
-    if (pendingScrollRestoreRef.current !== null && scrollableContainerRef.current) {
-      const loader = issues.getIssueLoader();
-      if (loader !== "mutation" && loader !== "init-loader" && loader !== "pagination") {
-        scrollableContainerRef.current.scrollLeft = pendingScrollRestoreRef.current;
-        pendingScrollRestoreRef.current = null;
-      }
+    const container = scrollableContainerRef.current;
+    if (pendingScrollRestoreRef.current === null || !container) return;
+
+    const loader = issues.getIssueLoader();
+    if (loader === "mutation" || loader === "init-loader" || loader === "pagination") return;
+
+    // the container scrolls vertically too once the board is sub-grouped into swimlanes
+    container.scrollLeft = pendingScrollRestoreRef.current.left;
+    container.scrollTop = pendingScrollRestoreRef.current.top;
+    pendingScrollRestoreRef.current = null;
+
+    if (pendingColumnScrollsRef.current) {
+      cancelColumnScrollRestoreRef.current = restoreKanbanColumnScrolls(container, pendingColumnScrollsRef.current);
+      pendingColumnScrollsRef.current = null;
     }
   });
 
+  // a restore left settling when the board goes away would keep writing to detached columns
+  useEffect(() => () => cancelColumnScrollRestoreRef.current?.(), []);
+
   const refreshWithScrollPreserved = useCallback(async () => {
     if (!refreshIssues) return;
-    // Read scrollLeft directly from the DOM element. An event-listener approach doesn't
+    // A restore still settling from the previous refresh would fight this one.
+    cancelColumnScrollRestoreRef.current?.();
+    cancelColumnScrollRestoreRef.current = null;
+    // Read the scroll offsets directly from the DOM elements. An event-listener approach doesn't
     // work here because the scrollable div lives inside IssueLayoutHOC, which renders a
     // skeleton during init-load — so the div is not in the DOM when the one-time effect
     // runs, and the listener never attaches. Reading directly is always correct because
     // background refreshes only fire while the board is visible (init-loader guard skips them).
-    pendingScrollRestoreRef.current = scrollableContainerRef.current?.scrollLeft ?? 0;
+    const container = scrollableContainerRef.current;
+    pendingScrollRestoreRef.current = { left: container?.scrollLeft ?? 0, top: container?.scrollTop ?? 0 };
+    // Each state column scrolls on its own, so it is snapshotted separately — anchored to the
+    // work item the user is on, which lands back at the top of the column after the refresh.
+    pendingColumnScrollsRef.current = captureKanbanColumnScrolls(container, issueDetailStore.peekIssue?.issueId);
     await refreshIssues();
-  }, [refreshIssues]);
+  }, [refreshIssues, issueDetailStore]);
 
   useAutoRefreshIssues(refreshWithScrollPreserved, () => {
     if (isDragging) return true;
@@ -148,6 +171,7 @@ export const BaseKanBanRoot = observer(function BaseKanBanRoot(props: IBaseKanBa
         fetchNextIssues(groupId, subgroupId);
       }
     },
+    // oxlint-disable-next-line exhaustive-deps -- pre-existing: `issues` is a stable store instance
     [fetchNextIssues]
   );
 
@@ -167,6 +191,7 @@ export const BaseKanBanRoot = observer(function BaseKanBanRoot(props: IBaseKanBa
   const handleOnDrop = useGroupIssuesDragNDrop(storeType, orderBy, group_by, sub_group_by);
 
   const canEditProperties = useCallback(
+    // oxlint-disable-next-line no-shadow -- pre-existing: shadows the router's projectId on purpose
     (projectId: string | undefined) => {
       const isEditingAllowedBasedOnProject =
         canEditPropertiesBasedOnProject && projectId ? canEditPropertiesBasedOnProject(projectId) : isEditingAllowed;
