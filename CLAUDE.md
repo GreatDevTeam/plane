@@ -43,6 +43,8 @@ cd apps/web && pnpm check:types
 
 Silence those with `// oxlint-disable-next-line <rule> -- <why>` on the line the diagnostic's **primary span** starts at (not necessarily the line the message is about — `no-duplicate-enum-values` points at the _first_ member sharing the value, so an `eslint-disable` on the duplicate does not suppress it). The rule name is the part in brackets: `oxc(no-map-spread)` → `no-map-spread`.
 
+The span in the `,-[file:line:col]` header is **not** always the one a disable comment attaches to: `no-shadow` prints the outer declaration there but anchors on the inner one, so a comment above the outer declaration does nothing. It is cheaper to rename the inner binding than to find the line that takes the directive.
+
 ## Issue Board (Kanban)
 
 ### Background refresh
@@ -167,6 +169,18 @@ Multiple conditions in **one** `.filter()` call against a multi-valued relation 
 the **same** related row. `build_combined_q` ANDs every leaf into a single `Q`, so a filter over a
 one-to-many table (property values, and anything like it) has to be a `Q(pk__in=<subquery>)` per
 condition — a plain join silently matches nothing as soon as there are two conditions.
+
+## Adding a project settings page
+
+A settings tab is registered in five places, and only four of them fail loudly:
+
+1. `TProjectSettingsTabs` (`packages/types/src/settings.ts`);
+2. `PROJECT_SETTINGS` **and** `GROUPED_PROJECT_SETTINGS` (`packages/constants/src/settings/project.ts`) — the sidebar renders the grouped map, so a tab missing from it is invisible even though `PROJECT_SETTINGS` has it;
+3. `PROJECT_SETTINGS_ICONS` (`apps/web/core/components/settings/project/sidebar/item-icon.tsx`);
+4. the page + header under `apps/web/app/(all)/[workspaceSlug]/(settings)/settings/projects/[projectId]/<tab>/`;
+5. `apps/web/app/routes/core.ts` — **this one is the silent failure**. Routing is react-router's config, not file based, so a page that is not listed there is a 404 no matter where the file sits.
+
+1–3 are `Record<TProjectSettingsTabs, …>`, so widening the union turns the rest into compile errors; the route is the one to remember by hand.
 
 ## Frontend tests
 
