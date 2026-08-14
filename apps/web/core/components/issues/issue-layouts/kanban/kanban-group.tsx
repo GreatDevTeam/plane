@@ -46,6 +46,7 @@ import { GroupDragOverlay } from "../group-drag-overlay";
 import type { TRenderQuickActions } from "../list/list-view-types";
 import { KanbanQuickAddIssueButton, QuickAddIssueRoot } from "../quick-add";
 import { KanbanIssueBlocksList } from "./blocks-list";
+import { KANBAN_COLUMN_PROPS } from "./column-scroll";
 
 interface IKanbanGroup {
   groupId: string;
@@ -183,6 +184,7 @@ export const KanbanGroup = observer(function KanbanGroup(props: IKanbanGroup) {
         element,
       })
     );
+    // oxlint-disable-next-line exhaustive-deps -- pre-existing: adding 't'/'handleWorkFlowState' would re-register the drop target on every render
   }, [
     columnRef,
     groupId,
@@ -260,6 +262,7 @@ export const KanbanGroup = observer(function KanbanGroup(props: IKanbanGroup) {
   const loadMore = isPaginating ? (
     <KanbanIssueBlockLoader />
   ) : (
+    // oxlint-disable-next-line click-events-have-key-events, no-static-element-interactions -- pre-existing markup
     <div
       className="sticky bottom-0 w-full cursor-pointer p-3 text-13 font-medium text-accent-primary hover:text-accent-secondary hover:underline"
       onClick={loadMoreIssuesInThisGroup}
@@ -279,6 +282,7 @@ export const KanbanGroup = observer(function KanbanGroup(props: IKanbanGroup) {
   return (
     <div
       id={`${groupId}__${sub_group_id}`}
+      {...KANBAN_COLUMN_PROPS}
       className={cn(
         "relative h-full min-h-[120px] transition-all",
         { "rounded-sm bg-layer-1": isDraggingOverColumn },
@@ -317,6 +321,7 @@ export const KanbanGroup = observer(function KanbanGroup(props: IKanbanGroup) {
         ) : (
           <div className="flex flex-col gap-2">
             {Array.from({ length: 2 }).map((_, index) => (
+              // oxlint-disable-next-line no-array-index-key -- pre-existing: fixed-length list of identical loaders
               <KanbanIssueBlockLoader key={index} />
             ))}
             <KanbanIssueBlockLoader ref={setIntersectionElement} />
