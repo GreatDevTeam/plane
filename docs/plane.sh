@@ -152,6 +152,80 @@ _project_id() {
     echo "$id"
 }
 
+# Fetch EVERY page of a Plane list endpoint into <outfile> as a single
+# {"results": [...], "total_count": N} object, so callers can keep filtering
+# with the same `.results` jq they used when one request was assumed to cover
+# everything.
+#
+# Plane's list endpoints paginate by CURSOR, not by page number: a `page=`
+# query parameter is silently ignored, so `?per_page=500&page=2` returns the
+# very same first 500 records as page 1. That failed silently and looked like
+# missing data — get-task reported "task not found" for issues that exist
+# (TM-703/705/707/768) purely because they sat past record 500 of ~1280.
+#
+# Paging works through `cursor`, whose value is the previous response's
+# `next_cursor` ("500:0:0" -> "500:1:0" -> ...). Two traps:
+#   * `per_page` must be repeated on every request — it overrides the page
+#     size encoded in the cursor, and dropping it re-pages the whole result
+#     set at the server default (1000), skipping records.
+#   * `next_cursor` is populated even on the last page, so it is not a stop
+#     condition; `next_page_results` is the authoritative one.
+_fetch_all() {
+    local url="$1" outfile="$2" per_page="${3:-500}"
+    local sep="?"
+    [[ "$url" == *\?* ]] && sep="&"
+
+    local pages_dir
+    pages_dir=$(mktemp -d)
+    local cursor="" page_no=0 page_tmp full
+    while :; do
+        page_no=$((page_no + 1))
+        page_tmp=$(printf '%s/%05d.json' "$pages_dir" "$page_no")
+        full="${url}${sep}per_page=${per_page}"
+        [ -n "$cursor" ] && full="${full}&cursor=${cursor}"
+        _curl "$full" > "$page_tmp"
+
+        [ "$(jq -r '.next_page_results // false' "$page_tmp")" = "true" ] || break
+        cursor=$(jq -r '.next_cursor // empty' "$page_tmp")
+        [ -n "$cursor" ] || break
+        if [ "$page_no" -ge 100 ]; then
+            echo "ERROR: _fetch_all: over 100 pages for $url — refusing to keep paging" >&2
+            break
+        fi
+    done
+
+    jq -s '{results: (map(.results // []) | add), total_count: (.[0].total_count // 0)}' \
+        "$pages_dir"/*.json > "$outfile"
+    rm -rf "$pages_dir"
+}
+
+# All of a project's issues, every page of them (see _fetch_all).
+#
+# A full issue object is ~7 KB, so a project of ~1300 issues is ~9 MB spread
+# over three requests. Callers that only need a few keys should pass them as
+# <fields> (a comma-separated list the API honours server-side) — an
+# id+sequence_id index of the same project is ~30 KB and roughly 3x faster.
+# Callers whose output is the raw issue object must NOT pass <fields>, or the
+# keys they drop silently disappear from the command's output.
+_fetch_all_issues() {
+    local pid="$1" outfile="$2" fields="${3:-}"
+    local url="$BASE/projects/$pid/issues/"
+    [ -n "$fields" ] && url="${url}?fields=${fields}"
+    _fetch_all "$url" "$outfile"
+}
+
+# All of a project's labels, every page of them (see _fetch_all). Printed to
+# stdout as {"results": [...]} rather than written to a file — a project has
+# few enough labels to pass through a variable safely.
+_fetch_all_labels() {
+    local pid="$1"
+    local tmp
+    tmp=$(mktemp)
+    _fetch_all "$BASE/projects/$pid/labels/" "$tmp" 200
+    cat "$tmp"
+    rm -f "$tmp"
+}
+
 _states() {
     local pid="$1"
     _curl "$BASE/projects/$pid/states/"
@@ -191,15 +265,16 @@ _state_id_by_group_or_name() {
 
 # Resolve a label's id by exact case-insensitive name match, or pass a UUID
 # straight through. Prints nothing if not found — callers decide whether
-# that is an error. per_page=200 avoids silently missing a label past page 1
-# on a project with many labels (e.g. a shared multi-project board).
+# that is an error. Goes through _fetch_all_labels so a label past the first
+# page is still found on a project with many labels (e.g. a shared
+# multi-project board).
 _label_id_by_name() {
     local pid="$1" name_or_id="$2"
     if [[ "$name_or_id" =~ ^[0-9a-f-]{36}$ ]]; then
         echo "$name_or_id"
         return
     fi
-    _curl "$BASE/projects/$pid/labels/?per_page=200" \
+    _fetch_all_labels "$pid" \
         | jq -r --arg n "$name_or_id" \
         '.results[] | select(.name | ascii_downcase == ($n | ascii_downcase)) | .id' \
         | head -1
@@ -250,7 +325,7 @@ cmd_list_states() {
 cmd_list_labels() {
     local pid
     pid=$(_project_id)
-    _curl "$BASE/projects/$pid/labels/?per_page=200" | jq '.results[] | {id, name}'
+    _fetch_all_labels "$pid" | jq '.results[] | {id, name}'
 }
 
 cmd_get_issue() {
@@ -287,7 +362,7 @@ cmd_get_task() {
 
     local issues_tmp
     issues_tmp=$(mktemp)
-    _curl "$BASE/projects/$pid/issues/?per_page=500&page=1" > "$issues_tmp"
+    _fetch_all_issues "$pid" "$issues_tmp" "id,sequence_id"
 
     local issue_id
     issue_id=$(jq -r --argjson seq "$seq" '.results[] | select(.sequence_id == $seq) | .id' "$issues_tmp" | head -1)
@@ -345,10 +420,10 @@ cmd_next_task() {
         fi
     fi
 
-    # Fetch all issues into a temp file (large per_page avoids pagination; temp file avoids ARG_MAX)
+    # Fetch every page of issues into a temp file (the temp file avoids ARG_MAX)
     local issues_tmp
     issues_tmp=$(mktemp)
-    _curl "$BASE/projects/$pid/issues/?per_page=500&page=1" > "$issues_tmp"
+    _fetch_all_issues "$pid" "$issues_tmp"
 
     # Filter to todo states + optional label, sort by priority
     local priority_order='{"urgent":0,"high":1,"medium":2,"low":3,"none":4}'
@@ -530,7 +605,7 @@ cmd_list_review() {
 
     local issues_tmp
     issues_tmp=$(mktemp)
-    _curl "$BASE/projects/$pid/issues/?per_page=500&page=1" > "$issues_tmp"
+    _fetch_all_issues "$pid" "$issues_tmp" "id,sequence_id,name,description_html,state,labels"
 
     jq --arg state "$state_id" --arg lbl "$label_id" '
         .results |
@@ -674,7 +749,7 @@ cmd_done_in_period() {
 
     local issues_tmp
     issues_tmp=$(mktemp)
-    _curl "$BASE/projects/$pid/issues/?per_page=500&page=1" > "$issues_tmp"
+    _fetch_all_issues "$pid" "$issues_tmp" "id,sequence_id,name,priority,updated_at,state"
 
     jq --arg state "$done_state_id" --arg from "$from_date" --arg to "$to_date" '
         .results |
@@ -709,7 +784,7 @@ cmd_task_in_progress() {
 
     local issues_tmp
     issues_tmp=$(mktemp)
-    _curl "$BASE/projects/$pid/issues/?per_page=500&page=1" > "$issues_tmp"
+    _fetch_all_issues "$pid" "$issues_tmp"
 
     local next
     next=$(jq --arg state "$state_id" --arg lbl "$label_id" '
@@ -779,7 +854,7 @@ cmd_done_in_period() {
 
     local issues_tmp
     issues_tmp=$(mktemp)
-    _curl "$BASE/projects/$pid/issues/?per_page=500&page=1" > "$issues_tmp"
+    _fetch_all_issues "$pid" "$issues_tmp" "id,sequence_id,name,priority,updated_at,state"
 
     jq --arg state "$done_state_id" --arg from "$from_date" --arg to "$to_date" '
         .results |
@@ -855,7 +930,7 @@ cmd_review_done_in_period() {
 
     local issues_tmp
     issues_tmp=$(mktemp)
-    _curl "$BASE/projects/$pid/issues/?per_page=500&page=1" > "$issues_tmp"
+    _fetch_all_issues "$pid" "$issues_tmp" "id,sequence_id,name,state,updated_at"
 
     jq -r --arg done "$done_state_id" --arg review "$review_state_id" --arg cancelled "$cancelled_state_id" \
        --arg from "$from_date" --arg to "$to_date" '
