@@ -6,14 +6,180 @@ set -euo pipefail
 # (empty iteration logs, in=0/out=0/turns=0, "finished (no signal)").
 export IS_SANDBOX=1
 
+# ── Self-replacement guard ───────────────────────────────────────────────────
+# Bash reads a script lazily, by byte offset, WHILE executing it. Overwriting
+# this file in place mid-run (`cp`/`>` onto the same inode) makes the still
+# running shell resume at a now-meaningless offset: it silently stops with
+# exit 0 and no error. That is not hypothetical — a ralph task in this repo
+# copied a new template/scripts/ralph-plane.sh over its own running
+# docs/ralph-plane.sh on 2026-08-26 and killed the session (see task #1453).
+# Any project whose ralph task edits its own deployed loop script can hit it.
+#
+# Defence, in two parts:
+#   1. Here: immediately re-exec from a private temp copy, so the on-disk
+#      original can be replaced freely while a run is in flight.
+#   2. self_update_check() below: between iterations, checksum the on-disk
+#      original and, if it changed, exec the new version deliberately at a
+#      safe point instead of being corrupted mid-iteration.
+#
+# The temp copy must NOT change how siblings are resolved — PLANE.md,
+# plane.sh, github.sh and ralph-logs/ are located relative to this script (see
+# CLAUDE.md, "Architecture: the scripts"), which for the copy would be the
+# temp dir. RALPH_SELF_DIR is exported before the re-exec and RALPH_DIR is
+# taken from it, so resolution stays anchored to the real deployment dir.
+# (Note the copy still only protects an in-place overwrite. Replacing the file
+# by atomic rename — write a temp file, then `mv` it over — is safe with or
+# without this guard, because the running shell keeps its fd on the old inode.
+# Prefer `mv` over `cp` when syncing a loop script into a live project.)
+RALPH_SELF_PATH="${RALPH_SELF_PATH:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")}"
+RALPH_SELF_DIR="${RALPH_SELF_DIR:-$(dirname "$RALPH_SELF_PATH")}"
+export RALPH_SELF_PATH RALPH_SELF_DIR
+
+# Original argv, replayed verbatim on a deliberate self-update re-exec below.
+RALPH_ARGS=("$@")
+
+if [ -z "${RALPH_SELF_COPY:-}" ]; then
+    _self_copy=$(mktemp "${TMPDIR:-/tmp}/ralph-plane-XXXXXX.sh" 2>/dev/null || echo "")
+    if [ -n "$_self_copy" ] && cp "$RALPH_SELF_PATH" "$_self_copy" 2>/dev/null; then
+        chmod +x "$_self_copy" 2>/dev/null || true
+        export RALPH_SELF_COPY="$_self_copy"
+        exec bash "$_self_copy" ${RALPH_ARGS[@]+"${RALPH_ARGS[@]}"}
+    fi
+    # No usable temp dir: keep running from the original rather than refusing
+    # to start — the loop still works, it just stays vulnerable to an in-place
+    # overwrite, so say so loudly.
+    rm -f "$_self_copy" 2>/dev/null || true
+    echo "WARNING: could not create a temp copy of $RALPH_SELF_PATH — running in place (an in-place edit of this file mid-run will kill the loop)" >&2
+fi
+
+# Checksum of the on-disk original as of this process start. Recomputed fresh
+# in every process (deliberately NOT exported), so a self-update re-exec
+# baselines against the new file.
+_self_checksum() { md5sum "$RALPH_SELF_PATH" 2>/dev/null | awk '{print $1}'; }
+RALPH_SELF_SUM="$(_self_checksum)"
+
 MODEL=""
+CLI_MODEL=""
 CONTINUE_MODE=false
 ITERATION=0
 # The dir this script (and PLANE.md, plane.sh, github.sh, ...) lives in —
 # derived from the script's own location so the same file works from docs/,
 # ralph/, or any other folder (see RALPH_SCRIPT in ralph.md / render.sh).
-RALPH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Taken from RALPH_SELF_DIR (resolved above from the ORIGINAL file's location)
+# rather than from BASH_SOURCE directly, because when running from the temp
+# self-copy BASH_SOURCE points at the temp dir, which has no siblings.
+RALPH_DIR="$RALPH_SELF_DIR"
 PROMPT_FILE="$RALPH_DIR/PLANE.md"
+
+# Live status for the `agent` script / Telegram watcher (see ralph.md) — a fixed
+# VM-global path, not a RALPH_* config key, so every project's loop and the
+# VM-wide tooling reading across all of them agree on the same location.
+REPO_NAME="$(basename "$(dirname "$RALPH_DIR")")"
+AGENT_STATE_DIR="/root/agent-state"
+STATE_FILE="$AGENT_STATE_DIR/${REPO_NAME}.json"
+mkdir -p "$AGENT_STATE_DIR" 2>/dev/null || true
+LIVE_CTX=0
+LIVE_CTX_WINDOW=200000
+WATCHER_PID=""
+
+# status is "running" only while a claude call for the current iteration is
+# actually executing; "idle" the rest of the time (waiting for a task, waiting
+# on API limits, between iterations).
+write_state() {
+    local status="$1"
+    mkdir -p "$AGENT_STATE_DIR" 2>/dev/null || true
+    cat > "$STATE_FILE" 2>/dev/null <<EOF || true
+{"repo":"$REPO_NAME","status":"$status","iteration":${ITERATION},"started_at":${ITER_STARTED_AT:-0},"context_tokens":${LIVE_CTX:-0},"context_window":${LIVE_CTX_WINDOW:-200000},"updated_at":$(date +%s)}
+EOF
+}
+
+# Background side-reader of the raw stream-json capture ($RAWFILE, already
+# written by the existing `tee` in the claude pipeline below) — polls the
+# latest assistant message's usage and refreshes the state file, without
+# touching the existing display jq filter.
+state_watcher() {
+    local rawfile="$1"
+    while true; do
+        sleep 5
+        if [ -f "$rawfile" ]; then
+            local usage ctx
+            usage=$(tail -c 300000 "$rawfile" 2>/dev/null | grep '^{' | jq -c 'select(.type=="assistant") | .message.usage // empty' 2>/dev/null | tail -1)
+            if [ -n "$usage" ]; then
+                ctx=$(echo "$usage" | jq -r '((.input_tokens // 0)+(.cache_creation_input_tokens // 0)+(.cache_read_input_tokens // 0))' 2>/dev/null || echo 0)
+                LIVE_CTX="${ctx:-0}"
+            fi
+        fi
+        write_state "running"
+    done
+}
+
+trap '[ -n "$WATCHER_PID" ] && kill "$WATCHER_PID" 2>/dev/null; rm -f "$STATE_FILE" "$AGENT_STATE_DIR/tasks/${REPO_NAME}.want" "$AGENT_STATE_DIR/tasks/${REPO_NAME}.granted" ${RALPH_SELF_COPY:+"$RALPH_SELF_COPY"} 2>/dev/null' EXIT
+
+# Task-lookup guards. A Plane API failure (5xx, Cloudflare "error code: 524",
+# any non-JSON body) must never be mistaken for "a task is available": an empty
+# TASK_JSON used to fall through and burn a whole claude iteration on an empty
+# "## Your task" block. Treat "not valid JSON" and "no .id" as lookup failures.
+_is_json() { printf '%s' "$1" | jq -e . >/dev/null 2>&1; }
+_task_id_of() { printf '%s' "$1" | jq -r '.id // ""' 2>/dev/null || echo ""; }
+
+# Optional per-project daily iteration cap (RALPH_MAX_ITERATIONS_PER_DAY).
+# Persisted outside the process (this loop runs forever, but the counter must
+# survive a restart within the same day) as "<local-date>:<count>" so a new
+# day's date mismatch naturally resets it without a separate cron/reset step.
+DAILY_COUNT_FILE="$AGENT_STATE_DIR/${REPO_NAME}.daily"
+
+_today() { date +%Y-%m-%d; }
+
+_daily_iteration_count() {
+    [ -f "$DAILY_COUNT_FILE" ] || { echo 0; return; }
+    local stored_date stored_count
+    IFS=: read -r stored_date stored_count < "$DAILY_COUNT_FILE" 2>/dev/null
+    if [ "$stored_date" != "$(_today)" ]; then
+        echo 0
+    else
+        echo "${stored_count:-0}"
+    fi
+}
+
+_increment_daily_iteration_count() {
+    local count
+    count=$(_daily_iteration_count)
+    count=$((count + 1))
+    mkdir -p "$AGENT_STATE_DIR" 2>/dev/null || true
+    echo "$(_today):$count" > "$DAILY_COUNT_FILE" 2>/dev/null || true
+}
+
+_seconds_until_midnight() {
+    local now next_midnight
+    now=$(date +%s)
+    next_midnight=$(date -d "tomorrow 00:00:00" +%s)
+    echo $(( next_midnight - now ))
+}
+
+# System-wide task-execution concurrency (see ralph.md's agent-scheduler.sh):
+# this loop touches a .want file to signal it's ready to run its next
+# iteration, then blocks until the broker grants it a .granted file — the
+# broker is the ONLY writer of .granted files, so no distributed locking is
+# needed, just polling. Concurrency is capped here, not at `agent start` —
+# every project loop runs continuously; only starting a new iteration waits.
+TASK_QUEUE_DIR="$AGENT_STATE_DIR/tasks"
+WANT_FILE="$TASK_QUEUE_DIR/${REPO_NAME}.want"
+GRANT_FILE="$TASK_QUEUE_DIR/${REPO_NAME}.granted"
+
+request_task_slot() {
+    mkdir -p "$TASK_QUEUE_DIR" 2>/dev/null || true
+    rm -f "$GRANT_FILE" 2>/dev/null || true
+    date +%s > "$WANT_FILE" 2>/dev/null || true
+    write_state "queued"
+    while [ ! -f "$GRANT_FILE" ]; do
+        sleep 3
+    done
+    rm -f "$WANT_FILE" 2>/dev/null || true
+}
+
+release_task_slot() {
+    rm -f "$GRANT_FILE" "$WANT_FILE" 2>/dev/null || true
+}
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -22,7 +188,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --model|-m)
-            MODEL="$2"
+            CLI_MODEL="$2"
             shift 2
             ;;
         *)
@@ -34,26 +200,68 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Load PLANE_* and RALPH_* vars from .env (avoids sourcing values with shell-special chars)
-if [ -f .env ]; then
-    while IFS= read -r line; do
-        # Skip blank lines and comments
-        [[ "$line" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "${line// }" ]] && continue
-        if [[ "$line" =~ ^((PLANE|RALPH)_[A-Z_]+)=(.*)$ ]]; then
-            key="${BASH_REMATCH[1]}"
-            val="${BASH_REMATCH[3]}"
-            # Strip surrounding quotes if present
-            val="${val%\"}"
-            val="${val#\"}"
-            val="${val%\'}"
-            val="${val#\'}"
-            export "$key=$val"
-        fi
-    done < .env
-fi
+# Load PLANE_* and RALPH_* vars from .env (avoids sourcing values with shell-special
+# chars). Re-run at the top of every iteration (see the main loop below) so an
+# operator can edit .env (branch, limits, model, ...) without restarting the loop —
+# it only ever overwrites keys present in .env; a key removed from .env keeps its
+# last-known value rather than reverting to the built-in default.
+load_env() {
+    if [ -f .env ]; then
+        while IFS= read -r line; do
+            # Skip blank lines and comments
+            [[ "$line" =~ ^[[:space:]]*# ]] && continue
+            [[ -z "${line// }" ]] && continue
+            if [[ "$line" =~ ^((PLANE|RALPH)_[A-Z_]+)=(.*)$ ]]; then
+                key="${BASH_REMATCH[1]}"
+                val="${BASH_REMATCH[3]}"
+                # Strip surrounding quotes if present
+                val="${val%\"}"
+                val="${val#\"}"
+                val="${val%\'}"
+                val="${val#\'}"
+                export "$key=$val"
+            fi
+        done < .env
+    fi
 
-MODEL="${MODEL:-${RALPH_MODEL:-claude-opus-5}}"
+    RALPH_BASE_BRANCH="${RALPH_BASE_BRANCH:-main}"
+    RALPH_MAX_LIMIT_PCT="${RALPH_MAX_LIMIT_PCT:-80}"
+    RALPH_WAIT_INTERVAL="${RALPH_WAIT_INTERVAL:-60}"
+    # Higher limit allowed during off-hours (22:00-07:00 local time)
+    RALPH_NIGHT_MAX_LIMIT_PCT="${RALPH_NIGHT_MAX_LIMIT_PCT:-90}"
+    RALPH_NIGHT_START="${RALPH_NIGHT_START:-22}"
+    RALPH_NIGHT_END="${RALPH_NIGHT_END:-7}"
+    # Optional per-project cap on iterations (claude calls) per local day; 0 = unlimited.
+    RALPH_MAX_ITERATIONS_PER_DAY="${RALPH_MAX_ITERATIONS_PER_DAY:-0}"
+    # Iteration post-mortem thresholds (see end of the main loop below) — either
+    # set to 0 disables that trigger; both 0 disables the analysis entirely.
+    # TEMPORARILY DISABLED for every project (both default to 0, v62): the
+    # post-mortem costs an extra `claude` call per long iteration and was
+    # firing often enough to be noise rather than signal. The feature itself
+    # is untouched — a project that still wants it sets non-zero values in its
+    # own deployed .env (the previous defaults were 600s / 150000 tokens, the
+    # same durations the VM-global Telegram watcher in ralph.md uses).
+    RALPH_ANALYZE_SECONDS="${RALPH_ANALYZE_SECONDS:-0}"
+    RALPH_ANALYZE_TOKENS="${RALPH_ANALYZE_TOKENS:-0}"
+    RALPH_ANALYZE_MODEL="${RALPH_ANALYZE_MODEL:-haiku}"
+    # CLI --model always wins over RALPH_MODEL, every reload.
+    MODEL="${CLI_MODEL:-${RALPH_MODEL:-claude-opus-5}}"
+    # Reasoning-effort level passed to every `claude` call (--effort). Default
+    # "high" regardless of whatever the CLI's own built-in default happens to
+    # be, so behavior here doesn't silently drift across claude-code releases.
+    # A task can override this per-iteration via "Effort: <level>" in its
+    # description (see below) the same way "Model: <name>" does.
+    EFFORT="${RALPH_EFFORT:-high}"
+    case "$EFFORT" in
+        low|medium|high|xhigh|max) ;;
+        *)
+            echo "WARNING: invalid RALPH_EFFORT \"$EFFORT\" (use low, medium, high, xhigh, or max) — falling back to high" >&2
+            EFFORT="high"
+            ;;
+    esac
+}
+
+load_env
 
 # Resolve a short model name (opus, sonnet, haiku, fable) to its full model
 # id. Anything that is not one of these short names passes through unchanged,
@@ -70,13 +278,6 @@ resolve_model_alias() {
         *)      echo "$1" ;;
     esac
 }
-RALPH_BASE_BRANCH="${RALPH_BASE_BRANCH:-main}"
-RALPH_MAX_LIMIT_PCT="${RALPH_MAX_LIMIT_PCT:-80}"
-RALPH_WAIT_INTERVAL="${RALPH_WAIT_INTERVAL:-60}"
-# Higher limit allowed during off-hours (22:00–07:00 local time)
-RALPH_NIGHT_MAX_LIMIT_PCT="${RALPH_NIGHT_MAX_LIMIT_PCT:-90}"
-RALPH_NIGHT_START="${RALPH_NIGHT_START:-22}"
-RALPH_NIGHT_END="${RALPH_NIGHT_END:-7}"
 
 # Validate required Plane.so env vars
 for var in PLANE_HOST PLANE_TOKEN PLANE_USERNAME; do
@@ -190,12 +391,76 @@ sweep_failed_tests() {
     done
 }
 
+# The VM this loop runs on hosts many concurrent project loops with only
+# 14GB RAM (see ralph.md) — a container an agent starts (e.g. via
+# docker-compose to run tests) and forgets to tear down accumulates across
+# iterations and across projects. Run unconditionally after every iteration,
+# regardless of outcome: kills every running container on the host except
+# ones whose name matches RALPH_DOCKER_KILL_EXCLUDE (comma list of
+# case-insensitive substrings, default: shoper,crypto-trader,optizium — those
+# run persistent services that must never be interrupted by another project's
+# iteration finishing. "optizium" alone covers all three optizium/new-optizium/
+# optizium-nginx containers since Docker Compose's default container naming
+# (<project-dir-name>-<service>-<n>) makes every one of their container names
+# contain that substring). Best-effort: silently skipped if docker is not
+# installed.
+cleanup_docker_containers() {
+    command -v docker >/dev/null 2>&1 || return 0
+    local exclude="${RALPH_DOCKER_KILL_EXCLUDE:-shoper,crypto-trader,optizium}"
+    local pattern="${exclude//,/|}"
+    local victims
+    # The trailing `|| true` matters under `set -o pipefail`: grep exits 1 when
+    # every running container matches the exclude pattern (or none are running
+    # at all), which would otherwise propagate through the pipe and, being an
+    # unguarded assignment, kill the whole loop under `set -e` (see v53).
+    victims=$(docker ps --format '{{.ID}} {{.Names}}' 2>/dev/null | grep -viE "$pattern" | awk '{print $1}' || true)
+    [ -z "$victims" ] && return 0
+    printf "\033[90m[%s] Killing docker containers (except %s)...\033[0m" "$(date +%H:%M:%S)" "$exclude"
+    # shellcheck disable=SC2086
+    docker kill $victims >/dev/null 2>&1 && printf " \033[32mOK\033[0m\n" || printf " \033[33mfailed\033[0m\n"
+}
+
+# Part 2 of the self-replacement guard (see the top of this file): between
+# iterations — no task in flight, no task slot held, no claude subprocess — pick
+# up a new version of the on-disk original deliberately, by re-exec'ing it. The
+# re-exec drops RALPH_SELF_* so the fresh process makes its own temp copy and
+# re-baselines its checksum against the new file.
+self_update_check() {
+    local now orig
+    now=$(_self_checksum)
+    [ -n "$now" ] || return 0
+    [ "$now" = "$RALPH_SELF_SUM" ] && return 0
+
+    orig="$RALPH_SELF_PATH"
+    # Never exec a half-written or broken file: a syntax error here would take
+    # the whole loop down permanently, which is exactly what this guard exists
+    # to prevent. Re-baseline anyway so this does not warn every iteration —
+    # the next edit changes the checksum again and re-triggers the check.
+    if ! bash -n "$orig" 2>/dev/null; then
+        echo -e "\033[1;31m[$(date +%H:%M:%S)] $orig changed on disk but does not parse (bash -n) — staying on the running version\033[0m" >&2
+        RALPH_SELF_SUM="$now"
+        return 0
+    fi
+
+    echo ""
+    echo -e "\033[1;36m[$(date +%H:%M:%S)] $orig changed on disk — restarting the loop with the new version\033[0m"
+    echo ""
+    print_usage_summary
+    release_task_slot
+    [ -n "${WATCHER_PID:-}" ] && kill "$WATCHER_PID" 2>/dev/null
+    rm -f "$STATE_FILE" 2>/dev/null || true
+    [ -n "${RALPH_SELF_COPY:-}" ] && rm -f "$RALPH_SELF_COPY"
+    unset RALPH_SELF_COPY RALPH_SELF_PATH RALPH_SELF_DIR
+    exec bash "$orig" ${RALPH_ARGS[@]+"${RALPH_ARGS[@]}"}
+}
+
 LOGS_DIR="$RALPH_DIR/ralph-logs/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$LOGS_DIR"
 
 echo -e "\033[1;35m════════════════════════════════════════\033[0m"
 echo -e "\033[1;35m  Ralph (Plane.so)\033[0m"
 echo -e "\033[1;35m  Model: $MODEL (default -- a task can override via Model: <name> in its description)\033[0m"
+echo -e "\033[1;35m  Effort: $EFFORT (default -- a task can override via Effort: <level> in its description)\033[0m"
 echo -e "\033[1;35m  Continue mode: $CONTINUE_MODE\033[0m"
 echo -e "\033[1;35m  Prompt file: $PROMPT_FILE\033[0m"
 echo -e "\033[1;35m  Logs: $LOGS_DIR\033[0m"
@@ -209,9 +474,20 @@ echo -e "\033[1;35m════════════════════�
 echo ""
 
 while true; do
+    # Safe point to adopt an edited copy of this script (see self_update_check).
+    self_update_check
+
     ITER_RESUME=false
     TASK_JSON=""
     TASK_ID=""
+
+    # Re-read .env each iteration so an operator can edit it (branch, limits,
+    # model, ...) without restarting the loop.
+    load_env
+
+    ITER_STARTED_AT=0
+    LIVE_CTX=0
+    write_state "idle"
 
     # Pre-iteration sweep: demote Review tasks whose PR tests failed back to Todo.
     sweep_failed_tests
@@ -222,32 +498,56 @@ while true; do
 
         # Check for an interrupted in-progress task first (resume after restart)
         IP_RESULT=""
-        if IP_RESULT=$("$RALPH_DIR/plane.sh" task-in-progress 2>/dev/null); then
-            IP_DONE=$(echo "$IP_RESULT" | jq -r '.done // false' 2>/dev/null || echo "false")
-            if [ "$IP_DONE" != "true" ]; then
-                ITER_RESUME=true
-                TASK_JSON="$IP_RESULT"
-                printf " \033[33mresuming in-progress task\033[0m\n"
-            fi
+        IP_RC=0
+        IP_RESULT=$("$RALPH_DIR/plane.sh" task-in-progress 2>/dev/null) || IP_RC=$?
+        if [ "$IP_RC" -ne 0 ] || ! _is_json "$IP_RESULT"; then
+            printf " \033[31mtask-in-progress lookup failed (exit %s). Waiting %ss...\033[0m\n" "$IP_RC" "$RALPH_WAIT_INTERVAL"
+            sleep "$RALPH_WAIT_INTERVAL"
+            continue
+        fi
+        IP_DONE=$(echo "$IP_RESULT" | jq -r '.done // false' 2>/dev/null || echo "false")
+        if [ "$IP_DONE" != "true" ] && [ -n "$(_task_id_of "$IP_RESULT")" ]; then
+            ITER_RESUME=true
+            TASK_JSON="$IP_RESULT"
+            printf " \033[33mresuming in-progress task\033[0m\n"
         fi
 
         if [ "$ITER_RESUME" = "false" ]; then
             NEXT_TASK_CHECK=""
-            if NEXT_TASK_CHECK=$("$RALPH_DIR/plane.sh" next-task 2>/dev/null); then
-                TASK_IS_DONE=$(echo "$NEXT_TASK_CHECK" | jq -r '.done // false' 2>/dev/null || echo "false")
-            else
-                TASK_IS_DONE="false"
+            NEXT_TASK_RC=0
+            NEXT_TASK_CHECK=$("$RALPH_DIR/plane.sh" next-task 2>/dev/null) || NEXT_TASK_RC=$?
+            if [ "$NEXT_TASK_RC" -ne 0 ] || ! _is_json "$NEXT_TASK_CHECK"; then
+                printf " \033[31mnext-task lookup failed (exit %s). Waiting %ss...\033[0m\n" "$NEXT_TASK_RC" "$RALPH_WAIT_INTERVAL"
+                sleep "$RALPH_WAIT_INTERVAL"
+                continue
             fi
 
+            TASK_IS_DONE=$(echo "$NEXT_TASK_CHECK" | jq -r '.done // false' 2>/dev/null || echo "false")
             if [ "$TASK_IS_DONE" = "true" ]; then
-                printf " \033[33mno tasks. Waiting %ss...\033[0m\n" "$RALPH_WAIT_INTERVAL"
+                printf " \033[33mno tasks. Waiting %ss...\033[0m\n" "$RALPH_WAIT_INTERVAL"
+                sleep "$RALPH_WAIT_INTERVAL"
+                continue
+            fi
+            if [ -z "$(_task_id_of "$NEXT_TASK_CHECK")" ]; then
+                printf " \033[31mnext-task returned no task id. Waiting %ss...\033[0m\n" "$RALPH_WAIT_INTERVAL"
                 sleep "$RALPH_WAIT_INTERVAL"
                 continue
             fi
             TASK_JSON="$NEXT_TASK_CHECK"
-            printf " \033[32mOK\033[0m\n"
+            printf " \033[32mOK\033[0m\n"
         fi
 
+
+        if [ "$RALPH_MAX_ITERATIONS_PER_DAY" -gt 0 ] 2>/dev/null; then
+            DAILY_COUNT=$(_daily_iteration_count)
+            if [ "$DAILY_COUNT" -ge "$RALPH_MAX_ITERATIONS_PER_DAY" ]; then
+                WAIT_SECS=$(_seconds_until_midnight)
+                printf "\033[90m[%s] Daily iteration cap reached (%s/%s). Sleeping %ss until local midnight...\033[0m\n" \
+                    "$(date +%H:%M:%S)" "$DAILY_COUNT" "$RALPH_MAX_ITERATIONS_PER_DAY" "$WAIT_SECS"
+                sleep "$WAIT_SECS"
+                continue
+            fi
+        fi
         printf "\033[90m[%s] Checking limits...\033[0m" "$(date +%H:%M:%S)"
         LIMIT_PCT=$(check_claude_limits)
         LIMIT_PCT="${LIMIT_PCT:-0}"
@@ -263,6 +563,27 @@ while true; do
 
         break
     done
+
+    # Last line of defence: never invoke claude with an empty "## Your task"
+    # block. Both selection paths above already reject a failed lookup, so this
+    # only fires on an unforeseen shape — cheap enough to keep, since the cost of
+    # missing it is a wasted iteration plus one of the global task slots.
+    TASK_ID=$(_task_id_of "$TASK_JSON")
+    if [ -z "$TASK_ID" ]; then
+        printf "\033[31m[%s] Selected task has no id - skipping. Waiting %ss...\033[0m\n" "$(date +%H:%M:%S)" "$RALPH_WAIT_INTERVAL"
+        sleep "$RALPH_WAIT_INTERVAL"
+        continue
+    fi
+
+    # System-wide task-execution concurrency: request a slot from the
+    # agent-scheduler.sh broker (see ralph.md) before actually starting this
+    # iteration. All project loops run continuously and unthrottled — only
+    # the moment a loop is about to invoke claude for its next iteration is
+    # gated, so a project waiting for a slot still shows as a live, running
+    # tmux session (status "queued"), not stopped.
+    printf "\033[90m[%s] Requesting task-execution slot...\033[0m" "$(date +%H:%M:%S)"
+    request_task_slot
+    printf " \033[32mgranted\033[0m\n"
 
     ITERATION=$((ITERATION + 1))
     echo ""
@@ -281,7 +602,6 @@ while true; do
     cat "$PROMPT_FILE" > "$PROMPT_INPUT"
 
     # The loop owns task selection and state. Log the task, then start it.
-    TASK_ID=$(echo "$TASK_JSON" | jq -r '.id // ""' 2>/dev/null || echo "")
     TASK_SEQ=$(echo "$TASK_JSON" | jq -r '.sequence_id // "?"' 2>/dev/null || echo "?")
     TASK_NAME=$(echo "$TASK_JSON" | jq -r '.name // ""' 2>/dev/null || echo "")
     echo -e "\033[1;36m[$(date +%H:%M:%S)] Task #${TASK_SEQ}: ${TASK_NAME}\033[0m"
@@ -317,6 +637,26 @@ while true; do
     if [ -n "$TASK_MODEL_RAW" ]; then
         ITER_MODEL=$(resolve_model_alias "$TASK_MODEL_RAW")
         echo -e "\033[90m  model override: ${TASK_MODEL_RAW} → ${ITER_MODEL}\033[0m"
+    fi
+
+    # Per-task effort override: a task's description may contain "Effort: <level>"
+    # (low/medium/high/xhigh/max) to run just this task at a different reasoning
+    # depth than RALPH_EFFORT — e.g. "Effort: low" on a small, well-specified
+    # follow-up, or "Effort: xhigh" on a genuinely hard one. Falls back to the
+    # configured default when absent or invalid.
+    TASK_EFFORT_RAW=$(echo "$TASK_JSON" | jq -r '.description_html // ""' \
+        | grep -ioP '(?<=effort:)[[:space:]]*\K[a-z]+' | tail -1 || echo "")
+    ITER_EFFORT="$EFFORT"
+    if [ -n "$TASK_EFFORT_RAW" ]; then
+        case "${TASK_EFFORT_RAW,,}" in
+            low|medium|high|xhigh|max)
+                ITER_EFFORT="${TASK_EFFORT_RAW,,}"
+                echo -e "\033[90m  effort override: ${TASK_EFFORT_RAW} → ${ITER_EFFORT}\033[0m"
+                ;;
+            *)
+                echo -e "\033[33m  ignoring invalid effort override \"${TASK_EFFORT_RAW}\" — using ${ITER_EFFORT}\033[0m"
+                ;;
+        esac
     fi
 
     # Inject the task JSON directly so Claude already has it and does not fetch it.
@@ -372,12 +712,18 @@ while true; do
 
     echo -e "\033[90m[$(date +%H:%M:%S)] Working on task ${TASK_ID} (running Claude)...\033[0m"
 
+    ITER_STARTED_AT=$(date +%s)
+    LIVE_CTX=0
+    write_state "running"
+    state_watcher "$RAWFILE" &
+    WATCHER_PID=$!
+
     while IFS= read -r line; do
         if [ -n "$line" ]; then
             printf "\033[90m[%s]\033[0m %s\n" "$(date +%H:%M:%S)" "$line"
             echo "$line" >> "$TMPFILE"
         fi
-    done < <(cat "$PROMPT_INPUT" | claude --model "$ITER_MODEL" --print --verbose --dangerously-skip-permissions --output-format stream-json 2>/dev/null \
+    done < <(cat "$PROMPT_INPUT" | claude --model "$ITER_MODEL" --effort "$ITER_EFFORT" --print --verbose --dangerously-skip-permissions --output-format stream-json 2>/dev/null \
         | tee "$RAWFILE" \
         | grep --line-buffered '^{' \
         | jq --unbuffered -r '
@@ -430,6 +776,18 @@ while true; do
             end
         ')
 
+    kill "$WATCHER_PID" 2>/dev/null || true
+    wait "$WATCHER_PID" 2>/dev/null || true
+    WATCHER_PID=""
+
+    # Release the task-execution slot now that claude has finished — frees it
+    # up for the broker to grant to the next-highest-priority waiting repo.
+    release_task_slot
+
+    # Captured here, before ITER_STARTED_AT is reset to 0 below for the live
+    # status display.
+    ITER_ELAPSED_SECONDS=$(( $(date +%s) - ITER_STARTED_AT ))
+
     echo ""
 
     RESULT_JSON=$(grep '^{' "$RAWFILE" | jq -c 'select(.type == "result")' 2>/dev/null | tail -1 || echo "{}")
@@ -447,6 +805,13 @@ while true; do
     ITER_COST=${ITER_COST:-0}
     ITER_CTX_WINDOW=${ITER_CTX_WINDOW:-200000}
     ITER_TURNS=${ITER_TURNS:-0}
+
+    # Persist the real context window for the next iteration's live display,
+    # and mark this repo idle again now that the claude call has finished.
+    LIVE_CTX_WINDOW="$ITER_CTX_WINDOW"
+    ITER_STARTED_AT=0
+    LIVE_CTX=0
+    write_state "idle"
 
     PEAK_CTX=$(grep '^{' "$RAWFILE" | jq -r '
         select(.type == "assistant") |
@@ -470,8 +835,47 @@ while true; do
     TOTAL_OUTPUT=$((TOTAL_OUTPUT + ITER_OUT))
     TOTAL_COST=$(echo "$TOTAL_COST + $ITER_COST" | bc)
 
-    printf "\033[90m  tokens: in=%'d  out=%'d  turns=%d  peak ctx: %'d/%'d (%s%%)  cost=\$%s\033[0m\n" \
-        "$ITER_IN_TOTAL" "$ITER_OUT" "$ITER_TURNS" "$PEAK_CTX" "$ITER_CTX_WINDOW" "$PEAK_PCT" "$ITER_COST"
+    printf "\033[90m  tokens: in=%'d  out=%'d  turns=%d  peak ctx: %'d/%'d (%s%%)  cost=\$%s  elapsed=%ds\033[0m\n" \
+        "$ITER_IN_TOTAL" "$ITER_OUT" "$ITER_TURNS" "$PEAK_CTX" "$ITER_CTX_WINDOW" "$PEAK_PCT" "$ITER_COST" "$ITER_ELAPSED_SECONDS"
+
+    # Iteration post-mortem: when this iteration ran unusually long or used a
+    # lot of context, ask a cheap model to read back its own raw transcript
+    # ($RAWFILE) and explain why — repeated/failed tool calls, large file
+    # reads, a retry loop, excessive back-and-forth, or simply a large task —
+    # so whoever looks at the task afterward (or the Telegram "running long"
+    # alert, if it also fired) gets a cause, not just a bare duration/token
+    # count. Either RALPH_ANALYZE_SECONDS or RALPH_ANALYZE_TOKENS set to 0
+    # disables that trigger; best-effort, never fails the iteration. Both
+    # default to 0 as of v62, so this whole block is inert unless a project
+    # opts back in via its own .env (see load_env above).
+    ANALYSIS_HTML=""
+    ANALYZE_REASON=""
+    if [ "$RALPH_ANALYZE_SECONDS" -gt 0 ] 2>/dev/null && [ "$ITER_ELAPSED_SECONDS" -ge "$RALPH_ANALYZE_SECONDS" ]; then
+        ANALYZE_REASON="ran ${ITER_ELAPSED_SECONDS}s (>= ${RALPH_ANALYZE_SECONDS}s)"
+    fi
+    if [ "$RALPH_ANALYZE_TOKENS" -gt 0 ] 2>/dev/null && [ "$PEAK_CTX" -ge "$RALPH_ANALYZE_TOKENS" ]; then
+        [ -n "$ANALYZE_REASON" ] && ANALYZE_REASON="${ANALYZE_REASON}, "
+        ANALYZE_REASON="${ANALYZE_REASON}peak context ${PEAK_CTX} tokens (>= ${RALPH_ANALYZE_TOKENS})"
+    fi
+    if [ -n "$ANALYZE_REASON" ]; then
+        printf "\033[90m[%s] Analyzing why this iteration %s...\033[0m" "$(date +%H:%M:%S)" "$ANALYZE_REASON"
+        ANALYZE_MODEL=$(resolve_model_alias "$RALPH_ANALYZE_MODEL")
+        ANALYSIS_PROMPT_FILE=$(mktemp)
+        {
+            echo "You are reviewing one iteration's raw execution transcript (stream-json events, one per line) from an autonomous coding agent. This iteration ${ANALYZE_REASON}. In 2-4 sentences, explain the likely cause — repeated or failed tool calls, large file reads, a retry loop, excessive back-and-forth, or simply a large/complex task — so an operator glancing at the task can decide whether to intervene. Be concise and concrete. No preamble, no markdown headers."
+            echo ""
+            echo "Transcript excerpt (assistant turns only, truncated to the end):"
+            tail -c 400000 "$RAWFILE" 2>/dev/null | grep '^{' | jq -c 'select(.type=="assistant") | {type, content: (.message.content // empty)}' 2>/dev/null
+        } > "$ANALYSIS_PROMPT_FILE"
+        ANALYSIS_TEXT=$(cat "$ANALYSIS_PROMPT_FILE" | claude --model "$ANALYZE_MODEL" --print --dangerously-skip-permissions 2>/dev/null || echo "")
+        rm -f "$ANALYSIS_PROMPT_FILE"
+        if [ -n "$ANALYSIS_TEXT" ]; then
+            ANALYSIS_HTML="<p><strong>Why this iteration was slow/expensive:</strong> $(printf '%s' "$ANALYSIS_TEXT" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')</p>"
+            printf " \033[32mOK\033[0m\n"
+        else
+            printf " \033[33mskipped\033[0m\n"
+        fi
+    fi
 
     # End of iteration: post stats, then move the task to Review (default) or back to
     # Todo if the agent signaled <promise>TASK_BLOCKED</promise> (see PLANE.md.tpl
@@ -501,7 +905,7 @@ while true; do
         rm -f "$LOG_TXT"
 
         # Post stats (+ secret log link if the gist was created) and move the task.
-        ITER_COMMENT="<p><code>in=${ITER_IN_TOTAL}</code> <code>out=${ITER_OUT}</code> <code>turns=${ITER_TURNS}</code> <code>peak_ctx=${PEAK_CTX}/${ITER_CTX_WINDOW} (${PEAK_PCT}%)</code> <code>cost=\$${ITER_COST}</code></p>"
+        ITER_COMMENT="<p><code>in=${ITER_IN_TOTAL}</code> <code>out=${ITER_OUT}</code> <code>turns=${ITER_TURNS}</code> <code>peak_ctx=${PEAK_CTX}/${ITER_CTX_WINDOW} (${PEAK_PCT}%)</code> <code>cost=\$${ITER_COST}</code> <code>elapsed=${ITER_ELAPSED_SECONDS}s</code></p>${ANALYSIS_HTML}"
         if [ -n "$GIST_URL" ]; then
             ITER_COMMENT="${ITER_COMMENT}<p>Ralph logs (secret gist): <a href=\"${GIST_URL}\">${GIST_URL}</a></p>"
         fi
@@ -515,6 +919,12 @@ while true; do
     fi
 
     rm -f "$PROMPT_INPUT"
+
+    cleanup_docker_containers
+
+    # Count this iteration toward RALPH_MAX_ITERATIONS_PER_DAY regardless of
+    # outcome (blocked/done/no-signal) — one claude call = one iteration.
+    _increment_daily_iteration_count
 
     if [ "$TASK_BLOCKED" = true ]; then
         rm -f "$TMPFILE"
