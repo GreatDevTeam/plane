@@ -34,7 +34,7 @@ if [ "$CMD" = "screenshot" ] && [ -z "$OUT" ]; then
     exit 1
 fi
 
-DRIVER="$(mktemp --suffix=.mjs)"
+DRIVER="$(mktemp -p "$SCRIPT_DIR" --suffix=.mjs)"
 trap 'rm -f "$DRIVER"' EXIT
 
 cat > "$DRIVER" <<'EOF'

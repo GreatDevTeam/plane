@@ -18,10 +18,10 @@ Development loop using Plane.so as the task board. **The task you must work on i
 You never call state-transition commands yourself — signal the outcome via the promise markers in step 9 (`TASK_DONE` → Review, `TASK_BLOCKED` → Todo) and the loop performs the actual transition. Do **not** call `set-in-progress`, `set-review`, `set-todo`, `set-done`, or `set-cancelled`.
 
 - **Re-queue on test failure:** before each iteration the loop moves any **Review** task whose PR's `Run tests in container` check(s) **failed** back to **Todo** (only checks configured via `PR_CI_CHECK_PATTERNS` count — other checks are ignored). A re-picked task continues on its existing branch/PR — see _Iteration detection_. A task with no PR (see step 1 — a task requiring no repository changes skips branch/PR entirely) is never affected by this rule; that is expected, not a sign the loop missed it.
-- **New sub-tasks** you create default to **Backlog** (staging); pass `todo` as `create-task`'s 4th arg instead if the task is ready to be picked up immediately rather than needing manual triage. A new task also defaults to **this project's own label** — if this Plane project's board is shared with a sibling project split by label (e.g. the task is explicitly for that sibling, not this one), pass that sibling's label as `create-task`'s 5th arg instead of leaving it on this project's label, or the sibling's loop will never see it. Naming conventions for which labels route to an agent loop vary by Plane board — never assume a format from another project (e.g. do not assume a `ralph-<name>`-style prefix). A label nobody's loop is configured to watch will never be picked up by anyone. **Always run `docs/plane.sh list-labels` first and copy the sibling's exact name from there — never guess it, even if a name seems obvious.** **Always pass this task's own `<id>` as `create-task`'s 6th arg** so a link to the new task is automatically added to this task's description — do this for every sub-task you create, not just blocking ones (step 3.2.2).
-- **Blocking one task on another:** if a task cannot start until another one finishes, put `Blocked by: #<sequence_id>` in its description — `next-task` skips it until the blocker reaches Done/Cancelled. If it is safe to unblock as soon as the blocker's PR is up for review (e.g. a shared interface is already stable and will not change before merge), write `Blocked by: #<sequence_id> (review)` instead — it then unblocks once the blocker reaches its Review state. Default to the plain (Done-gated) form; only use `(review)` when you are confident merge-time changes to the blocker cannot affect the blocked task.
+- **New tasks default to Backlog, and only branch off when it enables parallel work.** Investigation findings, resolved questions, and anything else you learn while working this task belong in *this* task's own description (step 3.2) — do **not** create a separate task just to record them. Create a new task only when the split lets something genuinely proceed in parallel: a chunk that belongs to a sibling project's loop, or independent work another loop/operator can start now instead of waiting on this task to finish. For that kind of task, skip the default and pass `todo` (ready for an agent to pick up with no human decision needed) or `pre-ai` (needs an operator's approval/triage before an agent should touch it) as `create-task`'s 4th arg instead — see the `Model:`/`Effort:` bullet below for what its description must also contain. Everything else you file — unrelated future work, a nice-to-have, a lower-priority follow-up that nothing is waiting on — stays on the default **Backlog** state (leave the 4th arg unset); it is not picked up until manually moved. A new task also defaults to **this project's own label** — if this Plane project's board is shared with a sibling project split by label (e.g. the task is explicitly for that sibling, not this one), pass that sibling's label as `create-task`'s 5th arg instead of leaving it on this project's label, or the sibling's loop will never see it. Naming conventions for which labels route to an agent loop vary by Plane board — never assume a format from another project (e.g. do not assume a `ralph-<name>`-style prefix). A label nobody's loop is configured to watch will never be picked up by anyone. **Always run `docs/plane.sh list-labels` first and copy the sibling's exact name from there — never guess it, even if a name seems obvious.** **Always pass this task's own `<id>` as `create-task`'s 6th arg** so a link to the new task is automatically added to this task's description — do this for every task you create, not just blocking ones (step 3.2.2).
+- **Blocking one task on another:** if a task cannot start until another one finishes, put `Blocked by: #<sequence_id>` in its description — `next-task` skips it until the blocker reaches Done/Cancelled. If it is safe to unblock as soon as the blocker's PR is up for review (e.g. a shared interface is already stable and will not change before merge, or the blocker's branch does not need to be deployed to prod before this task can be implemented), write `Blocked by: #<sequence_id> (review)` instead — it then unblocks once the blocker reaches its Review state. Default to the plain (Done-gated) form; only use `(review)` when you are confident merge-time changes to the blocker cannot affect the blocked task. A task depending on more than one other task can list several `Blocked by: #<sequence_id>` lines, one per blocker — each is gated independently (plain or `(review)`), and the task stays skipped until every listed blocker has resolved.
 - **This task blocked on another:** if partway through you discover this task itself cannot proceed until another task finishes (see step 3.2.2), add `Blocked by: #<sequence_id>` to its own description using the same convention, then end the iteration with `<promise>TASK_BLOCKED</promise>` instead of `<promise>TASK_DONE</promise>`. The loop moves it back to **Todo** instead of Review, so `next-task` automatically skips it until the blocker resolves rather than it sitting in Review waiting on a human.
-- **Per-task model override:** a task's description can contain `Model: <name>` (e.g. `Model: opus`, `Model: sonnet`, `Model: haiku`, `Model: fable`, or a full model id like `claude-sonnet-5`) to run just that task on a different model than the loop's configured default. The loop reads this from the description before starting the iteration, so it has no effect if added mid-iteration — it only takes effect the next time the task starts (including on a re-pick after `TASK_BLOCKED`). Use this when creating a sub-task that is simple/cheap enough for a smaller model (e.g. `Model: haiku` on a small, well-specified follow-up).
+- **Per-task model/effort override, `Model:`/`Effort:` — always set both on every task you create.** A task's description can contain `Model: <name>` (e.g. `Model: opus`, `Model: sonnet`, `Model: haiku`, `Model: fable`, or a full model id like `claude-sonnet-5`) and `Effort: <level>` (`low`, `medium`, `high`, `xhigh`, or `max`) to run that task on a different model/reasoning-effort than the loop's configured default. Both are read from the description before the iteration starts, so neither has any effect if added mid-iteration — only the next time the task starts (including a re-pick after `TASK_BLOCKED`). Leaving them unset is not a neutral choice: an unset task inherits this project's own `RALPH_MODEL`/`RALPH_EFFORT`, which is normally the most capable and most expensive tier. Default a new task to the cheapest pairing it can actually succeed at — `Model: haiku` + `Effort: low` for a small, mechanical, fully-specified follow-up; `Model: sonnet` + `Effort: medium` for ordinary well-structured work; reserve `Model: opus` and `Effort: high`/`xhigh`/`max` for a task that is still ambiguous, exploratory, or genuinely hard. A cheap model only succeeds when the task needs no further discovery, so when filing one, write its investigation/checklist into the new task's own description up front (the same pattern as step 3.2) rather than leaving that for the cheaper tier to figure out.
 
 ## Plane API Helper
 
@@ -38,7 +38,7 @@ docs/plane.sh append-description <id>             # Append HTML to END of descri
 docs/plane.sh prepend-description <id>            # Prepend HTML to START of description (reads from stdin)
 docs/plane.sh set-branch <id> <branch>            # Append branch tag to description AND post a comment
 docs/plane.sh set-pr <id> <pr_url>                # Append PR link to description AND post a comment
-docs/plane.sh create-task <name> [desc] [priority] [backlog|todo] [label] [link_from_id]   # Create new task (priority: urgent|high|medium|low|none, default none — any other value is rejected loudly; default state: backlog, this project's own label — pass [label] to target a sibling project's label instead); with [link_from_id], also appends a link to the new task onto that task's description — pass <id> to link it from the task you are already working; put "Blocked by: #<seq>" or "Blocked by: #<seq> (review)" in desc to gate it on another task
+docs/plane.sh create-task <name> [desc] [priority] [backlog|todo|pre-ai] [label] [link_from_id]   # Create new task (priority: urgent|high|medium|low|none, default none — any other value is rejected loudly; default state: backlog — use todo/pre-ai only for parallel work, see Task states above; this project's own label — pass [label] to target a sibling project's label instead); with [link_from_id], also appends a link to the new task onto that task's description — pass <id> to link it from the task you are already working; put "Blocked by: #<seq>" or "Blocked by: #<seq> (review)" in desc to gate it on another task, and "Model: <name>"/"Effort: <level>" to set its cost tier (always include both — see Task states above)
 docs/plane.sh task-url <id>                        # Print an issue's web-app URL, e.g. to link an existing task (not just one you just created) from a comment
 docs/plane.sh upload-asset <file> <id> [project_id]       # Upload an image/file, attached to the task; prints {asset_id, embed_html}
 docs/plane.sh download-asset <asset_id> <out_path> <id> [project_id] # Download an asset attached to the task, to view it
@@ -54,7 +54,7 @@ docs/plane.sh list-images <id>                    # JSON array of asset ids embe
 > - ❌ WRONG: `set-pr <id> "$PR_URL"` immediately followed by `add-comment <id> "$(git log -1 ...)"` or `add-comment <id> "[PR #57](...)"`.
 > - ✅ RIGHT: `set-pr <id> "$PR_URL"` — and nothing else about the PR.
 
-When creating sub-tasks during implementation, use `backlog` (the default). They are not picked up until manually moved to **Todo**.
+When creating a task during implementation, use `backlog` (the default) unless it is needed for parallel work — see *Task states* above for when `todo`/`pre-ai` apply, and for the `Model:`/`Effort:` fields every new task's description must set.
 
 ## GitHub Helper
 
@@ -207,7 +207,7 @@ NEW_SEQ=$(echo "$NEW" | jq -r '.sequence_id')
 docs/plane.sh add-comment <id> "<p>Blocked on #${NEW_SEQ} — <reason>.</p>"
 printf '<p>Blocked by: #%s</p>' "$NEW_SEQ" | docs/plane.sh append-description <id>
 ```
-`create-task`'s 6th arg (`<id>`, the task you are already working) auto-appends a clickable link to the new task onto this task's description — the empty `""` 5th arg keeps the default label; pass an explicit sibling label there instead if the new task is for a different project (see *Task states*).
+`create-task`'s 6th arg (`<id>`, the task you are already working) auto-appends a clickable link to the new task onto this task's description — the empty `""` 5th arg keeps the default label; pass an explicit sibling label there instead if the new task is for a different project (see *Task states*). Include `Model:`/`Effort:` lines in `<desc>` too — every task you create needs them, and this one is exactly the well-specified kind (you already know why it is blocking and what it needs to do) that a cheaper tier can usually handle.
 ```
 <promise>TASK_BLOCKED</promise>
 ```
@@ -216,7 +216,7 @@ Append `(review)` after the sequence id (`Blocked by: #<blocker_sequence_id> (re
 
 3.3. Investigate the relevant code (if not done in 3.2).
 3.4. If questions arise before writing code, post them as a comment and stop the same way.
-3.5. Implement following all project rules in `CLAUDE.md`. After each checklist item, mark it done in the description (step 0.1 #3).
+3.5. Implement following all project rules in `CLAUDE.md`. After each checklist item, mark it done in the description (step 0.1 #3). This is a monorepo (`apps/api` Python, `apps/web` JS/TypeScript) — see step 4 for which quality gate applies to which side. `apps/web` has no test runner configured at all, so for a frontend-only change, step 3.6 ("add or update tests") does not apply; rely on step 4's lint/format/type checks instead.
 3.6. Add or update tests for changed functionality.
 
 ### 3.7. Investigate production errors via Elasticsearch (logs)
@@ -233,7 +233,9 @@ docs/elastic.sh indices
 
 ### 4. Run tests and quality gates
 
-**4.1. Run the test suite.** This repo tests with `pytest` (`apps/api/pytest.ini`). There is no Makefile — run everything (tests and lint) inside Docker Compose via `docker-compose-local.yml`; check that file for the correct service name, e.g.:
+This repo is a monorepo: `apps/api` (Python) and `apps/web` (JS/TypeScript) have entirely separate toolchains. Run the gate(s) that match what you actually changed — `git diff --name-only HEAD` to see which side(s) touched.
+
+**4.1. `apps/api` changes — run the test suite.** This repo tests with `pytest` (`apps/api/pytest.ini`). There is no Makefile — run everything (tests and lint) inside Docker Compose via `docker-compose-local.yml`; check that file for the correct service name, e.g.:
 
 ```bash
 docker compose -f docker-compose-local.yml run --rm <service> pytest
@@ -241,13 +243,25 @@ docker compose -f docker-compose-local.yml run --rm <service> pytest
 
 All tests must pass.
 
-**4.2. Run code quality checks:** This repo lints with `ruff check` only — no mypy, no bandit. Run it the same way, inside the same compose file:
+**4.2. `apps/api` changes — run code quality checks:** This repo lints with `ruff check` only — no mypy, no bandit. Run it the same way, inside the same compose file:
 
 ```bash
 docker compose -f docker-compose-local.yml run --rm <service> ruff check
 ```
 
-Fix all reported issues. **If a test or tool cannot run at all** (Docker/infra/connection failure rather than a code defect), post a comment describing it (step "Communication rules") and stop.
+Fix all reported issues.
+
+**4.3. `apps/web` changes — run the JS/TS checks.** `apps/web` has no test runner configured (its `package.json` scripts are only `dev`/`build`/`lint`/`format`/`types` — do not add one unless the task explicitly asks for it). Run the checks it does have, from `apps/web`:
+
+```bash
+pnpm --dir apps/web check:lint
+pnpm --dir apps/web check:format
+pnpm --dir apps/web check:types
+```
+
+Fix all reported issues.
+
+**If a test or tool cannot run at all** (Docker/infra/connection failure rather than a code defect), post a comment describing it (step "Communication rules") and stop.
 
 ### 5. Commit and push
 
