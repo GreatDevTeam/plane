@@ -19,7 +19,7 @@ You never call state-transition commands yourself — signal the outcome via the
 
 - **Re-queue on test failure:** before each iteration the loop moves any **Review** task whose PR's `Run tests in container` check(s) **failed** back to **Todo** (only checks configured via `PR_CI_CHECK_PATTERNS` count — other checks are ignored). A re-picked task continues on its existing branch/PR — see _Iteration detection_. A task with no PR (see step 1 — a task requiring no repository changes skips branch/PR entirely) is never affected by this rule; that is expected, not a sign the loop missed it.
 - **Re-queue on merge conflict:** the same pre-iteration sweep also moves any **Review** task whose PR now **conflicts** with its base branch back to **Todo**, and appends `Effort: medium` to its description so the re-pick does not run cheaper than the original tier just because that was set before the conflict existed. A re-picked task continues on its existing branch/PR the same way — see _Iteration detection_ — so resolve the conflict there (rebase or merge the base branch in) rather than starting a new branch.
-- **New tasks default to Backlog, and only branch off when it enables parallel work.** Investigation findings, resolved questions, and anything else you learn while working this task belong in *this* task's own description (step 3.2) — do **not** create a separate task just to record them. Create a new task only when the split lets something genuinely proceed in parallel: a chunk that belongs to a sibling project's loop, or independent work another loop/operator can start now instead of waiting on this task to finish. For that kind of task, skip the default and pass `todo` (ready for an agent to pick up with no human decision needed) or `pre-ai` (needs an operator's approval/triage before an agent should touch it) as `create-task`'s 4th arg instead — see the `Model:`/`Effort:` bullet below for what its description must also contain. Everything else you file — unrelated future work, a nice-to-have, a lower-priority follow-up that nothing is waiting on — stays on the default **Backlog** state (leave the 4th arg unset); it is not picked up until manually moved. A new task also defaults to **this project's own label** — if this Plane project's board is shared with a sibling project split by label (e.g. the task is explicitly for that sibling, not this one), pass that sibling's label as `create-task`'s 5th arg instead of leaving it on this project's label, or the sibling's loop will never see it. Naming conventions for which labels route to an agent loop vary by Plane board — never assume a format from another project (e.g. do not assume a `ralph-<name>`-style prefix). A label nobody's loop is configured to watch will never be picked up by anyone. **Always run `docs/plane.sh list-labels` first and copy the sibling's exact name from there — never guess it, even if a name seems obvious.** **Always pass this task's own `<id>` as `create-task`'s 6th arg** so a link to the new task is automatically added to this task's description — do this for every task you create, not just blocking ones (step 3.2.2).
+- **New tasks default to Backlog, and only branch off when it enables parallel work.** Investigation findings, resolved questions, and anything else you learn while working this task belong in _this_ task's own description (step 3.2) — do **not** create a separate task just to record them. Create a new task only when the split lets something genuinely proceed in parallel: a chunk that belongs to a sibling project's loop, or independent work another loop/operator can start now instead of waiting on this task to finish. For that kind of task, skip the default and pass `todo` (ready for an agent to pick up with no human decision needed) or `pre-ai` (needs an operator's approval/triage before an agent should touch it) as `create-task`'s 4th arg instead — see the `Model:`/`Effort:` bullet below for what its description must also contain. Everything else you file — unrelated future work, a nice-to-have, a lower-priority follow-up that nothing is waiting on — stays on the default **Backlog** state (leave the 4th arg unset); it is not picked up until manually moved. A new task also defaults to **this project's own label** — if this Plane project's board is shared with a sibling project split by label (e.g. the task is explicitly for that sibling, not this one), pass that sibling's label as `create-task`'s 5th arg instead of leaving it on this project's label, or the sibling's loop will never see it. Naming conventions for which labels route to an agent loop vary by Plane board — never assume a format from another project (e.g. do not assume a `ralph-<name>`-style prefix). A label nobody's loop is configured to watch will never be picked up by anyone. **Always run `docs/plane.sh list-labels` first and copy the sibling's exact name from there — never guess it, even if a name seems obvious.** **Always pass this task's own `<id>` as `create-task`'s 6th arg** so a link to the new task is automatically added to this task's description — do this for every task you create, not just blocking ones (step 3.2.2).
 - **Blocking one task on another:** if a task cannot start until another one finishes, put `Blocked by: #<sequence_id>` in its description — `next-task` skips it until the blocker reaches Done/Cancelled. If it is safe to unblock as soon as the blocker's PR is up for review (e.g. a shared interface is already stable and will not change before merge, or the blocker's branch does not need to be deployed to prod before this task can be implemented), write `Blocked by: #<sequence_id> (review)` instead — it then unblocks once the blocker reaches its Review state. Default to the plain (Done-gated) form; only use `(review)` when you are confident merge-time changes to the blocker cannot affect the blocked task. A task depending on more than one other task can list several `Blocked by: #<sequence_id>` lines, one per blocker — each is gated independently (plain or `(review)`), and the task stays skipped until every listed blocker has resolved.
 - **This task blocked on another:** if partway through you discover this task itself cannot proceed until another task finishes (see step 3.2.2), add `Blocked by: #<sequence_id>` to its own description using the same convention, then end the iteration with `<promise>TASK_BLOCKED</promise>` instead of `<promise>TASK_DONE</promise>`. The loop moves it back to **Todo** instead of Review, so `next-task` automatically skips it until the blocker resolves rather than it sitting in Review waiting on a human.
 - **Per-task model/effort override, `Model:`/`Effort:` — always set both on every task you create.** A task's description can contain `Model: <name>` (e.g. `Model: opus`, `Model: sonnet`, `Model: haiku`, `Model: fable`, or a full model id like `claude-sonnet-5`) and `Effort: <level>` (`low`, `medium`, `high`, `xhigh`, or `max`) to run that task on a different model/reasoning-effort than the loop's configured default. Both are read from the description before the iteration starts, so neither has any effect if added mid-iteration — only the next time the task starts (including a re-pick after `TASK_BLOCKED`). Leaving them unset is not a neutral choice: an unset task inherits this project's own `RALPH_MODEL`/`RALPH_EFFORT`, which is normally the most capable and most expensive tier. Default a new task to the cheapest pairing it can actually succeed at — `Model: haiku` + `Effort: low` for a small, mechanical, fully-specified follow-up; `Model: sonnet` + `Effort: medium` for ordinary well-structured work; reserve `Model: opus` and `Effort: high`/`xhigh`/`max` for a task that is still ambiguous, exploratory, or genuinely hard. A cheap model only succeeds when the task needs no further discovery, so when filing one, write its investigation/checklist into the new task's own description up front (the same pattern as step 3.2) rather than leaving that for the cheaper tier to figure out.
@@ -47,6 +47,7 @@ docs/plane.sh list-images <id>                    # JSON array of asset ids embe
 ```
 
 **Images in comments/descriptions.** Plane embeds uploaded images as `<image-component src="<asset_id>" width="35%" height="auto" alignment="left"></image-component>` — `src` is an asset UUID, not a literal URL.
+
 - **To view an image already on the task** (e.g. a screenshot in the description or in a comment): each entry in the injected `comments` array carries an `images` field listing any embedded asset ids (comments-only; the description itself is left as raw `description_html`, so scan it directly for `<image-component src="...">` if you need images from there too — or just run `list-images <id>` to get every image id from both in one call). Then `download-asset <asset_id> <local_path> <id>` and read the local file to view it.
 - **To embed a new image** (e.g. a screenshot you captured to illustrate a bug or a UI change): `upload-asset <file> <id>` uploads it, attached to the task you're already working, and prints `embed_html` — splice that string directly into the HTML you pass to `add-comment`/`update-description`/`append-description`/`prepend-description`.
 
@@ -55,7 +56,7 @@ docs/plane.sh list-images <id>                    # JSON array of asset ids embe
 > - ❌ WRONG: `set-pr <id> "$PR_URL"` immediately followed by `add-comment <id> "$(git log -1 ...)"` or `add-comment <id> "[PR #57](...)"`.
 > - ✅ RIGHT: `set-pr <id> "$PR_URL"` — and nothing else about the PR.
 
-When creating a task during implementation, use `backlog` (the default) unless it is needed for parallel work — see *Task states* above for when `todo`/`pre-ai` apply, and for the `Model:`/`Effort:` fields every new task's description must set.
+When creating a task during implementation, use `backlog` (the default) unless it is needed for parallel work — see _Task states_ above for when `todo`/`pre-ai` apply, and for the `Model:`/`Effort:` fields every new task's description must set.
 
 ## GitHub Helper
 
@@ -82,7 +83,7 @@ The task is in the `## Your task` JSON appended to this prompt. It is **already 
 - `name` — task title
 - `description_html` — description (HTML)
 - `priority`
-- `comments` — array of `{id, body, images, created_at}` (may be empty); `images` lists any embedded image asset ids (see *Images in comments/descriptions* above)
+- `comments` — array of `{id, body, images, created_at}` (may be empty); `images` lists any embedded image asset ids (see _Images in comments/descriptions_ above)
 - `pr_unresolved_threads` — unresolved GitHub PR review threads, already fetched by the automation (`[]` if no branch/PR exists yet)
 
 ### 0.1. Sync comments to description checklist
@@ -135,7 +136,7 @@ docs/plane.sh add-comment <id> "<p>Answer: …</p>"
 
 ### 1. Create a git branch
 
-**If the task requires no repository changes** (e.g. Plane-pages-only docs work, a test/verification task, or investigation that concludes nothing needs to change in this repo): skip steps 1–6 entirely — no branch, no test/quality-gate run, no commit, no PR — post a comment summarizing what was found/done instead, then go straight to step 7 (post-task analysis — still mandatory, never skipped) and step 9 (signal completion). This task will never be re-queued by *Re-queue on test failure* above, since it has no PR/CI checks to key off — that is expected, not a loop failure.
+**If the task requires no repository changes** (e.g. Plane-pages-only docs work, a test/verification task, or investigation that concludes nothing needs to change in this repo): skip steps 1–6 entirely — no branch, no test/quality-gate run, no commit, no PR — post a comment summarizing what was found/done instead, then go straight to step 7 (post-task analysis — still mandatory, never skipped) and step 9 (signal completion). This task will never be re-queued by _Re-queue on test failure_ above, since it has no PR/CI checks to key off — that is expected, not a loop failure.
 
 If `description_html` mentions a specific branch (e.g. "implement in branch X" or "branch: X"), use that name. Otherwise generate one.
 
@@ -185,9 +186,11 @@ printf '<hr/><p><strong>Investigation:</strong></p><p>…</p><p><strong>Checklis
 ```
 
 If questions surface during investigation, post them as a comment and stop — this "post and stop" pattern (comment, then emit the completion signal, nothing else) recurs at every stopping point below:
+
 ```bash
 docs/plane.sh add-comment <id> "<p>Question: …</p>"
 ```
+
 ```
 <promise>TASK_DONE</promise>
 ```
@@ -200,7 +203,7 @@ If no questions, continue to implementation using the checklist you just wrote.
 docs/plane.sh add-comment <id> "<p>Technical blockers:</p><ul><li>…</li></ul>"
 ```
 
-3.2.2. **If part of this task's own work needs to be split off into a new task that must finish before you can continue** (e.g. investigation reveals a chunk is out of scope for this task, or has to land first as its own PR) — create that new task and make it a blocker on this one, rather than filing it as an independent follow-up. This is different from the ordinary **New sub-tasks** case (*Task states* above): most tasks you create during implementation are unrelated future work, and this task keeps going without waiting on them — only use this flow when this task genuinely cannot proceed until the new one is done. (The same flow also covers discovering a dependency on an already-existing task, not just one you create here.) Either way this needs no human answer and resolves itself automatically once the blocker is done, so do not use the "post and stop" `TASK_DONE` pattern. Instead:
+3.2.2. **If part of this task's own work needs to be split off into a new task that must finish before you can continue** (e.g. investigation reveals a chunk is out of scope for this task, or has to land first as its own PR) — create that new task and make it a blocker on this one, rather than filing it as an independent follow-up. This is different from the ordinary **New sub-tasks** case (_Task states_ above): most tasks you create during implementation are unrelated future work, and this task keeps going without waiting on them — only use this flow when this task genuinely cannot proceed until the new one is done. (The same flow also covers discovering a dependency on an already-existing task, not just one you create here.) Either way this needs no human answer and resolves itself automatically once the blocker is done, so do not use the "post and stop" `TASK_DONE` pattern. Instead:
 
 ```bash
 NEW=$(docs/plane.sh create-task "<name>" "<desc>" <priority> todo "" <id>)
@@ -208,18 +211,22 @@ NEW_SEQ=$(echo "$NEW" | jq -r '.sequence_id')
 docs/plane.sh add-comment <id> "<p>Blocked on #${NEW_SEQ} — <reason>.</p>"
 printf '<p>Blocked by: #%s</p>' "$NEW_SEQ" | docs/plane.sh append-description <id>
 ```
-`create-task`'s 6th arg (`<id>`, the task you are already working) sets the new task as its Plane sub-issue (native `parent` field) and auto-appends a clickable link to the new task onto this task's description — the empty `""` 5th arg keeps the default label; pass an explicit sibling label there instead if the new task is for a different project (see *Task states*). Include `Model:`/`Effort:` lines in `<desc>` too — every task you create needs them, and this one is exactly the well-specified kind (you already know why it is blocking and what it needs to do) that a cheaper tier can usually handle.
+
+`create-task`'s 6th arg (`<id>`, the task you are already working) sets the new task as its Plane sub-issue (native `parent` field) and auto-appends a clickable link to the new task onto this task's description — the empty `""` 5th arg keeps the default label; pass an explicit sibling label there instead if the new task is for a different project (see _Task states_). Include `Model:`/`Effort:` lines in `<desc>` too — every task you create needs them, and this one is exactly the well-specified kind (you already know why it is blocking and what it needs to do) that a cheaper tier can usually handle.
+
 ```
 <promise>TASK_BLOCKED</promise>
 ```
 
-Append `(review)` after the sequence id (`Blocked by: #<blocker_sequence_id> (review)`) if it is safe to unblock as soon as the blocker's PR is up for review rather than waiting for it to merge — see *Task states*.
+Append `(review)` after the sequence id (`Blocked by: #<blocker_sequence_id> (review)`) if it is safe to unblock as soon as the blocker's PR is up for review rather than waiting for it to merge — see _Task states_.
 
 3.3. Investigate the relevant code (if not done in 3.2).
 3.4. If questions arise before writing code, post them as a comment and stop the same way.
 3.5. Implement following all project rules in `CLAUDE.md`. After each checklist item, mark it done in the description (step 0.1 #3). This is a monorepo (`apps/api` Python, `apps/web` JS/TypeScript) — see step 4 for which quality gate applies to which side. `apps/web` has no test runner configured at all, so for a frontend-only change, step 3.6 ("add or update tests") does not apply; rely on step 4's lint/format/type checks instead.
 
-**Never act on a background command's output before it has actually finished.** If a command (a test run, a build, anything started with the backgrounding option) is still running, do not edit files, draw conclusions, or move to the next step based on its partial/incomplete output — block until it completes (poll its status, or use whatever mechanism reports completion) before reading its result. Saying "I'll wait for this to finish" and then continuing with other work anyway is worse than not backgrounding it at all, since it produces changes made on wrong or incomplete information without any indication that happened.
+**Never act on a background command's output before it has actually finished.** If a command (a test run, a build, anything started with the backgrounding option) is still running, do not edit files, draw conclusions, or move to the next step based on its partial/incomplete output — block until it completes before reading its result. That means either running it in the foreground so the tool call itself blocks, or, if it must be backgrounded, actively polling your own bounded `sleep N && <status-check>` loop and reading the full, untruncated status each check (a `| tail -N` read of a still-running command's log is exactly the kind of partial output this rule forbids, even if it looks conclusive). Saying "I'll wait for this to finish" and then continuing with other work anyway is worse than not backgrounding it at all, since it produces changes made on wrong or incomplete information without any indication that happened.
+
+**This iteration is a single non-interactive process — nothing outside it will ever wake it back up.** Do not call a scheduled-wakeup/notification tool (e.g. `ScheduleWakeup`) or otherwise assume a backgrounded command (a deploy, `gh run watch`, a long build) will notify you or resume your session when it finishes. There is no scheduler watching this run; if the turn ends before the command completes, that wait is simply lost, not resumed — the loop's next iteration starts a brand-new session with no memory of it. If a command is genuinely too slow to finish within one iteration, treat it as a stopping point instead of idling: say in a comment what you started and what is still pending, then stop (`TASK_DONE`, or `TASK_BLOCKED` if later work must gate on it finishing).
 3.6. Add or update tests for changed functionality.
 
 ### 3.7. Investigate production errors via Elasticsearch (logs)
@@ -298,7 +305,7 @@ PR_URL=$(docs/github.sh create-pr master <branch> "<task name>" "Plane task: <se
 docs/plane.sh set-pr <id> "$PR_URL"
 ```
 
-`set-pr` posts the comment too (see the CRITICAL note under *Plane API Helper*) — recording the PR is **done** after this call; do not follow it with another `add-comment` about the PR.
+`set-pr` posts the comment too (see the CRITICAL note under _Plane API Helper_) — recording the PR is **done** after this call; do not follow it with another `add-comment` about the PR.
 
 ### 7. Post-task analysis (mandatory — run every iteration, never skip)
 
@@ -331,6 +338,7 @@ Either signal starts a fresh session for the next task; without one, the loop st
 ## Commit rules
 
 ### Format
+
 ```
 type: short description
 
@@ -339,8 +347,10 @@ type: short description
 ```
 
 ### Types
+
 `feat` · `improvement` · `fix` · `refactor` · `docs` · `test` · `chore`
 
 ### Rules
+
 - Do NOT add "Generated with Claude Code" or similar attribution
 - Do NOT add "Co-Authored-By" lines
