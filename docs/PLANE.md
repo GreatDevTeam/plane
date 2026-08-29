@@ -346,3 +346,4 @@ type: short description
 ### Rules
 - Do NOT add "Generated with Claude Code" or similar attribution
 - Do NOT add "Co-Authored-By" lines
+*emphasis* and `PR_CI_CHECK_PATTERNS`

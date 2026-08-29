@@ -26,14 +26,6 @@
     "oxlint": "1.51.0",
     "turbo": "2.9.4"
   },
-  "lint-staged": {
-    "*.{js,jsx,ts,tsx,cjs,mjs,cts,mts,json,css,md}": [
-      "pnpm exec oxfmt --no-error-on-unmatched-pattern"
-    ],
-    "*.{js,jsx,ts,tsx,cjs,mjs,cts,mts}": [
-      "pnpm exec oxlint --fix --deny-warnings"
-    ]
-  },
   "engines": {
     "node": ">=22.18.0"
   },
