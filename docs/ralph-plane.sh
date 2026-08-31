@@ -387,8 +387,16 @@ check_claude_limits() {
     # Strip ANSI escape codes before parsing (output differs in non-interactive mode)
     local clean
     clean=$(printf '%s' "$output" | sed 's/\x1b\[[0-9;]*m//g')
-    CLAUDE_SESSION_PCT=$(printf '%s' "$clean" | grep "Current session:" | sed -n 's/.*: \([0-9]*\)% used.*/\1/p')
-    CLAUDE_WEEK_PCT=$(printf '%s' "$clean" | grep "Current week (all models):" | sed -n 's/.*: \([0-9]*\)% used.*/\1/p')
+    # The `|| true` on each pipeline matters under `set -o pipefail`: grep exits 1
+    # when "Current session:"/"Current week (all models):" is not found (a
+    # transient `claude -p "/usage"` hiccup or output-format change), which would
+    # otherwise propagate through the pipe and, being an unguarded assignment,
+    # kill the whole loop under `set -e` (same bug class as cleanup_docker_containers,
+    # see v53 — this function used the same unguarded pattern and was never fixed).
+    # The existing ${CLAUDE_SESSION_PCT:-99}/${CLAUDE_WEEK_PCT:-99} fallback below
+    # already treats an empty match as "near limit", so this is a pure crash fix.
+    CLAUDE_SESSION_PCT=$(printf '%s' "$clean" | grep "Current session:" | sed -n 's/.*: \([0-9]*\)% used.*/\1/p') || true
+    CLAUDE_WEEK_PCT=$(printf '%s' "$clean" | grep "Current week (all models):" | sed -n 's/.*: \([0-9]*\)% used.*/\1/p') || true
     CLAUDE_SESSION_PCT="${CLAUDE_SESSION_PCT:-99}"
     CLAUDE_WEEK_PCT="${CLAUDE_WEEK_PCT:-99}"
 }
@@ -409,7 +417,7 @@ sweep_failed_tests() {
         id=$(echo "$review_json" | jq -r ".[$i].id")
         seq=$(echo "$review_json" | jq -r ".[$i].sequence_id // \"?\"")
         branch=$(echo "$review_json" | jq -r ".[$i].description_html // \"\"" \
-            | grep -oP '(?<=Branch: <code>)[^<]+' | tail -1 || echo "")
+            | grep -oP 'Branch: <code[^>]*>\K[^<]+' | tail -1 || echo "")
         [ -z "$branch" ] && continue
         status=$("$RALPH_DIR/github.sh" tests-status "$branch" 2>/dev/null || echo "NONE")
         if [ "$status" = "FAILURE" ]; then
@@ -447,7 +455,7 @@ sweep_merge_conflicts() {
         id=$(echo "$review_json" | jq -r ".[$i].id")
         seq=$(echo "$review_json" | jq -r ".[$i].sequence_id // \"?\"")
         branch=$(echo "$review_json" | jq -r ".[$i].description_html // \"\"" \
-            | grep -oP '(?<=Branch: <code>)[^<]+' | tail -1 || echo "")
+            | grep -oP 'Branch: <code[^>]*>\K[^<]+' | tail -1 || echo "")
         [ -z "$branch" ] && continue
         mergeable=$("$RALPH_DIR/github.sh" mergeable "$branch" 2>/dev/null || echo "NONE")
         if [ "$mergeable" = "CONFLICTING" ]; then
@@ -715,7 +723,7 @@ while true; do
     # is already assigned) so the agent does not have to fetch them itself every
     # iteration (formerly PLANE.md.tpl step 0.1's manual unresolved-threads call).
     TASK_BRANCH=$(echo "$TASK_JSON" | jq -r '.description_html // ""' \
-        | grep -oP '(?<=Branch: <code>)[^<]+' | tail -1 || echo "")
+        | grep -oP 'Branch: <code[^>]*>\K[^<]+' | tail -1 || echo "")
     PR_THREADS="[]"
     if [ -n "$TASK_BRANCH" ]; then
         PR_THREADS=$("$RALPH_DIR/github.sh" unresolved-threads "$TASK_BRANCH" 2>/dev/null || echo "[]")

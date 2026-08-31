@@ -155,7 +155,7 @@ docs/plane.sh set-branch <id> <branch>
 If the description already contains a `Branch: <code>…</code>` tag (written by `set-branch` in a prior iteration), this task is continuing. Detect the existing PR state:
 
 ```bash
-BRANCH=$(docs/plane.sh get-issue <id> | jq -r '.description_html' | grep -oP '(?<=Branch: <code>)[^<]+' | tail -1)
+BRANCH=$(docs/plane.sh get-issue <id> | jq -r '.description_html' | grep -oP 'Branch: <code[^>]*>\K[^<]+' | tail -1)
 PR_STATE=$(docs/github.sh pr-state "$BRANCH")
 ```
 

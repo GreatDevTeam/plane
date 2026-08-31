@@ -35,7 +35,7 @@
 #   docs/plane.sh set-done <id>                          — move issue to Done (operator-triggered only)
 #   docs/plane.sh set-cancelled <id>                     — move issue to Cancelled (operator-triggered only)
 #   docs/plane.sh get-issue <id>                         — print full issue JSON
-#   docs/plane.sh get-task <PROJECT-123>                 — look up an issue by its human-readable ref (e.g. TM-808) and print full issue JSON + comments
+#   docs/plane.sh get-task <PROJECT-123>                 — look up an issue by its human-readable ref (e.g. TM-808) and print full issue JSON + comments; this is the ONLY command that accepts a ref — every other command below (including every set-* one) needs the UUID from this call's .id field instead. Passing a ref to one of those is not an obvious error: it returns a 404 with an all-null-fields JSON body, not a clear "not found."
 #   docs/plane.sh list-states                            — print all project states
 #   docs/plane.sh list-labels                            — print all project labels [{id,name}] (e.g. to find a sibling project's label for create-task)
 #   docs/plane.sh list-projects                          — print all workspace projects
