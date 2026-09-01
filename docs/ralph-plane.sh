@@ -1023,10 +1023,10 @@ while true; do
     # the API rejecting a request on rate-limit grounds — the subscription's
     # usage limit was hit mid-iteration, not caught by the pre-iteration
     # check_claude_limits gate above (which only checks before an iteration
-    # starts). Treated like TASK_BLOCKED (→ Todo, not Review) rather than the
-    # "no signal" fallback below, but additionally persists RUN_SESSION_ID so
-    # the next pickup resumes this exact Claude session (see
-    # ITER_RESUME_SESSION_ID/--resume above) instead of restarting cold.
+    # starts). Treated like TASK_BLOCKED (→ Todo, not Review), and (like the
+    # NO_SIGNAL case below) persists RUN_SESSION_ID so the next pickup resumes
+    # this exact Claude session (see ITER_RESUME_SESSION_ID/--resume above)
+    # instead of restarting cold.
     RATE_LIMITED=false
     if [ "$TASK_BLOCKED" = false ] && [ "$TASK_DONE_SIGNAL" = false ]; then
         if grep '^{' "$RAWFILE" 2>/dev/null | jq -e '
@@ -1034,6 +1034,31 @@ while true; do
         ' >/dev/null 2>&1; then
             RATE_LIMITED=true
         fi
+    fi
+
+    # True "no signal" fallback: neither promise fired, and not a rate-limit
+    # cutoff either — the claude subprocess's stdout pipe closed (it actually
+    # exited) without ever emitting TASK_DONE/TASK_BLOCKED. An earlier version
+    # of this fix tried to tell "aborted with nothing to review" apart from
+    # "aborted after work was already pushed" by re-fetching the description
+    # and checking for a Branch: tag, routing to Todo only when one was
+    # absent — but plenty of legitimate tasks never get a branch at all (see
+    # step 1: a task needing no repository changes skips branch/PR entirely
+    # and finishes via TASK_DONE alone), so "no branch" is not a reliable
+    # stand-in for "nothing happened" (operator feedback on this very task,
+    # #1556, live). Simpler and more robust: treat *every* true no-signal
+    # outcome the same way RATE_LIMITED already is — move to Todo and, if a
+    # session id was captured, persist it as Resume-Session so the next
+    # pickup reconnects to the exact same Claude conversation (--resume)
+    # instead of the loop trying to infer a finished/unfinished state from
+    # artifacts. This is what actually addresses task #1533's failure mode:
+    # the agent had backgrounded a test run and was mid-wait when the turn
+    # ended — resuming that same session lets it pick back up, check the
+    # real result, and finish properly (commit/push/create-pr/promise)
+    # instead of losing that context and starting cold.
+    NO_SIGNAL=false
+    if [ "$TASK_BLOCKED" = false ] && [ "$TASK_DONE_SIGNAL" = false ] && [ "$RATE_LIMITED" = false ]; then
+        NO_SIGNAL=true
     fi
 
     if [ -n "$TASK_ID" ]; then
@@ -1046,7 +1071,7 @@ while true; do
         fi
 
         NEXT_STATE_LABEL="Review"
-        if [ "$TASK_BLOCKED" = true ] || [ "$RATE_LIMITED" = true ]; then
+        if [ "$TASK_BLOCKED" = true ] || [ "$RATE_LIMITED" = true ] || [ "$NO_SIGNAL" = true ]; then
             NEXT_STATE_LABEL="Todo"
         fi
         printf "\033[90m[%s] Finishing task %s (→ %s)...\033[0m" "$(date +%H:%M:%S)" "$TASK_ID" "$NEXT_STATE_LABEL"
@@ -1078,8 +1103,16 @@ while true; do
                 ITER_COMMENT="${ITER_COMMENT}<p>⏱ Hit the Claude usage limit mid-iteration — moved back to Todo. No session id was captured to resume from, so the next pickup starts a fresh session.</p>"
             fi
         fi
+        if [ "$NO_SIGNAL" = true ]; then
+            if [ -n "$RUN_SESSION_ID" ]; then
+                printf '<p>Resume-Session: %s</p>' "$RUN_SESSION_ID" | "$RALPH_DIR/plane.sh" append-description "$TASK_ID" >/dev/null 2>&1 || true
+                ITER_COMMENT="${ITER_COMMENT}<p>⚠ Iteration ended with no TASK_DONE/TASK_BLOCKED signal — moved back to Todo; the next pickup will resume this exact Claude session (<code>${RUN_SESSION_ID}</code>) instead of starting cold, so it can pick back up (e.g. check on a backgrounded command it was mid-wait on) and finish properly. See the gist log above for what the agent was doing when it stopped.</p>"
+            else
+                ITER_COMMENT="${ITER_COMMENT}<p>⚠ Iteration ended with no TASK_DONE/TASK_BLOCKED signal and no session id was captured — moved back to Todo; the next pickup starts a fresh session. See the gist log above for what the agent was doing when it stopped.</p>"
+            fi
+        fi
         "$RALPH_DIR/plane.sh" add-comment "$TASK_ID" "$ITER_COMMENT" 2>/dev/null || true
-        if [ "$TASK_BLOCKED" = true ] || [ "$RATE_LIMITED" = true ]; then
+        if [ "$TASK_BLOCKED" = true ] || [ "$RATE_LIMITED" = true ] || [ "$NO_SIGNAL" = true ]; then
             "$RALPH_DIR/plane.sh" set-todo "$TASK_ID" 2>/dev/null || true
         else
             "$RALPH_DIR/plane.sh" set-review "$TASK_ID" 2>/dev/null || true
@@ -1114,6 +1147,13 @@ while true; do
         rm -f "$TMPFILE"
         echo ""
         echo -e "\033[90m[$(date +%H:%M:%S)]\033[0m \033[1;33m── Task ${TASK_ID} done. Starting fresh session (iteration $ITERATION) ──\033[0m"
+        echo ""
+        continue
+    fi
+    if [ "$NO_SIGNAL" = true ]; then
+        rm -f "$TMPFILE"
+        echo ""
+        echo -e "\033[90m[$(date +%H:%M:%S)]\033[0m \033[1;31m── Task ${TASK_ID} ended with no signal — moved back to Todo${RUN_SESSION_ID:+, will resume session ${RUN_SESSION_ID}}. Starting fresh session (iteration $ITERATION) ──\033[0m"
         echo ""
         continue
     fi
