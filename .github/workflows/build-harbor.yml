@@ -72,3 +72,53 @@ jobs:
           tags: |
             ${{ env.DOCKER_REGISTRY }}/${{ matrix.name }}:${{ steps.tag.outputs.tag }}
             ${{ env.DOCKER_REGISTRY }}/${{ matrix.name }}:custom
+
+  deploy_k8s:
+    name: Roll out to k8s (plane namespace)
+    runs-on: [self-hosted, linux]
+    needs: build
+    timeout-minutes: 10
+    steps:
+      # Consul (10.10.0.28:8500) is reachable directly from the self-hosted runners --
+      # they sit on the same internal 10.10.0.x network as the cluster, no relay/secret
+      # needed. Mirrors the kubeconfig-from-Consul step used by jobscanner-python's own
+      # `deploy_jobscanner_prod`/`deploy_talentmediator_prod` jobs in k8s-stack's sibling repo.
+      - name: Fetch kubeconfig from Consul
+        env:
+          CONSUL_ADDR: http://10.10.0.28:8500
+        run: |
+          set -euo pipefail
+          KCFG="$RUNNER_TEMP/kubeconfig"
+          curl -fsS "$CONSUL_ADDR/v1/kv/config/k8s/kubeconfig?raw" > "$KCFG"
+          chmod 600 "$KCFG"
+          echo "KUBECONFIG=$KCFG" >> "$GITHUB_ENV"
+
+      # charts/plane/values.yaml (k8s-stack) pins planeVersion to the floating tag
+      # "custom" -- every build above pushes to the same tag, so the pod spec's image
+      # string never changes and `kubectl set image` would always be a no-op. The chart's
+      # imagePullPolicy is Always, so a plain `rollout restart` is enough to force each
+      # deployment to re-pull the digest just pushed. Deployment names are the release's
+      # (plane-app) `-wl` workload names -- keep this list in sync with
+      # k8s-stack's charts/plane/values.yaml if a component is added/removed there.
+      - name: Restart plane deployments to pick up :custom image
+        run: |
+          set -euo pipefail
+          DEPLOYMENTS="plane-app-admin-wl plane-app-api-wl plane-app-beat-worker-wl \
+            plane-app-live-wl plane-app-space-wl plane-app-web-wl plane-app-worker-wl"
+          for D in $DEPLOYMENTS; do
+            kubectl -n plane rollout restart "deployment/$D"
+          done
+
+          pids=()
+          for D in $DEPLOYMENTS; do
+            kubectl -n plane rollout status "deployment/$D" --timeout=180s &
+            pids+=($!)
+          done
+          fail=0
+          for pid in "${pids[@]}"; do
+            wait "$pid" || fail=1
+          done
+          [ "$fail" -eq 0 ]
+
+          echo "plane namespace rolled out to :custom"
+          kubectl -n plane get pods -o wide
