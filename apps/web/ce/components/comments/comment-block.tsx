@@ -27,22 +27,22 @@ export const CommentBlock = observer(function CommentBlock(props: TCommentBlock)
   return (
     <div
       id={comment.id}
-      className={`relative flex gap-3 ${ends === "top" ? `pb-2` : ends === "bottom" ? `pt-2` : `py-2`}`}
+      className={`relative flex gap-0 sm:gap-3 ${ends === "top" ? `pb-2` : ends === "bottom" ? `pt-2` : `py-2`}`}
       ref={commentBlockRef}
     >
       <div
-        className="transition-border absolute top-0 bottom-0 left-[13px] w-px bg-layer-3 duration-1000"
+        className="transition-border absolute top-0 bottom-0 left-[13px] hidden w-px bg-layer-3 duration-1000 sm:block"
         aria-hidden
       />
       <div
         className={cn(
-          "transition-border relative z-[3] flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg border border-subtle bg-layer-2 uppercase shadow-raised-100 duration-1000"
+          "transition-border relative z-[3] hidden h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg border border-subtle bg-layer-2 uppercase shadow-raised-100 duration-1000 sm:flex"
         )}
       >
         <CommentReplyIcon width={14} height={14} className="text-secondary" aria-hidden="true" />
       </div>
-      <div className="flex flex-grow flex-col gap-3 truncate">
-        <div className="mb-2 rounded-lg border border-subtle bg-layer-2 p-3 text-body-sm-regular shadow-raised-100">
+      <div className="flex min-w-0 flex-grow flex-col gap-3 truncate">
+        <div className="mb-2 rounded-lg border border-subtle bg-layer-2 p-2 text-body-sm-regular shadow-raised-100 sm:p-3">
           {children}
         </div>
       </div>
