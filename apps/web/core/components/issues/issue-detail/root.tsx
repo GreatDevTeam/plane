@@ -275,8 +275,9 @@ export const IssueDetailRoot = observer(function IssueDetailRoot(props: TIssueDe
             />
           </div>
           <div
-            className={cn("fixed right-4 bottom-4 z-[4] flex flex-col gap-2 md:hidden", {
+            className={cn("fixed right-4 bottom-4 z-[4] flex-col gap-2 md:flex", {
               hidden: !issueDetailSidebarCollapsed,
+              flex: issueDetailSidebarCollapsed,
             })}
           >
             <IconButton
