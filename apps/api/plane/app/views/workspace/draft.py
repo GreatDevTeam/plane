@@ -34,6 +34,7 @@ from plane.db.models import (
     CycleIssue,
     ModuleIssue,
     DraftIssueCycle,
+    IssuePropertyValue,
     Workspace,
     FileAsset,
 )
@@ -137,6 +138,7 @@ class WorkspaceDraftIssueViewSet(BaseViewSet):
                     "project_id",
                     "parent_id",
                     "cycle_id",
+                    "type_id",
                     "module_ids",
                     "label_ids",
                     "assignee_ids",
@@ -301,6 +303,15 @@ class WorkspaceDraftIssueViewSet(BaseViewSet):
                 issue_id=serializer.data.get("id", None),
                 entity_type=FileAsset.EntityTypeContext.ISSUE_DESCRIPTION,
                 draft_issue_id=None,
+            )
+
+            # Carry the custom property values written in the create modal onto the
+            # work item. Only the properties of the type it was actually created
+            # with survive — picking a different type on the way out drops the rest,
+            # since a value belongs to the property set of one type.
+            issue = Issue.objects.get(pk=serializer.data.get("id", None))
+            IssuePropertyValue.objects.filter(draft_issue_id=draft_id, property__issue_type_id=issue.type_id).update(
+                issue_id=issue.id, project_id=issue.project_id, draft_issue_id=None
             )
 
             # delete the draft issue

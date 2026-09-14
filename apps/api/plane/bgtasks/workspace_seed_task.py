@@ -42,6 +42,7 @@ from plane.db.models import (
     User,
     BotTypeEnum,
 )
+from plane.utils.issue_type import get_default_issue_type, get_or_create_default_issue_type
 
 logger = logging.getLogger("plane.worker")
 
@@ -110,6 +111,9 @@ def create_project_and_member(workspace: Workspace, bot_user: User) -> Dict[int,
             issue_views_view=True,
         )
         project.save(created_by_id=bot_user.id, disable_auto_set_user=True)
+
+        # Enable the workspace default work item type on the project
+        get_or_create_default_issue_type(project, created_by_id=bot_user.id)
 
         # Create project members
         ProjectMember.objects.bulk_create(
@@ -266,6 +270,9 @@ def create_project_issues(
     if not issue_seeds:
         return
 
+    # default work item type per project, resolved once per project
+    issue_type_map: Dict[uuid.UUID, uuid.UUID] = {}
+
     for issue_seed in issue_seeds:
         required_fields = ["id", "labels", "project_id", "state_id"]
         # get the values
@@ -282,11 +289,16 @@ def create_project_issues(
         cycle_id = issue_seed.pop("cycle_id")
         module_ids = issue_seed.pop("module_ids")
 
+        if project_map[project_id] not in issue_type_map:
+            issue_type = get_default_issue_type(project_map[project_id])
+            issue_type_map[project_map[project_id]] = issue_type.id if issue_type else None
+
         issue = Issue(
             **issue_seed,
             state_id=states_map[state_id],
             project_id=project_map[project_id],
             workspace=workspace,
+            type_id=issue_type_map[project_map[project_id]],
             created_by_id=bot_user.id,
         )
         issue.save(created_by_id=bot_user.id, disable_auto_set_user=True)

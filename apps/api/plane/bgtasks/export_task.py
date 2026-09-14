@@ -21,6 +21,7 @@ from django.db.models import Prefetch
 # Module imports
 from plane.db.models import ExporterHistory, Issue, IssueComment, IssueRelation, IssueSubscriber
 from plane.utils.exception_logger import log_exception
+from plane.utils.issue_property import property_values_index
 from plane.utils.porters.exporter import DataExporter
 from plane.utils.porters.serializers.issue import IssueExportSerializer
 
@@ -159,6 +160,7 @@ def issue_export_task(
                 "state",
                 "created_by",
                 "estimate_point",
+                "type",
             )
             .prefetch_related(
                 "labels",
@@ -189,9 +191,17 @@ def issue_export_task(
             )
         )
 
+        # Custom field values are resolved for the whole export in one go rather than
+        # per work item — see `IssueExportSerializer.get_property_values`
+        property_values = property_values_index(workspace_issues.values_list("id", flat=True))
+
         # Create exporter for the specified format
         try:
-            exporter = DataExporter(IssueExportSerializer, format_type=provider)
+            exporter = DataExporter(
+                IssueExportSerializer,
+                format_type=provider,
+                context={"property_values_index": property_values},
+            )
         except ValueError as e:
             # Invalid format type
             exporter_instance = ExporterHistory.objects.get(token=token_id)

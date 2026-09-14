@@ -9,6 +9,10 @@ from django.db.models import Q
 from django_filters import FilterSet, filters
 
 from plane.db.models import Issue
+from plane.utils.custom_property_filter import (
+    custom_property_issue_ids,
+    parse_custom_property_key,
+)
 
 
 class UUIDInFilter(filters.BaseInFilter, filters.UUIDFilter):
@@ -19,7 +23,21 @@ class CharInFilter(filters.BaseInFilter, filters.CharFilter):
     pass
 
 
+class CharRangeFilter(filters.BaseRangeFilter, filters.CharFilter):
+    pass
+
+
 class BaseFilterSet(FilterSet):
+    @classmethod
+    def is_dynamic_filter_name(cls, name):
+        """Whether ``name`` is a filter this filterset declares per request.
+
+        ``base_filters`` is built once at import time, so a filterset that declares
+        filters off the request data (see ``IssueFilterSet``) is invisible to any
+        allowlist built from it — ``ComplexFilterBackend`` asks here instead.
+        """
+        return False
+
     @classmethod
     def get_filters(cls):
         """
@@ -157,6 +175,15 @@ class IssueFilterSet(BaseFilterSet):
     subscriber_id = filters.UUIDFilter(method="filter_subscriber_id")
     subscriber_id__in = UUIDInFilter(method="filter_subscriber_id_in", lookup_expr="in")
 
+    # The filter class each custom property lookup is declared with — the value is
+    # coerced against the property's own type, so a permissive char filter is enough
+    CUSTOM_PROPERTY_FILTER_CLASSES = {
+        "exact": filters.CharFilter,
+        "icontains": filters.CharFilter,
+        "in": CharInFilter,
+        "range": CharRangeFilter,
+    }
+
     class Meta:
         model = Issue
         fields = {
@@ -167,6 +194,34 @@ class IssueFilterSet(BaseFilterSet):
             "is_draft": ["exact"],
             "priority": ["exact", "in"],
         }
+
+    def __init__(self, data=None, *args, **kwargs):
+        super().__init__(data, *args, **kwargs)
+        # A user defined property cannot be declared ahead of time, so the filters the
+        # request actually asks for are added to this instance. `self.form` is built
+        # lazily off `self.filters`, so it picks them up.
+        for key in data or {}:
+            if key in self.filters:
+                continue
+            parsed = parse_custom_property_key(key)
+            if not parsed:
+                continue
+            _, lookup = parsed
+            declared = self.CUSTOM_PROPERTY_FILTER_CLASSES[lookup](field_name=key, method="filter_custom_property")
+            # `super().__init__` only wires up the filters it already knew about, and a
+            # filter resolves its `method` through its parent filterset
+            declared.model = self.queryset.model if self.queryset is not None else None
+            declared.parent = self
+            self.filters[key] = declared
+
+    @classmethod
+    def is_dynamic_filter_name(cls, name):
+        return parse_custom_property_key(name) is not None
+
+    def filter_custom_property(self, queryset, name, value):
+        """Filter by a user defined property, as `property_<uuid>__<lookup>`."""
+        property_id, lookup = parse_custom_property_key(name)
+        return Q(pk__in=custom_property_issue_ids(property_id, lookup, value))
 
     def filter_is_archived(self, queryset, name, value):
         """

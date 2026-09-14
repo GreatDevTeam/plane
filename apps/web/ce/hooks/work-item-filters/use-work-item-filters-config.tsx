@@ -31,18 +31,25 @@ import type {
   IIssueLabel,
   IModule,
   IProject,
+  TIssueProperty,
+  TIssuePropertyOption,
   TWorkItemFilterProperty,
 } from "@plane/types";
 import { Avatar } from "@plane/ui";
 import {
   getAssigneeFilterConfig,
+  getBooleanPropertyFilterConfig,
   getCreatedAtFilterConfig,
   getCreatedByFilterConfig,
   getCycleFilterConfig,
+  getDatePropertyFilterConfig,
   getFileURL,
   getLabelFilterConfig,
+  getMemberPickerPropertyFilterConfig,
   getMentionFilterConfig,
   getModuleFilterConfig,
+  getNumberPropertyFilterConfig,
+  getOptionPropertyFilterConfig,
   getPriorityFilterConfig,
   getProjectFilterConfig,
   getStartDateFilterConfig,
@@ -50,7 +57,9 @@ import {
   getStateGroupFilterConfig,
   getSubscriberFilterConfig,
   getTargetDateFilterConfig,
+  getTextPropertyFilterConfig,
   getUpdatedAtFilterConfig,
+  getWorkItemPropertyDisplayKey,
   isLoaderReady,
 } from "@plane/utils";
 // store hooks
@@ -61,7 +70,10 @@ import { useModule } from "@/hooks/store/use-module";
 import { useProject } from "@/hooks/store/use-project";
 import { useProjectState } from "@/hooks/store/use-project-state";
 // plane web imports
+import { workItemPropertyIcon } from "@/plane-web/components/issues/issue-details/property-values";
 import { useFiltersOperatorConfigs } from "@/plane-web/hooks/rich-filters/use-filters-operator-configs";
+import { useIssueProperties } from "@/plane-web/hooks/store";
+import { useProjectWorkItemProperties } from "@/plane-web/hooks/use-issue-properties";
 
 export type TWorkItemFiltersEntityProps = {
   workspaceSlug: string;
@@ -88,6 +100,73 @@ export type TWorkItemFiltersConfig = {
   members: IUserLite[];
 };
 
+type TCustomPropertyFilterConfigProps = {
+  property: TIssueProperty;
+  options: TIssuePropertyOption[];
+  members: IUserLite[];
+  operatorConfigs: ReturnType<typeof useFiltersOperatorConfigs>;
+};
+
+/**
+ * The filter config of one user defined property, or `undefined` for a property that
+ * cannot be filtered on: a work item relation has no picker in the filter bar, and a
+ * file has nothing to match against.
+ */
+const getCustomPropertyFilterConfig = (
+  props: TCustomPropertyFilterConfigProps
+): TFilterConfig<TWorkItemFilterProperty> | undefined => {
+  const { property, options, members, operatorConfigs } = props;
+  // the same key the display toggle and the spreadsheet column of this property use
+  const key: TWorkItemFilterProperty = getWorkItemPropertyDisplayKey(property.id);
+  const shared = {
+    isEnabled: true,
+    propertyDisplayName: property.display_name,
+    filterIcon: workItemPropertyIcon(property),
+    ...operatorConfigs,
+  };
+
+  switch (property.property_type) {
+    case "TEXT":
+    case "URL":
+    case "EMAIL":
+      return getTextPropertyFilterConfig<TWorkItemFilterProperty>(key)(shared);
+    case "DECIMAL":
+      return getNumberPropertyFilterConfig<TWorkItemFilterProperty>(key)({
+        ...shared,
+        min: property.settings?.min,
+        max: property.settings?.max,
+      });
+    case "BOOLEAN":
+      return getBooleanPropertyFilterConfig<TWorkItemFilterProperty>(key)(shared);
+    case "DATETIME":
+      return getDatePropertyFilterConfig<TWorkItemFilterProperty>(key)(shared);
+    case "OPTION":
+      return getOptionPropertyFilterConfig<TWorkItemFilterProperty>(key)({
+        ...shared,
+        options,
+        getOptionIcon: (option) => <Logo logo={option.logo_props} size={12} />,
+      });
+    case "RELATION":
+      // only a member relation is offered — a work item relation would need a work item
+      // picker, which the filter bar has no editor for
+      if (property.relation_type !== "USER") return undefined;
+      return getMemberPickerPropertyFilterConfig<TWorkItemFilterProperty>(key)({
+        ...shared,
+        members,
+        getOptionIcon: (memberDetails) => (
+          <Avatar
+            name={memberDetails.display_name}
+            src={getFileURL(memberDetails.avatar_url)}
+            showTooltip={false}
+            size="sm"
+          />
+        ),
+      });
+    default:
+      return undefined;
+  }
+};
+
 export const useWorkItemFiltersConfig = (props: TUseWorkItemFiltersConfigProps): TWorkItemFiltersConfig => {
   const { allowedFilters, cycleIds, labelIds, memberIds, moduleIds, projectId, projectIds, stateIds, workspaceSlug } =
     props;
@@ -98,8 +177,14 @@ export const useWorkItemFiltersConfig = (props: TUseWorkItemFiltersConfigProps):
   const { getModuleById } = useModule();
   const { getStateById } = useProjectState();
   const { getUserDetails } = useMember();
+  const { getProjectProperties, getPropertyOptions } = useIssueProperties();
+  // the definitions the custom property filters are built from. A workspace level layout
+  // spans projects whose work item types differ, so it offers no custom filter at all —
+  // the same call the spreadsheet columns and the display toggles make.
+  useProjectWorkItemProperties(workspaceSlug, projectId);
   // derived values
   const operatorConfigs = useFiltersOperatorConfigs({ workspaceSlug });
+  const customProperties = getProjectProperties(projectId);
   const filtersToShow = useMemo(() => new Set(allowedFilters), [allowedFilters]);
   const project = useMemo(() => getProjectById(projectId), [projectId, getProjectById]);
   const members: IUserLite[] | undefined = useMemo(
@@ -133,7 +218,7 @@ export const useWorkItemFiltersConfig = (props: TUseWorkItemFiltersConfigProps):
   const projects = useMemo(
     () =>
       projectIds
-        ? (projectIds.map((projectId) => getProjectById(projectId)).filter((project) => project) as IProject[])
+        ? (projectIds.map((id) => getProjectById(id)).filter((projectDetails) => projectDetails) as IProject[])
         : [],
     [projectIds, getProjectById]
   );
@@ -356,10 +441,28 @@ export const useWorkItemFiltersConfig = (props: TUseWorkItemFiltersConfigProps):
         isEnabled: isFilterEnabled("project_id") && projects !== undefined,
         filterIcon: Briefcase,
         projects: projects,
-        getOptionIcon: (project) => <Logo logo={project.logo_props} size={12} />,
+        getOptionIcon: (projectDetails) => <Logo logo={projectDetails.logo_props} size={12} />,
         ...operatorConfigs,
       }),
     [isFilterEnabled, projects, operatorConfigs]
+  );
+
+  // custom property filter configs — one per user defined property the project's work
+  // item types define. They are not part of `allowedFilters`, which is a static per
+  // layout list, so they are enabled by the project having them at all.
+  const customPropertyFilterConfigs = useMemo(
+    () =>
+      customProperties
+        .map((property) =>
+          getCustomPropertyFilterConfig({
+            property,
+            options: getPropertyOptions(property.id),
+            members: members ?? [],
+            operatorConfigs,
+          })
+        )
+        .filter((config) => config !== undefined),
+    [customProperties, getPropertyOptions, members, operatorConfigs]
   );
 
   return {
@@ -380,8 +483,10 @@ export const useWorkItemFiltersConfig = (props: TUseWorkItemFiltersConfigProps):
       updatedAtFilterConfig,
       createdByFilterConfig,
       subscriberFilterConfig,
+      ...customPropertyFilterConfigs,
     ],
     configMap: {
+      ...Object.fromEntries(customPropertyFilterConfigs.map((config) => [config.id, config])),
       project_id: projectFilterConfig,
       state_group: stateGroupFilterConfig,
       state_id: stateFilterConfig,

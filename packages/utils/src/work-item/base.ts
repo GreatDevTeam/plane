@@ -9,7 +9,12 @@ import { isEmpty } from "lodash-es";
 import { v4 as uuidv4 } from "uuid";
 // plane imports
 import type { TIssueFilterPriorityObject, TIssuePriorities } from "@plane/constants";
-import { ISSUE_DISPLAY_FILTERS_BY_PAGE, ISSUE_PRIORITY_FILTERS, STATE_GROUPS } from "@plane/constants";
+import {
+  ISSUE_DISPLAY_FILTERS_BY_PAGE,
+  ISSUE_PRIORITY_FILTERS,
+  STATE_GROUPS,
+  WORK_ITEM_PROPERTY_DISPLAY_KEY_PREFIX,
+} from "@plane/constants";
 import type {
   IGanttBlock,
   IIssueDisplayFilterOptions,
@@ -19,6 +24,7 @@ import type {
   TIssueGroupByOptions,
   TIssueOrderByOptions,
   TIssueParams,
+  TIssuePropertyDisplayKey,
   TStateGroups,
   TSubGroupedIssues,
   TUnGroupedIssues,
@@ -286,6 +292,27 @@ export const getComputedDisplayFilters = (
   };
 };
 
+/** The display property key a user defined work item property is toggled by. */
+export const getWorkItemPropertyDisplayKey = (propertyId: string): TIssuePropertyDisplayKey =>
+  `${WORK_ITEM_PROPERTY_DISPLAY_KEY_PREFIX}${propertyId}`;
+
+export const isWorkItemPropertyDisplayKey = (key: keyof IIssueDisplayProperties): key is TIssuePropertyDisplayKey =>
+  key.startsWith(WORK_ITEM_PROPERTY_DISPLAY_KEY_PREFIX);
+
+/** The property a display property key stands for, or `undefined` for a built-in one. */
+export const getWorkItemPropertyIdFromDisplayKey = (key: keyof IIssueDisplayProperties): string | undefined =>
+  isWorkItemPropertyDisplayKey(key) ? key.slice(WORK_ITEM_PROPERTY_DISPLAY_KEY_PREFIX.length) : undefined;
+
+/** The custom property keys that are switched on, in the order they were saved in. */
+export const getEnabledWorkItemPropertyDisplayKeys = (
+  displayProperties: IIssueDisplayProperties | undefined
+): TIssuePropertyDisplayKey[] =>
+  Object.keys(displayProperties ?? {})
+    .filter((key): key is TIssuePropertyDisplayKey =>
+      isWorkItemPropertyDisplayKey(key as keyof IIssueDisplayProperties)
+    )
+    .filter((key) => !!displayProperties?.[key]);
+
 /**
  * @description This method is used to apply the display properties on the issues
  * @param {IIssueDisplayProperties} displayProperties
@@ -294,6 +321,9 @@ export const getComputedDisplayFilters = (
 export const getComputedDisplayProperties = (
   displayProperties: IIssueDisplayProperties = {}
 ): IIssueDisplayProperties => ({
+  // a custom property has no default — it is only shown once it has been switched on,
+  // and the built-in defaults below would otherwise drop the saved toggle
+  ...Object.fromEntries(getEnabledWorkItemPropertyDisplayKeys(displayProperties).map((key) => [key, true] as const)),
   assignee: displayProperties?.assignee ?? true,
   start_date: displayProperties?.start_date ?? true,
   due_date: displayProperties?.due_date ?? true,

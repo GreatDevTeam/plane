@@ -10,7 +10,7 @@ import re
 # Django imports
 from django.core.serializers.json import DjangoJSONEncoder
 from django.http import HttpResponseRedirect
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.db.models import (
     Case,
     CharField,
@@ -83,6 +83,7 @@ from plane.utils.path_validator import sanitize_filename
 from plane.bgtasks.storage_metadata_task import get_asset_object_metadata
 from .base import BaseAPIView
 from plane.utils.host import base_host
+from plane.utils.issue_property import replace_property_values
 from plane.utils.issue_relation_mapper import get_actual_relation
 from plane.bgtasks.webhook_task import model_activity
 from plane.app.permissions import ROLE
@@ -169,6 +170,26 @@ def user_has_issue_permission(user_id, project_id, issue=None, allowed_roles=Non
         qs = qs.filter(role__in=allowed_roles)
 
     return qs.exists()
+
+
+def save_property_values(request, issue):
+    """Write the ``property_values`` of the payload onto the work item, if it has any.
+
+    The custom fields of a work item round trip through the public API: a field is
+    addressed by its api name as well as by its id, and an option, a member and a
+    relation by the label the export writes as well as by their id, so an exported
+    work item can be handed straight back. Returns ``{property: message}`` when a
+    value does not fit its field, and nothing when there is nothing to write.
+    """
+    property_values = request.data.get("property_values")
+    if not property_values:
+        return None
+
+    if not isinstance(property_values, dict):
+        return {"property_values": "property_values has to be a map of property name or id to values"}
+
+    _, errors = replace_property_values(issue, property_values, request.user, accept_labels=True)
+    return errors
 
 
 class WorkspaceIssueAPIEndpoint(BaseAPIView):
@@ -462,12 +483,24 @@ class IssueListCreateAPIEndpoint(BaseAPIView):
                     status=status.HTTP_409_CONFLICT,
                 )
 
-            serializer.save()
-            # Refetch the issue
-            issue = Issue.objects.filter(workspace__slug=slug, project_id=project_id, pk=serializer.data["id"]).first()
-            issue.created_at = request.data.get("created_at", timezone.now())
-            issue.created_by_id = request.data.get("created_by", request.user.id)
-            issue.save(update_fields=["created_at", "created_by"])
+            # The work item and its custom field values are written together — a
+            # value the fields reject must not leave a half filled work item behind
+            with transaction.atomic():
+                serializer.save()
+                # Refetch the issue
+                issue = Issue.objects.filter(
+                    workspace__slug=slug, project_id=project_id, pk=serializer.data["id"]
+                ).first()
+                issue.created_at = request.data.get("created_at", timezone.now())
+                issue.created_by_id = request.data.get("created_by", request.user.id)
+                issue.save(update_fields=["created_at", "created_by"])
+
+                property_errors = save_property_values(request, issue)
+                if property_errors:
+                    transaction.set_rollback(True)
+
+            if property_errors:
+                return Response(property_errors, status=status.HTTP_400_BAD_REQUEST)
 
             # Track the issue
             issue_activity.delay(
@@ -771,7 +804,15 @@ class IssueDetailAPIEndpoint(BaseAPIView):
                     status=status.HTTP_409_CONFLICT,
                 )
 
-            serializer.save()
+            with transaction.atomic():
+                serializer.save()
+                property_errors = save_property_values(request, issue)
+                if property_errors:
+                    transaction.set_rollback(True)
+
+            if property_errors:
+                return Response(property_errors, status=status.HTTP_400_BAD_REQUEST)
+
             issue_activity.delay(
                 type="issue.activity.updated",
                 requested_data=requested_data,

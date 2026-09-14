@@ -44,6 +44,12 @@ from .project import (
     ProjectMemberPreferenceSerializer,
 )
 from .state import StateSerializer, StateLiteSerializer
+from .issue_type import IssueTypeSerializer, ProjectIssueTypeSerializer
+from .issue_property import (
+    IssuePropertyActivitySerializer,
+    IssuePropertyOptionSerializer,
+    IssuePropertySerializer,
+)
 from .view import IssueViewSerializer, ViewIssueListSerializer
 from .cycle import (
     CycleSerializer,

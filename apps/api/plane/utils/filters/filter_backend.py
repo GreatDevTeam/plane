@@ -113,12 +113,16 @@ class ComplexFilterBackend(filters.BaseFilterBackend):
         # Extract field names from the filter data
         fields = self._extract_field_names(filter_data)
 
+        # Filters a filterset declares per request (e.g. one per user defined work item
+        # property) are not in `base_filters`, so they get their own, pattern based check
+        is_dynamic = getattr(filterset_class, "is_dynamic_filter_name", None)
+
         # Check if all fields are allowed
         for field in fields:
             # Field keys must match FilterSet filter names (including any lookups)
             # Example: 'sequence_id__gte' should be declared in base_filters
             # Special-case __range: require the '<base>__range' filter itself
-            if field not in allowed_fields:
+            if field not in allowed_fields and not (is_dynamic and is_dynamic(field)):
                 raise DRFValidationError(
                     {
                         "message": f"Filtering on field '{field}' is not allowed",
@@ -262,8 +266,10 @@ class ComplexFilterBackend(filters.BaseFilterBackend):
         for key, value in processed_conditions.items():
             # Default serialization to string; QueryDict expects strings
             if isinstance(value, list):
-                # Repeat key for list values (e.g., __in)
-                qd.setlist(key, [str(v) for v in value])
+                # Multi value lookups (`__in`, `__range`) are CSV filters, which read a
+                # single comma separated string — repeating the key would leave the
+                # filter seeing only the last value
+                qd[key] = ",".join("" if v is None else str(v) for v in value)
             else:
                 qd[key] = "" if value is None else str(value)
 

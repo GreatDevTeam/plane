@@ -28,6 +28,7 @@ import {
   WORKSPACE_MEMBER_ME_INFORMATION,
   WORKSPACE_PROJECTS_ROLES_INFORMATION,
   WORKSPACE_FAVORITE,
+  WORKSPACE_ISSUE_TYPES,
   WORKSPACE_STATES,
   WORKSPACE_SIDEBAR_PREFERENCES,
   WORKSPACE_PROJECT_NAVIGATION_PREFERENCES,
@@ -40,6 +41,7 @@ import { useProjectState } from "@/hooks/store/use-project-state";
 import { useWorkspace } from "@/hooks/store/use-workspace";
 import { useUser, useUserPermissions } from "@/hooks/store/user";
 import { usePlatformOS } from "@/hooks/use-platform-os";
+import { useIssueTypes } from "@/plane-web/hooks/store";
 
 interface IWorkspaceAuthWrapper {
   children: ReactNode;
@@ -62,6 +64,7 @@ export const WorkspaceAuthWrapper = observer(function WorkspaceAuthWrapper(props
   const { loader, workspaceInfoBySlug, fetchUserWorkspaceInfo, fetchUserProjectPermissions, allowPermissions } =
     useUserPermissions();
   const { fetchWorkspaceStates } = useProjectState();
+  const { fetchWorkspaceIssueTypes } = useIssueTypes();
   // derived values
   const canPerformWorkspaceMemberActions = allowPermissions(
     [EUserPermissions.ADMIN, EUserPermissions.MEMBER],
@@ -113,6 +116,13 @@ export const WorkspaceAuthWrapper = observer(function WorkspaceAuthWrapper(props
     { revalidateIfStale: false, revalidateOnFocus: false }
   );
 
+  // fetch workspace work item types
+  useSWR(
+    workspaceSlug ? WORKSPACE_ISSUE_TYPES(workspaceSlug.toString()) : null,
+    workspaceSlug ? () => fetchWorkspaceIssueTypes(workspaceSlug.toString()) : null,
+    { revalidateIfStale: false, revalidateOnFocus: false }
+  );
+
   // fetch workspace sidebar preferences
   useSWR(
     workspaceSlug ? WORKSPACE_SIDEBAR_PREFERENCES(workspaceSlug.toString()) : null,
@@ -159,14 +169,16 @@ export const WorkspaceAuthWrapper = observer(function WorkspaceAuthWrapper(props
             </div>
             <div className="relative flex items-center gap-2">
               <div className="text-13 font-medium">{currentUser?.email}</div>
-              <div
+              <button
+                type="button"
+                aria-label="Sign out"
                 className="relative flex h-6 w-6 flex-shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-sm hover:bg-layer-1"
                 onClick={handleSignOut}
               >
                 <Tooltip tooltipContent={"Sign out"} position="top" className="ml-2" isMobile={isMobile}>
                   <LogOut size={14} />
                 </Tooltip>
-              </div>
+              </button>
             </div>
           </div>
           <div className="relative flex h-full w-full flex-grow flex-col items-center justify-center space-y-3">

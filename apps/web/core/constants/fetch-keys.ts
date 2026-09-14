@@ -40,15 +40,15 @@ const paramsToKey = (params: any) => {
   const layoutKey = layout ? layout.toUpperCase() : "";
 
   // sorting each keys in ascending order
-  projectKey = projectKey.sort().join("_");
-  stateKey = stateKey.sort().join("_");
-  stateGroupKey = stateGroupKey.sort().join("_");
-  priorityKey = priorityKey.sort().join("_");
-  assigneesKey = assigneesKey.sort().join("_");
-  mentionsKey = mentionsKey.sort().join("_");
-  createdByKey = createdByKey.sort().join("_");
-  labelsKey = labelsKey.sort().join("_");
-  subscriberKey = subscriberKey.sort().join("_");
+  projectKey = projectKey.toSorted().join("_");
+  stateKey = stateKey.toSorted().join("_");
+  stateGroupKey = stateGroupKey.toSorted().join("_");
+  priorityKey = priorityKey.toSorted().join("_");
+  assigneesKey = assigneesKey.toSorted().join("_");
+  mentionsKey = mentionsKey.toSorted().join("_");
+  createdByKey = createdByKey.toSorted().join("_");
+  labelsKey = labelsKey.toSorted().join("_");
+  subscriberKey = subscriberKey.toSorted().join("_");
 
   return `${layoutKey}_${projectKey}_${stateGroupKey}_${stateKey}_${priorityKey}_${assigneesKey}_${mentionsKey}_${createdByKey}_${type}_${groupBy}_${orderBy}_${labelsKey}_${startDateKey}_${targetDateKey}_${sub_issue}_${subscriberKey}`;
 };
@@ -85,6 +85,20 @@ export const WORKSPACE_PROJECTS_ROLES_INFORMATION = (workspaceSlug: string) =>
 export const WORKSPACE_FAVORITE = (workspaceSlug: string) => `WORKSPACE_FAVORITE_${workspaceSlug.toUpperCase()}`;
 
 export const WORKSPACE_STATES = (workspaceSlug: string) => `WORKSPACE_STATES_${workspaceSlug.toUpperCase()}`;
+
+export const WORKSPACE_ISSUE_TYPES = (workspaceSlug: string) => `WORKSPACE_ISSUE_TYPES_${workspaceSlug.toUpperCase()}`;
+
+export const WORK_ITEM_TYPE_PROPERTIES = (workspaceSlug: string, issueTypeId: string) =>
+  `WORK_ITEM_TYPE_PROPERTIES_${workspaceSlug.toUpperCase()}_${issueTypeId.toUpperCase()}`;
+
+export const PROJECT_WORK_ITEM_PROPERTIES = (workspaceSlug: string, projectId: string) =>
+  `PROJECT_WORK_ITEM_PROPERTIES_${workspaceSlug.toUpperCase()}_${projectId.toUpperCase()}`;
+
+export const WORK_ITEM_PROPERTY_VALUES = (workspaceSlug: string, projectId: string, workItemId: string) =>
+  `WORK_ITEM_PROPERTY_VALUES_${workspaceSlug.toUpperCase()}_${projectId.toUpperCase()}_${workItemId.toUpperCase()}`;
+
+export const DRAFT_WORK_ITEM_PROPERTY_VALUES = (workspaceSlug: string, draftId: string) =>
+  `DRAFT_WORK_ITEM_PROPERTY_VALUES_${workspaceSlug.toUpperCase()}_${draftId.toUpperCase()}`;
 
 export const WORKSPACE_SIDEBAR_PREFERENCES = (workspaceSlug: string) =>
   `WORKSPACE_SIDEBAR_PREFERENCES_${workspaceSlug.toUpperCase()}`;

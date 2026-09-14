@@ -4,6 +4,14 @@
 
 This is a monorepo (pnpm workspaces + Turborepo). Frontend lives in `apps/web`, shared UI in `packages/ui`, shared state in `packages/shared-state`.
 
+### The CE/EE extension seam (`@/plane-web/*` → `apps/web/ce/*`)
+
+This repo is the community edition of Plane. Everything upstream gates behind a paid edition is imported through `@/plane-web/...`, which `apps/web/tsconfig.json` maps to `./ce/*` — so the call sites in `apps/web/core/` are the real upstream ones, already wired into the board, card, spreadsheet, create/update modal, detail sidebar, filter bar and activity feed, and the file under `apps/web/ce/` they resolve to is a **no-op stub** returning `null` / `<></>` / `{}`.
+
+The practical consequence: a feature that looks like "build it from scratch" is usually "fill in the stub". Before designing anything, grep for the feature under `apps/web/ce/` — if a stub exists, implement it there and the feature lights up at every call site without touching core rendering code. Conversely, a component under `ce/` that returns an empty fragment is not dead code; deleting it breaks the import.
+
+Three closed unions are the gate on anything that needs a per-field filter or column, and they have to be widened before a stub can do useful work: `WORK_ITEM_FILTER_PROPERTY_KEYS` (`packages/types/src/view-props.ts`), `EXTENDED_FILTER_FIELD_TYPE` (`packages/types/src/rich-filters/field-types/extended.ts` — the designated slot for non-core filter editors), and `IIssueDisplayProperties` / `ISSUE_DISPLAY_PROPERTIES_KEYS`. Server side the equivalent gate is `IssueFilterSet`.
+
 ## Development Commands
 
 - `pnpm dev` — Start all dev servers (web:3000, admin:3001)
@@ -27,7 +35,15 @@ cd apps/web && pnpm check:types
 
 ### Formatting
 
-`fix:format` runs oxfmt over the whole app, so it reformats files that were already drifting in `master` as well as the ones you touched. After running it, check `git diff --stat` and revert any file your change did not touch.
+`fix:format` runs oxfmt over the whole app, so it reformats files that were already drifting in `master` as well as the ones you touched. After running it, check `git diff --stat` and revert any file your change did not touch. Simpler: run `npx oxfmt <the files you changed>` from the repo root instead.
+
+### The pre-commit hook denies warnings
+
+`git commit` runs husky → lint-staged → `oxlint --fix --deny-warnings` over the **staged files only**. `pnpm check:lint` passes the repo at ~990 warnings, so a clean `check:lint` does **not** mean the commit will go through: touching a file that already carried a warning fails it, with a diagnostic about code you never wrote.
+
+Silence those with `// oxlint-disable-next-line <rule> -- <why>` on the line the diagnostic's **primary span** starts at (not necessarily the line the message is about — `no-duplicate-enum-values` points at the _first_ member sharing the value, so an `eslint-disable` on the duplicate does not suppress it). The rule name is the part in brackets: `oxc(no-map-spread)` → `no-map-spread`.
+
+The span in the `,-[file:line:col]` header is **not** always the one a disable comment attaches to: `no-shadow` prints the outer declaration there but anchors on the inner one, so a comment above the outer declaration does nothing. It is cheaper to rename the inner binding than to find the line that takes the directive.
 
 ## Issue Board (Kanban)
 
@@ -102,15 +118,92 @@ Hand over only the fields that changed: the live server rewrites just the fragme
 
 ## Running API tests
 
-`apps/api` needs Python 3.12 (the code uses `X | Y` type syntax); the container's default `python3` is 3.9. Postgres/Redis come from the running `plane-test-*` containers:
+`apps/api` needs Python 3.12 (the code uses `X | Y` type syntax); the container's default `python3` is 3.9. Postgres/Redis come from the `plane-test-*` containers, which are usually **stopped** — start them first and read their IPs off docker rather than assuming they are absent:
+
+```bash
+docker start plane-test-db-1 plane-test-redis-1 plane-test-mq-1
+docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' plane-test-db-1
+```
+
+`docker ps` without `-a` hides them, which reads as "the test infra does not exist on this machine" and tempts you to skip the suite entirely. It exists; it is just not running.
 
 ```bash
 cd apps/api && DATABASE_URL="postgresql://plane:plane@<plane-test-db ip>:5432/plane" \
-  REDIS_URL="redis://<plane-test-redis ip>:6379/" SECRET_KEY="test" \
-  pytest plane/tests/contract/api/test_pages.py
+  REDIS_URL="redis://<plane-test-redis ip>:6379/" \
+  AMQP_URL="amqp://plane:plane@<plane-test-mq ip>:5672/plane" \
+  WEB_URL="http://localhost:3000" SECRET_KEY="test" \
+  /root/.venvs/plane312/bin/python -m pytest plane/tests/contract/api/test_pages.py
 ```
 
+`AMQP_URL` and `WEB_URL` are **not optional**: any endpoint that fires `issue_activity.delay(...)`
+returns a `500` without them (kombu cannot reach the broker, `base_host()` raises
+`ImproperlyConfigured`), and the failure looks nothing like the missing setting. The broker
+credentials are `plane:plane` on vhost `plane`, not the rabbitmq `guest` defaults — read them off
+the container with `docker inspect plane-test-mq-1` rather than guessing.
+
+Neither `ruff` nor a 3.12 `python` is on `PATH`; both live in `/root/.venvs/plane312/bin/`.
+
+`pytest` **reuses** the test database, so a migration you just wrote is silently not applied and
+every test touching the new column fails on `column … does not exist`. Pass `--create-db` after
+adding a migration.
+
+The same `--reuse-db` makes an **interrupted** run poison the next one: a killed suite leaves rows
+behind, and the following run reports hundreds of `duplicate key value violates unique constraint
+"users_username_key"` errors that have nothing to do with your change. Any run with errors in the
+hundreds is this, not a regression — rerun with `--create-db`, or
+`docker exec plane-test-db-1 psql -U plane -d plane -c 'DROP DATABASE IF EXISTS test_plane;'`.
+
+The `plane-test-*` containers get SIGKILLed (`Exited (137)`) a few minutes into a long run on this
+host, which surfaces as `psycopg.OperationalError: consuming input failed: server closed the
+connection unexpectedly` on every test after that point. Check `docker ps -a` before believing a
+mass failure, and prefer running one test file at a time over the whole suite in one go.
+
+**Master is not green.** A full-suite run on `origin/master` fails ~18 tests (cycles, magic-link
+auth, `test_url`, `copy_s3_objects`). Never read "tests fail" as "my branch broke something" —
+baseline the same files against a master worktree (`git worktree add /tmp/plane-master origin/master`)
+and compare the failure sets.
+
+`Model.objects.create(created_by=user)` does **not** set `created_by`: `BaseModel.save()`
+overwrites it from the thread-local request user, which is unset in a test, so the row lands with
+`created_by=None`. Build the instance and call `instance.save(created_by_id=user.id)` instead —
+this bites on any model whose endpoint scopes by author (drafts, for one).
+
 `apps/api/run_tests.sh` is broken (it execs a `tests/run_tests.sh` that does not exist) — call `pytest` directly. CI lints with `ruff check`.
+
+A handful of tests (`test_authentication.py` magic-link, `test_cycles.py`, `test_api_token.py`,
+`test_url.py`, `test_copy_s3_objects.py` — 18 in all) fail on an untouched tree. Confirm a failure
+is yours by re-running it with your changes stashed before chasing it.
+
+## Work item filters (`plane/utils/filters/`)
+
+Two things about `ComplexFilterBackend` + `IssueFilterSet` are easy to get wrong:
+
+- **The allowlist is `filterset_class.base_filters`**, a class attribute built at import time. A
+  filter declared per request (as the `property_<uuid>__<lookup>` custom property filters are, in
+  `IssueFilterSet.__init__`) is invisible to it, so it also needs the
+  `BaseFilterSet.is_dynamic_filter_name` hook — declaring the filter alone gets a
+  `Filtering on field '…' is not allowed`.
+- **A filter added after `super().__init__()` has no `parent`.** `FilterSet.__init__` wires
+  `.parent`/`.model` onto the filters it already knew about, and a filter resolves its `method=`
+  through its parent, so anything added afterwards must set both by hand or the request 500s with
+  `must have a parent FilterSet to find '.filter_x()'`.
+
+Multiple conditions in **one** `.filter()` call against a multi-valued relation must be satisfied by
+the **same** related row. `build_combined_q` ANDs every leaf into a single `Q`, so a filter over a
+one-to-many table (property values, and anything like it) has to be a `Q(pk__in=<subquery>)` per
+condition — a plain join silently matches nothing as soon as there are two conditions.
+
+## Adding a project settings page
+
+A settings tab is registered in five places, and only four of them fail loudly:
+
+1. `TProjectSettingsTabs` (`packages/types/src/settings.ts`);
+2. `PROJECT_SETTINGS` **and** `GROUPED_PROJECT_SETTINGS` (`packages/constants/src/settings/project.ts`) — the sidebar renders the grouped map, so a tab missing from it is invisible even though `PROJECT_SETTINGS` has it;
+3. `PROJECT_SETTINGS_ICONS` (`apps/web/core/components/settings/project/sidebar/item-icon.tsx`);
+4. the page + header under `apps/web/app/(all)/[workspaceSlug]/(settings)/settings/projects/[projectId]/<tab>/`;
+5. `apps/web/app/routes/core.ts` — **this one is the silent failure**. Routing is react-router's config, not file based, so a page that is not listed there is a 404 no matter where the file sits.
+
+1–3 are `Record<TProjectSettingsTabs, …>`, so widening the union turns the rest into compile errors; the route is the one to remember by hand.
 
 ## Frontend tests
 
@@ -131,6 +224,9 @@ There are none. `apps/web` has no test runner configured — its `package.json` 
 - **Imports**: `workspace:*` for internal packages, `catalog:` for external deps
 - **TypeScript**: Strict mode; all files must be typed
 - **Formatting**: oxfmt — run `pnpm fix:format`
-- **Linting**: OxLint with shared `.oxlintrc.json`
+- **Linting**: OxLint with shared `.oxlintrc.json`. `pnpm check:lint` reports warnings but still
+  exits `0`, while the husky pre-commit hook runs `oxlint --fix --deny-warnings` over the staged
+  files — so a warning that already existed in a file you touched blocks the commit even though
+  the repo-wide gate passed. Run `npx oxlint --deny-warnings <changed paths>` before committing.
 - **Naming**: camelCase for variables/functions, PascalCase for components/types
 - **Components**: Build in `@plane/ui` with Storybook for isolated development

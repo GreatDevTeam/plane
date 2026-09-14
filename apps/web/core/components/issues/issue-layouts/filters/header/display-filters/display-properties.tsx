@@ -12,6 +12,8 @@ import { ISSUE_DISPLAY_PROPERTIES } from "@plane/constants";
 import { useTranslation } from "@plane/i18n";
 // types
 import type { IIssueDisplayProperties } from "@plane/types";
+// plane web components
+import { WorkItemAdditionalDisplayProperties } from "@/plane-web/components/issues/issue-layouts/additional-display-properties";
 // components
 import { FilterHeader } from "../helpers/filter-header";
 
@@ -50,6 +52,7 @@ export const FilterDisplayProperties = observer(function FilterDisplayProperties
       default:
         return true;
     }
+    // oxlint-disable-next-line no-map-spread -- the option list is read only, it is not mutated in place
   }).map((property) => {
     if (isEpic && property.key === "sub_issue_count") {
       return { ...property, titleTranslationKey: "issue.display.properties.work_item_count" };
@@ -86,6 +89,7 @@ export const FilterDisplayProperties = observer(function FilterDisplayProperties
               </button>
             </>
           ))}
+          <WorkItemAdditionalDisplayProperties displayProperties={displayProperties} handleUpdate={handleUpdate} />
         </div>
       )}
     </>

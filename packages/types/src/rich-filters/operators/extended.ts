@@ -11,8 +11,13 @@ export const EXTENDED_LOGICAL_OPERATOR = {} as const;
 
 /**
  * Extended equality operators
+ *
+ * `icontains` is what a free text filter means by "matches": an exact match on a text
+ * property is almost never what someone typing into a filter bar is after.
  */
-export const EXTENDED_EQUALITY_OPERATOR = {} as const;
+export const EXTENDED_EQUALITY_OPERATOR = {
+  CONTAINS: "icontains",
+} as const;
 
 /**
  * Extended collection operators
