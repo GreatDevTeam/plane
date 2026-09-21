@@ -1,0 +1,250 @@
+/**
+ * Jira style mode.
+ *
+ * Opt-in, per user: `Profile.is_jira_style_enabled` is mirrored onto
+ * `<html data-jira-style="true">` by `core/lib/wrappers/store-wrapper.tsx`.
+ *
+ * The colors are the Atlassian Design System palette. They are applied by
+ * overriding the *primitive* ramps (`--neutral-*`, `--brand-*`, …) rather than
+ * the semantic tokens, so every derived `--bg-*` / `--txt-*` / `--border-*`
+ * token in `@plane/tailwind-config` follows automatically.
+ *
+ * These rules are intentionally unlayered: unlayered declarations outrank
+ * anything in `@layer base`, where the default tokens live.
+ */
+
+/* -------------------- Palette: Atlassian light -------------------- */
+html[data-jira-style="true"] {
+  /* Neutrals — N0 … N900 */
+  --neutral-white: #ffffff;
+  --neutral-100: #fafbfc; /* N10 */
+  --neutral-200: #f4f5f7; /* N20 */
+  --neutral-300: #ebecf0; /* N30 */
+  --neutral-400: #dfe1e6; /* N40 */
+  --neutral-500: #d8dce3;
+  --neutral-600: #c1c7d0; /* N50 */
+  --neutral-700: #b3bac5; /* N60 */
+  --neutral-800: #a5adba; /* N70 */
+  --neutral-900: #8993a4; /* N90 */
+  --neutral-1000: #6b778c; /* N200 */
+  --neutral-1100: #42526e; /* N500 */
+  --neutral-1200: #172b4d; /* N800 */
+  --neutral-black: #091e42; /* N900 */
+  /* Brand — B50 … B500 */
+  --brand-100: #f4f8ff;
+  --brand-200: #deebff; /* B50 */
+  --brand-300: #b3d4ff; /* B75 */
+  --brand-400: #85b8ff;
+  --brand-500: #4c9aff; /* B100 */
+  --brand-600: #2684ff; /* B200 */
+  --brand-700: #0065ff; /* B300 */
+  --brand-800: #005ce6;
+  --brand-900: #0747a6; /* B500 */
+  --brand-1000: #09326c;
+  --brand-1100: #0a2a5e;
+  --brand-1200: #082145;
+  --brand-default: #0052cc; /* B400 */
+  /* Green — G50 … G500 */
+  --green-100: #f3fdf8;
+  --green-200: #e3fcef; /* G50 */
+  --green-300: #abf5d1; /* G75 */
+  --green-400: #79f2c0; /* G100 */
+  --green-500: #57d9a3; /* G200 */
+  --green-600: #36b37e; /* G300 */
+  --green-700: #00875a; /* G400 */
+  --green-800: #00734c;
+  --green-900: #006644; /* G500 */
+  --green-1000: #005538;
+  --green-1100: #003d28;
+  /* Amber — Y50 … Y500 */
+  --amber-100: #fffae6; /* Y50 */
+  --amber-200: #fff0b3; /* Y75 */
+  --amber-300: #ffe380; /* Y100 */
+  --amber-400: #ffc400; /* Y300 */
+  --amber-500: #ffab00; /* Y400 */
+  --amber-600: #ff991f; /* Y500 */
+  --amber-700: #ff8b00;
+  --amber-800: #e17b00;
+  --amber-900: #b76a00;
+  --amber-1000: #974f0c;
+  --amber-1100: #7a4706;
+  /* Red — R50 … R500 */
+  --red-100: #fff7f5;
+  --red-200: #ffebe6; /* R50 */
+  --red-300: #ffbdad; /* R75 */
+  --red-400: #ff8f73; /* R100 */
+  --red-500: #ff7452; /* R200 */
+  --red-600: #ff5630; /* R300 */
+  --red-700: #de350b; /* R400 */
+  --red-800: #bf2600; /* R500 */
+  --red-900: #a91d00;
+  --red-1000: #8f1900;
+  --red-1100: #6b1300;
+  /* Priority — Jira priority icon colors */
+  --priority-urgent: #cd1317;
+  --priority-high: #ff5630;
+  --priority-medium: #ffab00;
+  --priority-low: #0065ff;
+  --priority-none: #6b778c;
+  /* Card / column elevation, used by the board rules below */
+  --jira-raised-shadow: 0 1px 1px rgba(9, 30, 66, 0.25), 0 0 1px 1px rgba(9, 30, 66, 0.13);
+  --jira-overlay-shadow: 0 8px 16px -4px rgba(9, 30, 66, 0.25), 0 0 1px rgba(9, 30, 66, 0.31);
+}
+
+/* -------------------- Palette: Atlassian dark -------------------- */
+html[data-jira-style="true"][data-theme*="dark"] {
+  /* Neutrals — Atlassian dark surfaces, darkest first */
+  --neutral-black: #101214;
+  --neutral-100: #1d2125; /* surface */
+  --neutral-200: #22272b; /* surface raised */
+  --neutral-300: #282e33; /* surface overlay */
+  --neutral-400: #2c333a; /* border */
+  --neutral-500: #38414a;
+  --neutral-600: #454f59;
+  --neutral-700: #596773;
+  --neutral-800: #738496;
+  --neutral-900: #8c9bab;
+  --neutral-1000: #9fadbc;
+  --neutral-1100: #b6c2cf;
+  --neutral-1200: #c7d1db;
+  --neutral-white: #dee4ea;
+  /* Brand — Atlassian dark blues */
+  --brand-100: #1c2b41;
+  --brand-200: #09326c;
+  --brand-300: #0055cc;
+  --brand-400: #0c66e4;
+  --brand-500: #1d7afc;
+  --brand-600: #388bff;
+  --brand-700: #579dff;
+  --brand-800: #85b8ff;
+  --brand-900: #b3d4ff;
+  --brand-1000: #cce0ff;
+  --brand-1100: #e9f2ff;
+  --brand-1200: #f4f8ff;
+  --brand-default: #579dff;
+  /* Green */
+  --green-100: #1c3329;
+  --green-200: #164b35;
+  --green-300: #216e4e;
+  --green-400: #1f845a;
+  --green-500: #22a06b;
+  --green-600: #2abb7f;
+  --green-700: #4bce97;
+  --green-800: #7ee2b8;
+  --green-900: #baf3db;
+  --green-1000: #dcfff1;
+  --green-1100: #effcf6;
+  /* Amber */
+  --amber-100: #332e1b;
+  --amber-200: #533f04;
+  --amber-300: #7f5f01;
+  --amber-400: #946f00;
+  --amber-500: #b38600;
+  --amber-600: #cf9f02;
+  --amber-700: #e2b203;
+  --amber-800: #f5cd47;
+  --amber-900: #f8e6a0;
+  --amber-1000: #fff7d6;
+  --amber-1100: #fffae6;
+  /* Red */
+  --red-100: #42221f;
+  --red-200: #5d1f1a;
+  --red-300: #ae2e24;
+  --red-400: #c9372c;
+  --red-500: #e2483d;
+  --red-600: #f15b50;
+  --red-700: #ff8f73;
+  --red-800: #ffb2a1;
+  --red-900: #ffd2cc;
+  --red-1000: #ffeceb;
+  --red-1100: #fff7f5;
+  /* Priority */
+  --priority-urgent: #f15b50;
+  --priority-high: #f87462;
+  --priority-medium: #e2b203;
+  --priority-low: #579dff;
+  --priority-none: #9fadbc;
+  /* Elevation */
+  --jira-raised-shadow: 0 1px 1px rgba(3, 4, 4, 0.5), 0 0 1px 1px rgba(3, 4, 4, 0.35);
+  --jira-overlay-shadow: 0 8px 16px -4px rgba(3, 4, 4, 0.56), 0 0 1px rgba(3, 4, 4, 0.5);
+}
+
+/* -------------------- Board (Kanban) layout -------------------- */
+/* Jira renders every column as a grey "well" with a compact, uppercase
+   header and square-cornered cards floating inside it. */
+html[data-jira-style="true"] .jira-kanban-column {
+  background-color: var(--bg-layer-1);
+  border-radius: 3px;
+  padding: 0 8px 8px;
+}
+
+html[data-jira-style="true"] .jira-kanban-column-header {
+  background-color: var(--bg-layer-1);
+  padding-top: 10px;
+  padding-bottom: 6px;
+}
+
+html[data-jira-style="true"] .jira-kanban-column-title {
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--txt-tertiary);
+}
+
+html[data-jira-style="true"] .jira-kanban-column-count {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--txt-tertiary);
+}
+
+html[data-jira-style="true"] .jira-kanban-card {
+  border-radius: 3px;
+  border-color: transparent;
+  box-shadow: var(--jira-raised-shadow);
+  padding: 8px 10px;
+  outline: none;
+}
+
+html[data-jira-style="true"] .jira-kanban-card:hover {
+  background-color: var(--bg-layer-2-hover);
+  border-color: transparent;
+  box-shadow: var(--jira-raised-shadow);
+}
+
+/* The quick-add footer sits inside the grey well, so it has to match it. */
+html[data-jira-style="true"] .jira-kanban-column-footer {
+  background-color: var(--bg-layer-1);
+}
+
+/* -------------------- Work item view -------------------- */
+/* Jira puts the issue on a grey canvas: a white content pane on the left and
+   a bordered "Details" panel on the right. */
+html[data-jira-style="true"] .jira-work-item-detail {
+  background-color: var(--bg-surface-2);
+}
+
+html[data-jira-style="true"] .jira-work-item-main {
+  background-color: var(--bg-surface-1);
+}
+
+html[data-jira-style="true"] .jira-work-item-sidebar {
+  background-color: var(--bg-surface-2);
+}
+
+html[data-jira-style="true"] .jira-work-item-sidebar-panel {
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  background-color: var(--bg-surface-1);
+  padding: 8px 12px;
+}
+
+html[data-jira-style="true"] .jira-work-item-sidebar-heading {
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--txt-tertiary);
+}

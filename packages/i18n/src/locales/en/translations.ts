@@ -69,6 +69,9 @@ export default {
   settings_moved_to_preferences: "Timezone & Language settings have been moved to preferences.",
   go_to_preferences: "Go to preferences",
   theme: "Theme",
+  jira_style: "Jira style",
+  use_jira_colors_and_layout_on_the_board_and_work_item_view:
+    "Use Jira colors and layout on the board and the work item view.",
   system_preference: "System preference",
   light: "Light",
   dark: "Dark",

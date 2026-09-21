@@ -107,6 +107,19 @@ function StoreWrapper(props: TStoreWrapper) {
     previousThemeRef.current = currentTheme;
   }, [userProfile?.theme]);
 
+  /**
+   * Effect 3: Jira style mode
+   *
+   * Mirrors the user's `is_jira_style_enabled` preference onto the document
+   * root so `styles/jira-style.css` can re-skin the board and the work item
+   * view without every component having to read the store.
+   */
+  useEffect(() => {
+    const root = document.documentElement;
+    if (userProfile?.is_jira_style_enabled) root.setAttribute("data-jira-style", "true");
+    else root.removeAttribute("data-jira-style");
+  }, [userProfile?.is_jira_style_enabled]);
+
   useEffect(() => {
     if (!userProfile?.language) return;
     changeLanguage(userProfile?.language as TLanguage);

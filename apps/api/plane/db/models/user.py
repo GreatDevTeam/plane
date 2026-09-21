@@ -243,6 +243,8 @@ class Profile(TimeAuditModel):
         max_length=255, choices=NotificationViewMode.choices, default=NotificationViewMode.FULL
     )
     is_smooth_cursor_enabled = models.BooleanField(default=False)
+    # jira style mode (board layout + work item view)
+    is_jira_style_enabled = models.BooleanField(default=False)
     # mobile
     is_mobile_onboarded = models.BooleanField(default=False)
     mobile_onboarding_step = models.JSONField(default=get_mobile_default_onboarding)

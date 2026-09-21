@@ -126,14 +126,14 @@ export const HeaderGroupByCard = observer(function HeaderGroupByCard(props: IHea
           }`}
         >
           <div
-            className={`line-clamp-1 inline-block truncate overflow-hidden font-medium text-primary ${
+            className={`jira-kanban-column-title line-clamp-1 inline-block truncate overflow-hidden font-medium text-primary ${
               verticalAlignPosition ? `max-h-[400px] vertical-lr` : ``
             }`}
           >
             {title}
           </div>
           <div
-            className={`flex-shrink-0 text-13 font-medium text-tertiary ${verticalAlignPosition ? `pr-0.5` : `pl-2`}`}
+            className={`jira-kanban-column-count flex-shrink-0 text-13 font-medium text-tertiary ${verticalAlignPosition ? `pr-0.5` : `pl-2`}`}
           >
             {count || 0}
           </div>
