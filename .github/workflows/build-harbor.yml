@@ -13,6 +13,8 @@ jobs:
     name: Build ${{ matrix.name }}
     runs-on: [self-hosted, linux]
     timeout-minutes: 45
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     strategy:
       matrix:
         include:
@@ -92,6 +94,62 @@ jobs:
           curl -fsS "$CONSUL_ADDR/v1/kv/config/k8s/kubeconfig?raw" > "$KCFG"
           chmod 600 "$KCFG"
           echo "KUBECONFIG=$KCFG" >> "$GITHUB_ENV"
+
+      # A restart alone never applies Django migrations that ship in this build -- the
+      # migrator (plane-app-api-migrate-*) is a Helm post-upgrade hook Job and only ever
+      # runs during `helm upgrade`, which this CI-triggered restart deploy deliberately
+      # skips (see k8s-stack skill build-plane-fork-images: "no k8s deploy step" was about
+      # not changing the *chart* -- this restart-only path still shipped a real gap: a
+      # migration merged 2026-09-20 sat unapplied for hours because nothing here ran it).
+      # Run the same entrypoint the Helm hook uses, as a one-off Job against the image just
+      # pushed above, using the release's own ConfigMap/Secrets so env matches production
+      # exactly (names confirmed live via `kubectl get configmap,secret -n plane`). This
+      # runs on every deploy, migrations or not -- `manage.py migrate` is a no-op when
+      # there's nothing new, so it's safe to always run.
+      - name: Run DB migrations for the new backend image
+        run: |
+          set -euo pipefail
+          JOB_NAME="plane-app-api-migrate-ci-${GITHUB_SHA::8}"
+          kubectl -n plane delete job "$JOB_NAME" --ignore-not-found
+          cat <<EOF | kubectl -n plane apply -f -
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: ${JOB_NAME}
+            labels:
+              app.name: plane-plane-app-api-migrate-ci
+          spec:
+            backoffLimit: 2
+            template:
+              metadata:
+                labels:
+                  app.name: plane-plane-app-api-migrate-ci
+              spec:
+                serviceAccountName: plane-app-srv-account
+                restartPolicy: Never
+                containers:
+                  - name: plane-app-api-migrate
+                    image: ${{ env.DOCKER_REGISTRY }}/plane-backend:${{ needs.build.outputs.tag }}
+                    imagePullPolicy: Always
+                    command: ["./bin/docker-entrypoint-migrator.sh"]
+                    envFrom:
+                      - configMapRef:
+                          name: plane-app-app-vars
+                          optional: false
+                      - secretRef:
+                          name: plane-app-app-secrets
+                          optional: false
+                      - secretRef:
+                          name: plane-app-doc-store-secrets
+                          optional: false
+          EOF
+          if ! kubectl -n plane wait --for=condition=complete "job/$JOB_NAME" --timeout=180s; then
+            echo "::error::DB migration job failed or timed out -- see logs below"
+            kubectl -n plane logs "job/$JOB_NAME" --all-containers --tail=-1 || true
+            exit 1
+          fi
+          kubectl -n plane logs "job/$JOB_NAME" --all-containers --tail=-1 || true
+          kubectl -n plane delete job "$JOB_NAME" --ignore-not-found
 
       # charts/plane/values.yaml (k8s-stack) pins planeVersion to the floating tag
       # "custom" -- every build above pushes to the same tag, so the pod spec's image
