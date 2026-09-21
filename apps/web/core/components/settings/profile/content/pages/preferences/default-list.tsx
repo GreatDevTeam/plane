@@ -6,6 +6,7 @@
 
 import { observer } from "mobx-react";
 // components
+import { JiraStyleSwitcher } from "@/components/preferences/jira-style-switcher";
 import { ThemeSwitcher } from "@/plane-web/components/preferences/theme-switcher";
 
 export const ProfileSettingsDefaultPreferencesList = observer(function ProfileSettingsDefaultPreferencesList() {
@@ -16,6 +17,13 @@ export const ProfileSettingsDefaultPreferencesList = observer(function ProfileSe
           id: "theme",
           title: "theme",
           description: "select_or_customize_your_interface_color_scheme",
+        }}
+      />
+      <JiraStyleSwitcher
+        option={{
+          id: "jira_style",
+          title: "jira_style",
+          description: "use_jira_colors_and_layout_on_the_board_and_work_item_view",
         }}
       />
     </div>

@@ -161,12 +161,12 @@ export const KanBan = observer(function KanBan(props: IKanBan) {
           return (
             <div
               key={subList.id}
-              className={`group relative flex flex-shrink-0 flex-col ${
+              className={`jira-kanban-column group relative flex flex-shrink-0 flex-col ${
                 groupByVisibilityToggle.showIssues ? `w-[350px]` : ``
               } `}
             >
               {sub_group_by === null && (
-                <div className="sticky top-0 z-[2] w-full flex-shrink-0 bg-surface-2 py-1">
+                <div className="jira-kanban-column-header sticky top-0 z-[2] w-full flex-shrink-0 bg-surface-2 py-1">
                   <HeaderGroupByCard
                     sub_group_by={sub_group_by}
                     group_by={group_by}
