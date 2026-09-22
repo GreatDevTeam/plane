@@ -14,6 +14,7 @@ import { EIssueServiceType } from "@plane/types";
 import { cn } from "@plane/utils";
 // hooks
 import { useIssueDetail } from "@/hooks/store/use-issue-detail";
+import { useUserProfile } from "@/hooks/store/user";
 import useKeypress from "@/hooks/use-keypress";
 import usePeekOverviewOutsideClickDetector from "@/hooks/use-peek-overview-outside-click";
 // local imports
@@ -54,7 +55,6 @@ export const IssueView = observer(function IssueView(props: IIssueView) {
     issueOperations,
   } = props;
   // states
-  const [peekMode, setPeekMode] = useState<TPeekModes>("side-peek");
   const [isSubmitting, setIsSubmitting] = useState<TNameDescriptionLoader>("saved");
   const [isDeleteIssueModalOpen, setIsDeleteIssueModalOpen] = useState(false);
   const [isArchiveIssueModalOpen, setIsArchiveIssueModalOpen] = useState(false);
@@ -64,6 +64,8 @@ export const IssueView = observer(function IssueView(props: IIssueView) {
   const issuePeekOverviewRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<EditorRefApi>(null);
   // store hooks
+  const { data: userProfile } = useUserProfile();
+  const [peekMode, setPeekMode] = useState<TPeekModes>(userProfile?.is_jira_style_enabled ? "modal" : "side-peek");
   const {
     setPeekIssue,
     isAnyModalOpen,
