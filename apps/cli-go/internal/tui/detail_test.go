@@ -114,6 +114,51 @@ func TestOpenCardRefreshesInTheBackground(t *testing.T) {
 	}
 }
 
+// TestDetailManualRefresh checks "r" on the detail screen refreshes both the board (which is
+// what keeps the open item's own fields in sync — see applyBoardRefresh) and this item's
+// comments, and that a second "r" while one is already in flight is a no-op rather than
+// stacking a second request.
+func TestDetailManualRefresh(t *testing.T) {
+	m := detailFixture()
+	m.client = api.New("http://example.invalid", "token")
+	m.project = api.Project{ID: "proj-1"}
+
+	next, cmd := m.updateDetail(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("r did not issue a refresh")
+	}
+	if !m.refreshing || !m.commentsLoading {
+		t.Errorf("r did not mark a refresh in flight (refreshing=%v commentsLoading=%v)", m.refreshing, m.commentsLoading)
+	}
+	if !strings.Contains(m.status, "Refreshing") {
+		t.Errorf("status = %q, want it to mention refreshing", m.status)
+	}
+
+	_, cmd = m.updateDetail(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if cmd != nil {
+		t.Error("r while already refreshing issued a second request")
+	}
+}
+
+// TestBoardTickRefreshesDetailComments checks the 30s auto-refresh (handleBoardTick) also
+// re-fetches comments while the detail screen is open — applyBoardRefresh already keeps the
+// item's own fields in sync, but comments are a separate endpoint it never touches.
+func TestBoardTickRefreshesDetailComments(t *testing.T) {
+	m := detailFixture()
+	m.client = api.New("http://example.invalid", "token")
+	m.project = api.Project{ID: "proj-1"}
+
+	next, cmd := m.handleBoardTick(boardTickMsg{})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("the tick issued no commands")
+	}
+	if !m.refreshing || !m.commentsLoading {
+		t.Errorf("the tick did not start a refresh (refreshing=%v commentsLoading=%v)", m.refreshing, m.commentsLoading)
+	}
+}
+
 // TestHandleCommentsFocusesTheLatestComment checks the detail screen opens with the cursor on
 // the most recent comment (comments render oldest first, so that is the last one), not the
 // oldest, and that the focused comment's header renders with the lighter focused style.

@@ -73,9 +73,10 @@ func boardFixture(columns, items, width, height int) Model {
 }
 
 // TestOpenNewItemEditorAndCreate covers the whole "n" create-from-board flow: opening the
-// editor targets the focused column's state, and a successful create appends the item to
-// m.items and moves that column's cursor onto it — the same local-state update
-// handleCommentSaved does after posting a comment.
+// editor targets the focused column's state, ctrl+s on the title moves to the review step
+// (state/priority/assignee, still changeable there), and enter on that step fires the create
+// and, once it comes back, appends the item to m.items and moves that column's cursor onto
+// it — the same local-state update handleCommentSaved does after posting a comment.
 func TestOpenNewItemEditorAndCreate(t *testing.T) {
 	m := boardFixture(2, 2, 120, 40)
 	m.editor = newTestEditor()
@@ -91,10 +92,19 @@ func TestOpenNewItemEditorAndCreate(t *testing.T) {
 	}
 
 	m.editor.SetValue("A new card")
-	next, cmd := m.updateBoard(tea.KeyMsg{Type: tea.KeyCtrlS})
+	next, _ = m.updateBoard(tea.KeyMsg{Type: tea.KeyCtrlS})
+	m = next.(Model)
+	if m.editorOn {
+		t.Fatal("ctrl+s on the title left the editor open instead of moving to the review step")
+	}
+	if !m.creatingItem || m.newItemName != "A new card" {
+		t.Fatalf("creatingItem=%v newItemName=%q, want the review step with the typed title", m.creatingItem, m.newItemName)
+	}
+
+	next, cmd := m.updateBoard(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
 	if cmd == nil {
-		t.Fatal("ctrl+s did not save the new work item")
+		t.Fatal("enter on the review step did not save the new work item")
 	}
 	if !strings.Contains(m.status, "Creating work item") {
 		t.Errorf("status = %q, want it to mention creating the work item", m.status)
@@ -106,6 +116,9 @@ func TestOpenNewItemEditorAndCreate(t *testing.T) {
 	if m.editorOn {
 		t.Error("the editor stayed open after the create came back")
 	}
+	if m.creatingItem {
+		t.Error("creatingItem stayed true after the create came back")
+	}
 	if len(m.items) != 3 {
 		t.Fatalf("len(items) = %d, want 3", len(m.items))
 	}
@@ -115,6 +128,73 @@ func TestOpenNewItemEditorAndCreate(t *testing.T) {
 	}
 	if m.focusedCol != 1 || m.colCursor[1] != len(col)-1 {
 		t.Errorf("cursor = col %d idx %d, want col 1 idx %d", m.focusedCol, m.colCursor[1], len(col)-1)
+	}
+}
+
+// TestNewItemReviewPickersChangeStatePriorityAssignee covers the review step's s/y/a pickers:
+// each should land its choice in m.newItem*, not PATCH anything (there is no work item yet),
+// and the create should then send exactly what was picked.
+func TestNewItemReviewPickersChangeStatePriorityAssignee(t *testing.T) {
+	m := boardFixture(2, 2, 120, 40)
+	m.editor = newTestEditor()
+	m.members = []api.Member{{ID: "u1", DisplayName: "jane"}, {ID: "u2", DisplayName: "joe"}}
+	m.focusedCol = 0
+
+	next, _ := m.updateBoard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = next.(Model)
+	m.editor.SetValue("Reviewed card")
+	next, _ = m.updateBoard(tea.KeyMsg{Type: tea.KeyCtrlS})
+	m = next.(Model)
+	if !m.creatingItem {
+		t.Fatal("expected the review step after confirming the title")
+	}
+
+	// s -> pick state index 1 ("s1").
+	next, _ = m.updateBoard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	m = next.(Model)
+	if m.pickerOpen != "state" {
+		t.Fatalf("pickerOpen = %q, want state", m.pickerOpen)
+	}
+	next, _ = m.updatePicker(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(Model)
+	next, _ = m.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.pickerOpen != "" || m.newItemStateID != "s1" {
+		t.Fatalf("newItemStateID = %q (pickerOpen=%q), want s1 and picker closed", m.newItemStateID, m.pickerOpen)
+	}
+
+	// y -> the picker opens on the current "none" (the last entry); one "up" moves to "low".
+	next, _ = m.updateBoard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = next.(Model)
+	next, _ = m.updatePicker(tea.KeyMsg{Type: tea.KeyUp})
+	m = next.(Model)
+	next, _ = m.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.newItemPriority != "low" {
+		t.Fatalf("newItemPriority = %q, want low", m.newItemPriority)
+	}
+
+	// a -> the picker opens on "Unassigned" (idx 0); two "down"s reach member u2 (idx 2, past
+	// the leading "Unassigned" entry and u1).
+	next, _ = m.updateBoard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	m = next.(Model)
+	if m.pickerOpen != "new-item-assignee" {
+		t.Fatalf("pickerOpen = %q, want new-item-assignee", m.pickerOpen)
+	}
+	next, _ = m.updatePicker(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(Model)
+	next, _ = m.updatePicker(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(Model)
+	next, _ = m.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.newItemAssignee != "u2" {
+		t.Fatalf("newItemAssignee = %q, want u2", m.newItemAssignee)
+	}
+
+	// No API calls should have happened yet — nothing to update, the item does not exist.
+	_, cmd := m.updateBoard(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on the review step should fire the create")
 	}
 }
 

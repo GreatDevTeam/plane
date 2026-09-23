@@ -1,6 +1,12 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 var (
 	colorAccent = lipgloss.Color("39")
@@ -18,7 +24,19 @@ var (
 	// reads as slightly brighter than the rest, without being as loud as colorSelect.
 	colorCommentFocused = lipgloss.Color("250")
 
+	// colorBoardTitle is the board (project name) header's own color — white, so it stands
+	// out from titleStyle's blue, which every other screen's title still uses.
+	colorBoardTitle = lipgloss.Color("255")
+
+	// colorHiddenBg/colorHiddenFg render a collapsed board column's placeholder as dimmed
+	// text on a light grey background, rather than just narrow, so a hidden state visibly
+	// reads as out-of-the-way at a glance.
+	colorHiddenBg = lipgloss.Color("252")
+	colorHiddenFg = lipgloss.Color("238")
+
 	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
+
+	boardTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(colorBoardTitle)
 
 	helpStyle = lipgloss.NewStyle().Foreground(colorMuted)
 
@@ -30,13 +48,20 @@ var (
 
 	// columnStyle has no border: a board's state columns used to be boxed in a rounded
 	// border, which cost every column 2 terminal columns (colFrame) it could otherwise give
-	// to card titles. The focused column is now marked on its header (columnHeaderFocusedStyle)
-	// instead of a colored border.
+	// to card titles. The focused column is now marked on its header instead of a colored
+	// border (an underline on top of the state color for a board column — see
+	// pastelStateColor in renderColumn — or columnHeaderFocusedStyle for the detail screen's
+	// two panes, which have no per-state color of their own).
 	columnStyle = lipgloss.NewStyle().Padding(0, 1)
 
 	columnHeaderStyle = lipgloss.NewStyle().Bold(true)
 
 	columnHeaderFocusedStyle = columnHeaderStyle.Foreground(colorSelect).Underline(true)
+
+	// hiddenColumnStyle is a collapsed board column's placeholder: dimmed text on a light
+	// grey background (colorHiddenBg/colorHiddenFg) rather than just columnStyle's plain
+	// default colors, so a hidden state reads as visibly out-of-the-way.
+	hiddenColumnStyle = columnStyle.Background(colorHiddenBg).Foreground(colorHiddenFg)
 
 	helpSectionStyle = lipgloss.NewStyle().Bold(true).Foreground(colorGood)
 
@@ -54,6 +79,38 @@ var (
 		"none":   lipgloss.NewStyle().Foreground(colorMuted),
 	}
 )
+
+// pastelStateColor lightens a Plane state's own hex color (State.Color, e.g. "#16a34a") by
+// blending it two-thirds of the way toward white, so a column header reads as a soft tint
+// rather than the API's full-saturation swatch — that color is designed to work as a small
+// dot next to a state's name in the web app, not as bold text a terminal renders for minutes
+// at a stretch. Falls back to colorMuted for an empty or malformed color, e.g. a state whose
+// project predates Plane assigning one.
+func pastelStateColor(hex string) lipgloss.Color {
+	r, g, b, ok := parseHexColor(hex)
+	if !ok {
+		return colorMuted
+	}
+	const towardWhite = 2.0 / 3.0
+	pastel := func(c uint8) uint8 {
+		return c + uint8((255-float64(c))*towardWhite)
+	}
+	return lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", pastel(r), pastel(g), pastel(b)))
+}
+
+// parseHexColor parses a "#rrggbb" (or "rrggbb") string into its components. ok is false for
+// anything else, including the empty string.
+func parseHexColor(s string) (r, g, b uint8, ok bool) {
+	s = strings.TrimPrefix(s, "#")
+	if len(s) != 6 {
+		return 0, 0, 0, false
+	}
+	v, err := strconv.ParseUint(s, 16, 32)
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	return uint8(v >> 16), uint8(v >> 8), uint8(v), true
+}
 
 func priorityLabel(p string) string {
 	if p == "" {

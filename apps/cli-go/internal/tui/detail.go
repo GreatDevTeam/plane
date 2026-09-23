@@ -54,6 +54,8 @@ func (m Model) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.jumpToParent()
 	case "S":
 		m.openSubIssuePicker()
+	case "r":
+		return m.refreshDetail()
 	case "e":
 		if len(m.comments) == 0 || m.commentCursor < 0 || m.commentCursor >= len(m.comments) {
 			return m, nil
@@ -86,6 +88,22 @@ func (m Model) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// refreshDetail is the detail screen's manual refresh ("r"): the same board-plus-comments
+// refresh the 30s auto-refresh runs (see handleBoardTick), just triggered immediately instead
+// of waiting for the next tick.
+func (m Model) refreshDetail() (tea.Model, tea.Cmd) {
+	if m.refreshing || m.detailItem == nil {
+		return m, nil
+	}
+	m.refreshing = true
+	m.commentsLoading = true
+	m.status = "Refreshing..."
+	return m, tea.Batch(
+		refreshBoard(m.client, m.workspaceSlug, m.project.ID),
+		fetchComments(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID),
+	)
 }
 
 // openCommentEditor opens the composer either blank (commentID == "", a new comment) or
@@ -146,22 +164,29 @@ func (m *Model) openEditor(mode, placeholder, body string, height int) {
 // minEditorHeight is the smallest the editor is squeezed to on a short terminal.
 const minEditorHeight = 4
 
-// closeEditor puts the editor away without saving anything.
+// closeEditor puts the editor away without saving anything. It leaves any new-item fields
+// (creatingItem, newItemStateID, ...) alone — callers that are actually abandoning or
+// finishing a creation call resetNewItem themselves; the title editor's own ctrl+s (below)
+// needs newItemStateID to survive past this call, into the review step that follows it.
 func (m *Model) closeEditor() {
 	m.editorOn = false
 	m.editorMode = ""
 	m.editingCommentID = ""
-	m.newItemStateID = ""
 	m.editor.Blur()
 	m.editor.Reset()
 }
 
-// updateEditor drives the shared textarea for both a comment and a description.
+// updateEditor drives the shared textarea for a comment, a description, and a new work
+// item's title.
 func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
 		case "esc":
+			wasNewItem := m.editorMode == "new-item"
 			m.closeEditor()
+			if wasNewItem {
+				m.resetNewItem()
+			}
 			return m, nil
 		case "ctrl+s":
 			if m.editorMode == "new-item" {
@@ -169,9 +194,9 @@ func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if name == "" {
 					return m, nil
 				}
-				m.status = "Creating work item..."
-				return m, createWorkItem(m.client, m.workspaceSlug, m.project.ID,
-					map[string]any{"name": name, "state": m.newItemStateID})
+				m.newItemName = name
+				m.closeEditor()
+				return m, nil
 			}
 			if m.detailItem == nil {
 				return m, nil
@@ -290,7 +315,7 @@ func formatTimestamp(s string) string {
 // wrap them at a word boundary rather than letting the terminal split one mid-hint.
 var detailHints = []string{
 	"s  state", "y  priority", "d  description", "g  parent", "S  sub-tasks",
-	"tab  switch pane", "j/k  scroll", "c  add comment", "e  edit comment", "esc  back", "q  quit",
+	"tab  switch pane", "j/k  scroll", "c  add comment", "e  edit comment", "r  refresh", "esc  back", "q  quit",
 }
 
 func (m Model) viewDetail() string {
@@ -349,10 +374,21 @@ func (m Model) detailMeta(width int) string {
 		"State:     " + m.stateName(item.State),
 		"Priority:  " + priorityLabel(item.Priority),
 		"Assignees: " + m.assigneeNames(item.Assignees),
+		"Labels:    " + m.labelsLine(item.Labels),
 		"Parent:    " + m.parentLine(),
 	}
 	lines = append(lines, m.subTaskLines()...)
 	return clampLines(strings.Join(lines, "\n"), width)
+}
+
+// labelsLine is the meta block's "Labels:" value — the same label names a board card shows
+// on its meta line (see labelNames in board.go), comma-joined, or an em dash for none.
+func (m Model) labelsLine(ids []string) string {
+	names := m.labelNames(ids)
+	if len(names) == 0 {
+		return "—"
+	}
+	return strings.Join(names, ", ")
 }
 
 // parentLine is the meta block's "Parent:" value.

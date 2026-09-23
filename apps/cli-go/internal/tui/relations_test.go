@@ -187,6 +187,24 @@ func TestDetailMetaWithoutRelations(t *testing.T) {
 	if !strings.Contains(view, "Sub-tasks: —") {
 		t.Errorf("an item with no children should say so:\n%s", view)
 	}
+	if !strings.Contains(view, "Labels:    —") {
+		t.Errorf("an item with no labels should say so:\n%s", view)
+	}
+}
+
+// TestDetailMetaShowsLabels checks the meta block resolves label IDs to names, the same way
+// a board card's meta line does (labelNames).
+func TestDetailMetaShowsLabels(t *testing.T) {
+	m := relationsFixture(0)
+	lone := m.items[2]
+	lone.Labels = []string{"l1", "l2"}
+	m.detailItem = &lone
+	m.labels = []api.Label{{ID: "l1", Name: "bug"}, {ID: "l2", Name: "urgent-fix"}}
+
+	view := m.viewDetail()
+	if !strings.Contains(view, "Labels:    bug, urgent-fix") {
+		t.Errorf("detail screen does not show the item's labels:\n%s", view)
+	}
 }
 
 // TestDetailInlineSubTaskListIsCapped checks the meta block does not grow without bound: a

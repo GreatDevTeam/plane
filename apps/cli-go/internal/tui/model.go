@@ -127,7 +127,16 @@ type Model struct {
 	editorOn         bool
 	editorMode       string // "comment" | "description" | "new-item", meaningful while editorOn
 	editingCommentID string // "" while composing a new comment, set while editing an existing one
-	newItemStateID   string // state the new item lands in, meaningful while editorMode == "new-item"
+
+	// New work item creation (board's "n"): the title is typed in the shared editor
+	// (editorMode == "new-item"), then creatingItem drives a review step — reusing the
+	// state/priority pickers plus a dedicated assignee one — where the user can change where
+	// it lands before the POST actually fires. See openNewItemEditor/updateNewItemReview.
+	creatingItem    bool
+	newItemName     string
+	newItemStateID  string
+	newItemPriority string
+	newItemAssignee string // member ID, "" = unassigned
 }
 
 // New builds the initial model. If cfg has a saved server+token, the model starts by
@@ -224,6 +233,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleProjects(msg)
 	case boardDataMsg:
 		return m.handleBoardData(msg)
+	case boardExtrasMsg:
+		return m.handleBoardExtras(msg)
 	case boardItemsPageMsg:
 		return m.handleBoardItemsPage(msg)
 	case boardRefreshedMsg:
@@ -367,6 +378,7 @@ var helpSections = []helpSection{
 		{"j/k or up/down", "select comment"},
 		{"c", "add comment"},
 		{"e", "edit selected comment (own only)"},
+		{"r", "refresh"},
 		{"esc/backspace", "back"},
 	}},
 	{"Editor (comment / description / new item)", [][2]string{
