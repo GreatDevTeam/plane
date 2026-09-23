@@ -138,7 +138,28 @@ func (m Model) Init() tea.Cmd {
 	return textinput.Blink
 }
 
+// Update dispatches msg to the real update logic, then works around a bubbletea rendering
+// gap on terminals that never report a size (m.width/m.height stay 0 — see
+// defaultTerminalWidth/defaultTerminalHeight in board.go): bubbletea's own renderer only
+// erases the stale tail of a line, or drops now-unused trailing lines, when it knows the
+// terminal's width (charmbracelet/bubbletea standard_renderer.go flush(), the
+// `if r.width > 0` guard around EraseLineRight). With width unknown that guard never fires,
+// so a board frame that shrinks between renders (a filter narrows the list, a column comes
+// into focus with fewer cards, …) leaves the wider previous frame's leftover characters on
+// screen — producing exactly the split, overlapping text a real report showed. Forcing a
+// full ClearScreen on every update while the board is on screen with an unknown size sidesteps
+// that guard entirely (ClearScreen writes ansi.EraseEntireScreen, which doesn't depend on a
+// known width). This only affects the degraded no-size case; a terminal that reports its size
+// normally never takes this path.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	newModel, cmd := m.update(msg)
+	if nm, ok := newModel.(Model); ok && nm.screen == screenBoard && (nm.width <= 0 || nm.height <= 0) {
+		cmd = tea.Batch(cmd, tea.ClearScreen)
+	}
+	return newModel, cmd
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
