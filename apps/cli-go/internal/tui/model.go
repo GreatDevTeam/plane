@@ -75,7 +75,24 @@ type Model struct {
 	colCursor        []int
 	detailItem       *api.WorkItem
 
-	pickerOpen string // "" | "state" | "priority"
+	// hiddenStates holds the state IDs whose columns are collapsed to a narrow placeholder
+	// on the current project's board. It is loaded from (and saved back to) the config file,
+	// so a board opens with the same columns collapsed as when it was last closed.
+	hiddenStates map[string]bool
+
+	// sortMode orders the cards inside every column (see sortModes in board.go).
+	sortMode string
+
+	// refreshing is true while the background 30s board refresh is in flight; autoRefreshOn
+	// guards against starting a second tick chain when another board is opened.
+	refreshing    bool
+	autoRefreshOn bool
+
+	// detailLoading is true while the open work item is being re-fetched in the background
+	// (the detail screen renders the cached copy meanwhile).
+	detailLoading bool
+
+	pickerOpen string // "" | "state" | "priority" | "sort"
 	pickerIdx  int
 
 	filterOpen     string // "" | "assignee" | "label"
@@ -87,8 +104,9 @@ type Model struct {
 	commentsLoading bool
 	commentCursor   int
 
-	commentEditor    textarea.Model
-	commentEditorOn  bool
+	editor           textarea.Model
+	editorOn         bool
+	editorMode       string // "comment" | "description", meaningful while editorOn
 	editingCommentID string // "" while composing a new comment, set while editing an existing one
 }
 
@@ -106,12 +124,14 @@ func New(cfg config.Config) Model {
 	m.passwordInput.EchoMode = textinput.EchoPassword
 	m.passwordInput.EchoCharacter = '*'
 
-	m.commentEditor = textarea.New()
-	m.commentEditor.Placeholder = "Write a comment..."
-	m.commentEditor.ShowLineNumbers = false
-	m.commentEditor.CharLimit = 0
-	m.commentEditor.SetWidth(70)
-	m.commentEditor.SetHeight(5)
+	m.editor = textarea.New()
+	m.editor.Placeholder = "Write a comment..."
+	m.editor.ShowLineNumbers = false
+	m.editor.CharLimit = 0
+	m.editor.SetWidth(70)
+	m.editor.SetHeight(5)
+	m.sortMode = normalizeSortMode(cfg.SortMode)
+	m.hiddenStates = make(map[string]bool)
 
 	if cfg.ServerURL != "" && cfg.Token != "" {
 		m.screen = screenServerInput
@@ -173,7 +193,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showHelp = false
 			return m, nil
 		}
-		if msg.String() == "?" && !isTextInputScreen(m.screen) && !m.commentEditorOn {
+		if msg.String() == "?" && !isTextInputScreen(m.screen) && !m.editorOn {
 			m.showHelp = true
 			return m, nil
 		}
@@ -186,6 +206,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleBoardData(msg)
 	case boardItemsPageMsg:
 		return m.handleBoardItemsPage(msg)
+	case boardRefreshedMsg:
+		return m.handleBoardRefreshed(msg)
+	case boardTickMsg:
+		return m.handleBoardTick(msg)
+	case workItemLoadedMsg:
+		return m.handleWorkItemLoaded(msg)
 	case workItemUpdatedMsg:
 		return m.handleWorkItemUpdated(msg)
 	case commentsMsg:
@@ -301,6 +327,8 @@ var helpSections = []helpSection{
 		{"y", "change priority"},
 		{"a", "filter by assignee"},
 		{"L", "filter by label"},
+		{"o", "card order"},
+		{"x", "hide/show this column"},
 		{"p", "switch board (project)"},
 		{"r", "refresh"},
 		{"q", "quit"},
@@ -308,12 +336,13 @@ var helpSections = []helpSection{
 	{"Detail", [][2]string{
 		{"s", "change state"},
 		{"y", "change priority"},
+		{"d", "edit description"},
 		{"j/k or up/down", "select comment"},
 		{"c", "add comment"},
 		{"e", "edit selected comment (own only)"},
 		{"esc/backspace", "back"},
 	}},
-	{"Comment editor", [][2]string{
+	{"Editor (comment / description)", [][2]string{
 		{"ctrl+s", "save"},
 		{"esc", "cancel"},
 	}},

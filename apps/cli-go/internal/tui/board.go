@@ -2,12 +2,14 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/makeplane/plane/apps/cli-go/internal/api"
+	"github.com/makeplane/plane/apps/cli-go/internal/config"
 )
 
 func (m Model) handleBoardData(msg boardDataMsg) (tea.Model, tea.Cmd) {
@@ -28,12 +30,135 @@ func (m Model) handleBoardData(msg boardDataMsg) (tea.Model, tea.Cmd) {
 	m.colCursor = make([]int, len(m.states))
 	m.filterAssignee = ""
 	m.filterLabel = ""
+	m.hiddenStates = m.cfg.HiddenStatesFor(m.project.ID)
 	m.screen = screenBoard
+
+	var cmds []tea.Cmd
 	if msg.hasNextPage {
 		m.itemsLoadingMore = true
-		return m, fetchWorkItemsPage(m.client, m.workspaceSlug, m.project.ID, msg.nextCursor)
+		cmds = append(cmds, fetchWorkItemsPage(m.client, m.workspaceSlug, m.project.ID, msg.nextCursor))
 	}
+	// Start the 30s auto-refresh chain the first time a board is opened. Exactly one chain
+	// runs for the lifetime of the process: re-arming it on every board load would stack a
+	// second (then a third) ticker each time the user switches projects.
+	if !m.autoRefreshOn {
+		m.autoRefreshOn = true
+		cmds = append(cmds, boardTick())
+	}
+	return m, tea.Batch(cmds...)
+}
+
+// handleBoardTick fires every boardRefreshInterval. It re-arms itself unconditionally, so
+// the board keeps refreshing after a skipped tick, and starts a background refresh unless
+// something on screen would be disturbed by one (see shouldSkipRefresh).
+func (m Model) handleBoardTick(boardTickMsg) (tea.Model, tea.Cmd) {
+	if m.shouldSkipRefresh() {
+		return m, boardTick()
+	}
+	m.refreshing = true
+	return m, tea.Batch(refreshBoard(m.client, m.workspaceSlug, m.project.ID), boardTick())
+}
+
+// shouldSkipRefresh reports whether a background refresh would get in the user's way right
+// now: while the board is still loading (or already refreshing), while an editor has focus,
+// and while a picker is open — a picker indexes into the very lists a refresh replaces.
+func (m Model) shouldSkipRefresh() bool {
+	if m.client == nil || m.project.ID == "" {
+		return true
+	}
+	if m.screen != screenBoard && m.screen != screenDetail {
+		return true
+	}
+	if m.loading || m.refreshing || m.itemsLoadingMore {
+		return true
+	}
+	if m.editorOn || m.pickerOpen != "" || m.filterOpen != "" {
+		return true
+	}
+	return false
+}
+
+// handleBoardRefreshed swaps a freshly fetched board in underneath the one on screen. The
+// whole board arrives in one message (states and every page of work items), so the swap is
+// atomic: nothing is ever cleared and re-filled, which is what would make the board blink
+// every 30 seconds. A failed refresh leaves the current board untouched.
+func (m Model) handleBoardRefreshed(msg boardRefreshedMsg) (tea.Model, tea.Cmd) {
+	m.refreshing = false
+	m.status = ""
+	if msg.err != nil {
+		m.setError(msg.err)
+		return m, nil
+	}
+	m.setError(nil)
+	m.applyBoardRefresh(msg.states, msg.items, msg.labels)
 	return m, nil
+}
+
+// applyBoardRefresh replaces the board's data while keeping everything the user set up
+// around it: the focused column and each column's cursor follow their state by ID (not by
+// position, so a new or removed state does not shift them), and the filters stay as they are.
+func (m *Model) applyBoardRefresh(states []api.State, items []api.WorkItem, labels []api.Label) {
+	prevCursor := make(map[string]int, len(m.colCursor))
+	for i, st := range m.states {
+		if i < len(m.colCursor) {
+			prevCursor[st.ID] = m.colCursor[i]
+		}
+	}
+	focusedID := ""
+	if m.focusedCol >= 0 && m.focusedCol < len(m.states) {
+		focusedID = m.states[m.focusedCol].ID
+	}
+
+	m.states = states
+	m.items = items
+	if len(labels) > 0 {
+		m.labels = labels
+	}
+
+	m.colCursor = make([]int, len(states))
+	for i, st := range states {
+		m.colCursor[i] = prevCursor[st.ID]
+		if st.ID == focusedID {
+			m.focusedCol = i
+		}
+	}
+	m.clampBoardCursors()
+
+	// Keep an open detail screen pointing at the refreshed copy of its work item.
+	if m.detailItem != nil {
+		for i := range m.items {
+			if m.items[i].ID == m.detailItem.ID {
+				item := m.items[i]
+				m.detailItem = &item
+				break
+			}
+		}
+	}
+}
+
+// clampBoardCursors pulls the focused column and every card cursor back inside the board
+// after its contents changed under them.
+func (m *Model) clampBoardCursors() {
+	if len(m.colCursor) != len(m.states) {
+		resized := make([]int, len(m.states))
+		copy(resized, m.colCursor)
+		m.colCursor = resized
+	}
+	if m.focusedCol >= len(m.states) {
+		m.focusedCol = len(m.states) - 1
+	}
+	if m.focusedCol < 0 {
+		m.focusedCol = 0
+	}
+	for i := range m.colCursor {
+		n := len(m.columnItems(m.states[i].ID))
+		if m.colCursor[i] >= n {
+			m.colCursor[i] = n - 1
+		}
+		if m.colCursor[i] < 0 {
+			m.colCursor[i] = 0
+		}
+	}
 }
 
 // handleBoardItemsPage appends a streamed-in page of work items to the board that is
@@ -56,7 +181,7 @@ func (m Model) handleBoardItemsPage(msg boardItemsPageMsg) (tea.Model, tea.Cmd) 
 }
 
 // columnItems returns the work items in the given state that also pass the active
-// assignee/label filters (see filter.go), in a stable order.
+// assignee/label filters (see filter.go), ordered by the board's sort mode.
 func (m Model) columnItems(stateID string) []api.WorkItem {
 	var out []api.WorkItem
 	for _, it := range m.items {
@@ -71,7 +196,68 @@ func (m Model) columnItems(stateID string) []api.WorkItem {
 		}
 		out = append(out, it)
 	}
+	sortWorkItems(out, m.sortMode)
 	return out
+}
+
+// sortModes are the board's card ordering options, in the order the picker lists them. The
+// first one is the default: whatever order the API returned the items in.
+var sortModes = []struct{ key, label string }{
+	{sortDefault, "Default (as the API returns them)"},
+	{"priority", "Priority (urgent first)"},
+	{"created-desc", "Created (newest first)"},
+	{"created-asc", "Created (oldest first)"},
+	{"updated-desc", "Recently updated first"},
+	{"name", "Name (A-Z)"},
+	{"id-asc", "Work item number (ascending)"},
+}
+
+const sortDefault = "default"
+
+// normalizeSortMode maps a persisted (or empty) sort mode onto a known one, so an old config
+// file — or a hand-edited one — cannot leave the board in an ordering nothing implements.
+func normalizeSortMode(mode string) string {
+	for _, sm := range sortModes {
+		if sm.key == mode {
+			return mode
+		}
+	}
+	return sortDefault
+}
+
+// sortModeLabel is a sort mode's human-readable name.
+func sortModeLabel(mode string) string {
+	for _, sm := range sortModes {
+		if sm.key == mode {
+			return sm.label
+		}
+	}
+	return sortModes[0].label
+}
+
+// sortWorkItems orders one column's cards in place. Every comparison is a stable sort, so
+// cards that compare equal keep the order the API returned them in. Timestamps are compared
+// as strings: Plane returns them all as UTC RFC 3339, where lexical and chronological order
+// agree.
+func sortWorkItems(items []api.WorkItem, mode string) {
+	switch normalizeSortMode(mode) {
+	case "priority":
+		sort.SliceStable(items, func(i, j int) bool {
+			return api.PriorityRank(items[i].Priority) < api.PriorityRank(items[j].Priority)
+		})
+	case "created-desc":
+		sort.SliceStable(items, func(i, j int) bool { return items[i].CreatedAt > items[j].CreatedAt })
+	case "created-asc":
+		sort.SliceStable(items, func(i, j int) bool { return items[i].CreatedAt < items[j].CreatedAt })
+	case "updated-desc":
+		sort.SliceStable(items, func(i, j int) bool { return items[i].UpdatedAt > items[j].UpdatedAt })
+	case "name":
+		sort.SliceStable(items, func(i, j int) bool {
+			return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name)
+		})
+	case "id-asc":
+		sort.SliceStable(items, func(i, j int) bool { return items[i].SequenceID < items[j].SequenceID })
+	}
 }
 
 func containsStr(list []string, v string) bool {
@@ -84,7 +270,15 @@ func containsStr(list []string, v string) bool {
 }
 
 func (m Model) selectedItem() *api.WorkItem {
-	if len(m.states) == 0 || m.focusedCol >= len(m.states) {
+	if len(m.states) == 0 || m.focusedCol < 0 || m.focusedCol >= len(m.states) {
+		return nil
+	}
+	// A collapsed column shows no cards, so it has nothing selected — otherwise s/y/enter
+	// would act on a card the user cannot see.
+	if m.isHidden(m.states[m.focusedCol].ID) {
+		return nil
+	}
+	if m.focusedCol >= len(m.colCursor) {
 		return nil
 	}
 	col := m.columnItems(m.states[m.focusedCol].ID)
@@ -130,30 +324,48 @@ func (m Model) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.focusedCol++
 		}
 	case "up", "k":
-		if m.colCursor[m.focusedCol] > 0 {
+		if m.focusedCol < len(m.colCursor) && m.colCursor[m.focusedCol] > 0 {
 			m.colCursor[m.focusedCol]--
 		}
 	case "down", "j":
-		col := m.columnItems(m.states[m.focusedCol].ID)
-		if m.colCursor[m.focusedCol] < len(col)-1 {
-			m.colCursor[m.focusedCol]++
+		if m.focusedCol < len(m.colCursor) {
+			col := m.columnItems(m.states[m.focusedCol].ID)
+			if m.colCursor[m.focusedCol] < len(col)-1 {
+				m.colCursor[m.focusedCol]++
+			}
 		}
 	case "r":
-		m.loading = true
+		// A manual refresh takes the same non-blinking path as the automatic one: the board
+		// stays on screen and is swapped out once the new data is in.
+		if m.refreshing {
+			return m, nil
+		}
+		m.refreshing = true
 		m.status = "Refreshing..."
-		return m, fetchBoard(m.client, m.workspaceSlug, m.project.ID)
+		return m, refreshBoard(m.client, m.workspaceSlug, m.project.ID)
+	case "x":
+		return m.toggleHiddenColumn()
+	case "o":
+		m.openSortPicker()
 	case "p":
 		m.screen = screenProjects
 	case "w":
 		return m.switchWorkspace()
 	case "enter":
 		if item := m.selectedItem(); item != nil {
+			// Open on the board's cached copy straight away, then re-fetch the work item
+			// and its comments in the background so the card is never shown stale (the
+			// footer says a refresh is in flight — see detailLoader).
 			m.detailItem = item
 			m.comments = nil
 			m.commentCursor = 0
 			m.commentsLoading = true
+			m.detailLoading = true
 			m.screen = screenDetail
-			return m, fetchComments(m.client, m.workspaceSlug, m.project.ID, item.ID)
+			return m, tea.Batch(
+				fetchWorkItem(m.client, m.workspaceSlug, m.project.ID, item.ID),
+				fetchComments(m.client, m.workspaceSlug, m.project.ID, item.ID),
+			)
 		}
 	case "s":
 		m.openStatePicker()
@@ -167,6 +379,56 @@ func (m Model) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// isHidden reports whether a state's column is collapsed to a placeholder on this board.
+func (m Model) isHidden(stateID string) bool {
+	return m.hiddenStates[stateID]
+}
+
+// hiddenColumns is isHidden for every state, in column order — the shape boardLayoutFor and
+// viewBoard need.
+func (m Model) hiddenColumns() []bool {
+	out := make([]bool, len(m.states))
+	for i, st := range m.states {
+		out[i] = m.isHidden(st.ID)
+	}
+	return out
+}
+
+// hiddenCount is how many of the board's columns are currently collapsed.
+func (m Model) hiddenCount() int {
+	n := 0
+	for _, st := range m.states {
+		if m.isHidden(st.ID) {
+			n++
+		}
+	}
+	return n
+}
+
+// toggleHiddenColumn collapses the focused column to a placeholder (or brings a collapsed one
+// back) and persists the choice for this project, so the board reopens the same way.
+func (m Model) toggleHiddenColumn() (tea.Model, tea.Cmd) {
+	if m.focusedCol < 0 || m.focusedCol >= len(m.states) {
+		return m, nil
+	}
+	id := m.states[m.focusedCol].ID
+	hidden := make(map[string]bool, len(m.hiddenStates)+1)
+	for k, v := range m.hiddenStates {
+		hidden[k] = v
+	}
+	if hidden[id] {
+		delete(hidden, id)
+	} else {
+		hidden[id] = true
+	}
+	m.hiddenStates = hidden
+	m.cfg.SetHiddenStates(m.project.ID, hidden)
+	if err := config.Save(m.cfg); err != nil {
+		m.setError(err)
+	}
+	return m, nil
+}
+
 func (m Model) viewBoard() string {
 	if m.loading {
 		return titleStyle.Render(m.project.Name) + "\n\nLoading board...\n\n" + m.footer("")
@@ -176,14 +438,24 @@ func (m Model) viewBoard() string {
 	}
 
 	width, height := m.termSize()
-	colWidth, firstCol, visibleCols := boardLayout(width, len(m.states), m.focusedCol)
+	hidden := m.hiddenColumns()
+	colWidth, firstCol, visibleCols := boardLayoutFor(width, hidden, m.focusedCol)
 
 	header := titleStyle.Render(m.project.Name)
 	if f := m.activeFilterSummary(); f != "" {
 		header += "  " + helpStyle.Render(f)
 	}
+	if m.sortMode != "" && m.sortMode != sortDefault {
+		header += "  " + helpStyle.Render("sorted by "+sortModeLabel(m.sortMode))
+	}
+	if n := m.hiddenCount(); n > 0 {
+		header += "  " + helpStyle.Render(fmt.Sprintf("%d hidden", n))
+	}
 	if m.itemsLoadingMore {
 		header += "  " + helpStyle.Render(fmt.Sprintf("loading more… (%d so far)", len(m.items)))
+	}
+	if m.refreshing {
+		header += "  " + helpStyle.Render("refreshing…")
 	}
 	if visibleCols < len(m.states) {
 		header += "  " + helpStyle.Render(fmt.Sprintf("columns %d-%d of %d", firstCol+1, firstCol+visibleCols, len(m.states)))
@@ -220,6 +492,10 @@ func (m Model) viewBoard() string {
 
 	var cols []string
 	for ci := firstCol; ci < firstCol+visibleCols; ci++ {
+		if hidden[ci] {
+			cols = append(cols, m.renderCollapsedColumn(ci, maxRows))
+			continue
+		}
 		cols = append(cols, m.renderColumn(ci, colWidth, maxRows))
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, cols...)
@@ -256,48 +532,77 @@ func (m Model) termSize() (width, height int) {
 }
 
 // boardLayout decides how the board's columns are laid out in a terminal `width` columns wide:
-// the width of one column, the index of the leftmost column shown, and how many are shown.
-//
-// Every returned column costs colWidth+colFrame terminal columns, so the layout always
-// satisfies visibleCols*(colWidth+colFrame) <= width. When the states do not all fit at
-// minColWidth, the board shows the widest window of columns that does fit, centred on the
-// focused one, rather than rendering them all and letting the terminal wrap the board into an
-// unreadable mess (which is what a full-screen board used to do).
+// the width of one column, the index of the leftmost column shown, and how many are shown. It
+// is boardLayoutFor for a board with no collapsed columns.
 func boardLayout(width, columns, focused int) (colWidth, first, visible int) {
+	return boardLayoutFor(width, make([]bool, columns), focused)
+}
+
+// boardLayoutFor is boardLayout for a board where hidden[i] reports whether column i is
+// collapsed to a placeholder: a collapsed column costs hiddenColWidth+colFrame terminal
+// columns instead of colWidth+colFrame, which is the point of collapsing one — the width it
+// gives up is handed to the columns still expanded.
+//
+// The layout always fits: the columns it chooses to show never need more than `width`
+// terminal columns between them. When the board cannot show every state at minColWidth it
+// shows the widest window of columns that does fit, centred on the focused one, rather than
+// rendering them all and letting the terminal wrap the board into an unreadable mess.
+func boardLayoutFor(width int, hidden []bool, focused int) (colWidth, first, visible int) {
+	columns := len(hidden)
 	if columns <= 0 {
 		return 0, 0, 0
 	}
 	if width < minColWidth+colFrame {
 		width = minColWidth + colFrame
 	}
-
-	if w := width/columns - colFrame; w >= minColWidth {
-		return min(w, maxColWidth), 0, columns
+	if focused < 0 {
+		focused = 0
+	}
+	if focused >= columns {
+		focused = columns - 1
 	}
 
-	visible = width / (minColWidth + colFrame)
-	if visible < 1 {
-		visible = 1
-	}
-	if visible > columns {
-		visible = columns
-	}
-	if visible == 1 {
-		// A single column gets the whole terminal — the layout a half-screen terminal
-		// already fell into, which reads fine.
-		colWidth = width - colFrame
-	} else {
-		colWidth = min(width/visible-colFrame, maxColWidth)
+	// fit returns the widest an expanded column may be so that the window [first, first+count)
+	// fits in width, or ok=false if it cannot fit even at minColWidth.
+	fit := func(first, count int) (int, bool) {
+		expanded, fixed := 0, 0
+		for i := first; i < first+count; i++ {
+			if hidden[i] {
+				fixed += hiddenColWidth + colFrame
+				continue
+			}
+			expanded++
+			fixed += colFrame
+		}
+		if expanded == 0 {
+			// Every column in the window is collapsed: nothing to size, it either fits or not.
+			return minColWidth, fixed <= width
+		}
+		w := (width - fixed) / expanded
+		if w > maxColWidth {
+			w = maxColWidth
+		}
+		if w < minColWidth {
+			return 0, false
+		}
+		return w, true
 	}
 
-	first = focused - (visible-1)/2
-	if first+visible > columns {
-		first = columns - visible
+	for count := columns; count >= 1; count-- {
+		first := focused - (count-1)/2
+		if first+count > columns {
+			first = columns - count
+		}
+		if first < 0 {
+			first = 0
+		}
+		if w, ok := fit(first, count); ok {
+			return w, first, count
+		}
 	}
-	if first < 0 {
-		first = 0
-	}
-	return colWidth, first, visible
+	// Not even one column fits at minColWidth (a terminal narrower than a single column):
+	// give the whole terminal to the focused one.
+	return width - colFrame, focused, 1
 }
 
 // boardCardRows is how many card rows one column may render, given the terminal height and
@@ -349,7 +654,7 @@ func clampLines(s string, width int) string {
 // them at a word boundary instead of letting the terminal split one mid-hint.
 var boardHints = []string{
 	"h/l  column", "j/k  card", "enter  open", "s  state", "y  priority",
-	"a  assignee", "L  label", "r  refresh", "p  boards", "q  quit",
+	"a  assignee", "L  label", "o  order", "x  hide col", "r  refresh", "p  boards", "q  quit",
 }
 
 // packHints joins hints into as few lines as fit within width. The full hint string is 131
@@ -391,6 +696,11 @@ const (
 	// colFrame is what columnStyle's rounded border costs on top of the column's width, so a
 	// column of colWidth occupies colWidth+colFrame terminal columns.
 	colFrame = 2
+
+	// hiddenColWidth is the content width of a collapsed column's placeholder: just wide
+	// enough for one character of its vertically stacked name, so hiding a column hands
+	// nearly all of its width to the columns that are still expanded.
+	hiddenColWidth = 3
 
 	// colPadding is columnStyle's own horizontal padding: cards inside a column of colWidth
 	// get colWidth-colPadding to render in.
@@ -436,7 +746,10 @@ func (m Model) renderColumn(ci, colWidth, maxRows int) string {
 	}
 
 	items := m.columnItems(st.ID)
-	cursor := m.colCursor[ci]
+	cursor := 0
+	if ci < len(m.colCursor) {
+		cursor = m.colCursor[ci]
+	}
 	visible := items
 	scrolled := false
 
@@ -475,6 +788,43 @@ func (m Model) renderColumn(ci, colWidth, maxRows int) string {
 		}
 	}
 	return style.Width(colWidth).Render(strings.TrimRight(out, "\n"))
+}
+
+// renderCollapsedColumn renders a hidden state as a narrow placeholder: its name and card
+// count stacked one character per row, so the column still says which state it is (and that
+// x brings it back) while costing the board only hiddenColWidth+colFrame terminal columns.
+// Like renderColumn it never grows past maxRows+colChromeRows rows.
+func (m Model) renderCollapsedColumn(ci, maxRows int) string {
+	st := m.states[ci]
+	style := columnStyle
+	if ci == m.focusedCol {
+		style = columnFocusedStyle
+	}
+	if maxRows < minCardRows {
+		maxRows = minCardRows
+	}
+
+	label := []rune(fmt.Sprintf("%s %d", st.Name, len(m.columnItems(st.ID))))
+	rows := []string{columnHeaderStyle.Render(cell("▸", hiddenColWidth))}
+	for _, r := range label {
+		if len(rows) >= maxRows {
+			// Out of room: mark the label as clipped rather than silently dropping the rest.
+			rows[len(rows)-1] = cell("…", hiddenColWidth)
+			break
+		}
+		rows = append(rows, cell(string(r), hiddenColWidth))
+	}
+	return style.Width(hiddenColWidth).Render(strings.Join(rows, "\n"))
+}
+
+// cell renders s in exactly width terminal columns, truncating or right-padding it so a
+// collapsed column's rows all line up inside its border.
+func cell(s string, width int) string {
+	s = truncate(s, width)
+	if pad := width - lipgloss.Width(s); pad > 0 {
+		s += strings.Repeat(" ", pad)
+	}
+	return s
 }
 
 // cardLine is one card's text, sized to render on a single row inside a card of cardWidth.

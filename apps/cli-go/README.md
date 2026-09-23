@@ -4,7 +4,8 @@ A terminal (TUI) client for Plane, for viewing and updating work items from a ke
 Built and tested for Ubuntu.
 
 Scope, for now: work items only — projects act as boards, work items are grouped into
-columns by state. Creating/deleting work items, comments, and other Plane features are not
+columns by state. You can read and update an item (state, priority, description), and read,
+write and edit its comments. Creating/deleting work items and other Plane features are not
 covered yet.
 
 ## Build
@@ -49,9 +50,35 @@ The server URL, token, and workspace slug are saved to `~/.config/plane-cli/conf
 | Board            | `h`/`l` switch column, `j`/`k` move card, `enter` open item      |
 |                  | `s` change state, `y` change priority                            |
 |                  | `a` filter by assignee, `L` filter by label                      |
-|                  | `r` refresh, `p` switch board (project), `q` quit                |
-| Item detail      | `s` change state, `y` change priority, `esc`/`backspace` back    |
+|                  | `o` card order, `x` hide/show the focused column                 |
+|                  | `r` refresh now, `p` switch board (project), `q` quit            |
+| Item detail      | `s` change state, `y` change priority, `d` edit description      |
+|                  | `j`/`k` select comment, `c` add comment, `e` edit own comment    |
+|                  | `esc`/`backspace` back, `q` quit                                 |
+| Editor           | `ctrl+s` save, `esc` cancel                                      |
 | Picker           | `j`/`k` move, `enter` apply, `esc` cancel                        |
+
+## Board behaviour
+
+- **Column order** matches the web app: states are ordered by their group (backlog,
+  unstarted, started, completed, cancelled) and then by their sequence inside that group.
+- **Card order** inside a column is chosen with `o`: the API's own order (default), priority,
+  created date (newest or oldest first), last updated, name, or work item number. The choice
+  is saved to the config file.
+- **Hiding a column** with `x` collapses it to a narrow placeholder — its name stays on the
+  board, stacked vertically, so you can bring it back with `x` — and hands its width to the
+  columns that are still expanded. Which columns are collapsed is saved per project.
+- **The board refreshes itself every 30 seconds.** The refresh happens in the background and
+  the new board is swapped in whole, so it never blinks and never loses your place: the
+  focused column, each column's cursor and the active filters all survive it. A refresh is
+  skipped while you are typing in an editor, while a picker is open, and while the board is
+  still loading. `r` runs the same refresh immediately.
+- **Opening a card** shows the board's cached copy straight away and re-fetches the item and
+  its comments in the background; the footer says which of the two is still in flight.
+- **Editing a description** (`d` on the detail screen) works on plain text: the current
+  description is flattened to text to edit, and saved back as one paragraph per line — the
+  same `description_html` field, and the same payload, the web app's editor sends. Rich
+  formatting written in the browser (lists, bold, links) is flattened by an edit from here.
 
 On a narrow terminal (not wide enough to fit every column at a readable width), the board
 shows only the focused column, full width, instead of squeezing all of them in; `h`/`l` still
