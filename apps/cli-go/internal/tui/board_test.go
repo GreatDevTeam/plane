@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/makeplane/plane/apps/cli-go/internal/api"
 )
 
@@ -34,64 +36,269 @@ func TestColumnItemsFiltersByAssigneeAndLabel(t *testing.T) {
 	}
 }
 
-// TestRenderColumnClipsBigListWithUnknownHeight guards against the board rendering
-// unbounded output when it has a big list of tasks but m.height hasn't been set yet (no
-// WindowSizeMsg has arrived, or the terminal never reports one). Before the
-// defaultTerminalHeight fallback, an unset height skipped row-clipping entirely and
-// produced a frame thousands of lines tall that no terminal could show.
-func TestRenderColumnClipsBigListWithUnknownHeight(t *testing.T) {
-	var items []api.WorkItem
-	for i := 0; i < 3000; i++ {
-		items = append(items, api.WorkItem{ID: fmt.Sprintf("id-%d", i), SequenceID: i, Name: "task", State: "s1"})
-	}
-	m := Model{
-		states:    []api.State{{ID: "s1", Name: "Backlog"}},
-		items:     items,
-		colCursor: []int{0},
-	}
+// longNames are deliberately awkward work item titles: longer than any column is ever going to
+// be, and a mix of ASCII and Cyrillic so byte-length and display-width disagree.
+var longNames = []string{
+	"Port the company_slug fix to truckloads of downstream services",
+	"Bound crawler impact on the lovable frontend before the next release",
+	"k8s: перевірити CFS-throttling на воркерах у проді",
+	"Прибрати публічний доступ до адмінки",
+	"short",
+}
 
-	out := m.renderColumn(0, 40)
-	lines := strings.Split(out, "\n")
-	if len(lines) > defaultTerminalHeight {
-		t.Fatalf("renderColumn with unknown height produced %d lines, want <= %d (defaultTerminalHeight)", len(lines), defaultTerminalHeight)
+// boardFixture builds a board with `items` work items spread over `columns` states, using the
+// awkward titles above — i.e. the "big lists of tasks" the report was filed against.
+func boardFixture(columns, items, width, height int) Model {
+	states := make([]api.State, columns)
+	for i := range states {
+		states[i] = api.State{ID: fmt.Sprintf("s%d", i), Name: fmt.Sprintf("State %d", i)}
+	}
+	work := make([]api.WorkItem, items)
+	for i := range work {
+		work[i] = api.WorkItem{
+			ID:         fmt.Sprintf("id-%d", i),
+			SequenceID: 1000 + i,
+			Name:       longNames[i%len(longNames)],
+			State:      states[i%columns].ID,
+		}
+	}
+	return Model{
+		project:   api.Project{Name: "A Project With A Fairly Long Name"},
+		states:    states,
+		items:     work,
+		colCursor: make([]int, columns),
+		width:     width,
+		height:    height,
 	}
 }
 
-// TestViewBoardFallsBackToNarrowWithUnknownWidth guards against the companion bug to
-// TestRenderColumnClipsBigListWithUnknownHeight: on a terminal that never reports its size,
-// m.width stays 0 just like m.height did. Before the defaultTerminalWidth fallback, the
-// narrow-terminal check (`m.width > 0 && ...`) read width==0 as "not narrow" and rendered
-// every column at full maxColWidth side by side regardless of the real (unknown) terminal
-// width, which line-wrapped the whole board into an unreadable mess. With 5 states and an
-// unset width, the board must fall back to the narrow single-column layout — i.e. render
-// exactly one bordered column, not five joined side by side.
-func TestViewBoardFallsBackToNarrowWithUnknownWidth(t *testing.T) {
-	m := Model{
-		project: api.Project{Name: "Test Project"},
-		states: []api.State{
-			{ID: "s1", Name: "Backlog"}, {ID: "s2", Name: "In Progress"},
-			{ID: "s3", Name: "Review"}, {ID: "s4", Name: "Done"}, {ID: "s5", Name: "Cancelled"},
-		},
-		items:     []api.WorkItem{{ID: "1", State: "s1", Name: "task"}},
-		colCursor: []int{0, 0, 0, 0, 0},
+// frameSize is the size of a rendered frame in terminal rows and columns.
+func frameSize(view string) (rows, cols int) {
+	lines := strings.Split(view, "\n")
+	for _, line := range lines {
+		if w := lipgloss.Width(line); w > cols {
+			cols = w
+		}
 	}
+	return len(lines), cols
+}
 
-	out := m.viewBoard()
-	if got := strings.Count(out, "╭"); got != 1 {
-		t.Fatalf("viewBoard with unknown width rendered %d columns, want 1 (narrow fallback)", got)
+// TestViewBoardFitsTerminal is the regression test for the report this task was filed for:
+// "board columns did not fit on full screen ... instead on half screen one column is shown ok".
+// A board with a big list of long-titled work items must render a frame that fits the terminal
+// it was given — in both dimensions, at every size, full screen included.
+//
+// It used to overflow both ways. Vertically, every card whose title reached the truncation
+// limit wrapped onto a second line (the truncation budget ignored cardStyle's own padding)
+// while the row budget still counted one row per card, so a 52-row terminal got a 73-row frame.
+// Horizontally, a terminal whose per-column share landed between minColWidth and
+// minColWidth+4 fell through the column-width check and rendered every column at the full
+// maxColWidth, so a 120-column terminal got a 252-column frame.
+func TestViewBoardFitsTerminal(t *testing.T) {
+	sizes := []struct{ width, height int }{
+		{230, 52}, // full screen, 1080p
+		{200, 50},
+		{160, 48},
+		{120, 40}, // used to render 252 columns wide
+		{115, 52}, // "half screen"
+		{100, 30},
+		{80, 24}, // the classic default
+		{60, 20},
+		{40, 12},
+		{24, 8}, // smaller than one column: still must not exceed the terminal
+	}
+	for _, columns := range []int{1, 3, 6, 9, 14} {
+		for _, size := range sizes {
+			m := boardFixture(columns, 900, size.width, size.height)
+			m.focusedCol = columns / 2
+			rows, cols := frameSize(m.viewBoard())
+			if rows > size.height {
+				t.Errorf("%d columns on a %dx%d terminal: frame is %d rows tall, want <= %d",
+					columns, size.width, size.height, rows, size.height)
+			}
+			if cols > size.width {
+				t.Errorf("%d columns on a %dx%d terminal: frame is %d columns wide, want <= %d",
+					columns, size.width, size.height, cols, size.width)
+			}
+		}
 	}
 }
 
-// TestUpdateForcesClearScreenOnBoardWithUnknownSize guards against the bug behind the
-// remaining "still wrong" report: on a terminal that never reports its size (m.width/m.height
-// stay 0 — the same never-reported-size terminal defaultTerminalWidth/defaultTerminalHeight
-// exist for), bubbletea's own renderer only erases a line's stale tail, or drops now-unused
-// trailing lines, once it knows the terminal width (see standard_renderer.go's `if r.width >
-// 0` guard around EraseLineRight). With that guard permanently disabled, a board frame that
-// shrinks between renders leaves the previous, wider frame's leftover characters on screen —
-// producing the split, overlapping card lists the report's screenshot showed. Update must
-// route around this by forcing a full ClearScreen on every board update while the size is
-// unknown.
+// TestViewBoardFitsTerminalWithUnknownSize covers the same invariant on a terminal that never
+// reports its size (m.width/m.height stay 0): the board must fit the assumed fallback size
+// rather than render unbounded, which is what produced a frame thousands of lines tall.
+func TestViewBoardFitsTerminalWithUnknownSize(t *testing.T) {
+	m := boardFixture(6, 3000, 0, 0)
+	rows, cols := frameSize(m.viewBoard())
+	if rows > defaultTerminalHeight {
+		t.Errorf("unknown size: frame is %d rows tall, want <= %d (defaultTerminalHeight)", rows, defaultTerminalHeight)
+	}
+	if cols > defaultTerminalWidth {
+		t.Errorf("unknown size: frame is %d columns wide, want <= %d (defaultTerminalWidth)", cols, defaultTerminalWidth)
+	}
+}
+
+// TestViewBoardFitsTerminalWithOverlays checks the row budget also covers what is drawn below
+// the board: an error line, a status line and an open picker all push the columns up.
+func TestViewBoardFitsTerminalWithOverlays(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(*Model)
+	}{
+		{"error", func(m *Model) { m.err = strings.Repeat("connection reset by peer; ", 8) }},
+		{"status", func(m *Model) { m.status = "Refreshing..." }},
+		{"state picker", func(m *Model) { m.pickerOpen = "state" }},
+		{"priority picker", func(m *Model) { m.pickerOpen = "priority" }},
+		{"filter picker", func(m *Model) { m.filterOpen = "label" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := boardFixture(6, 900, 120, 40)
+			tc.setup(&m)
+			if rows, _ := frameSize(m.viewBoard()); rows > 40 {
+				t.Errorf("frame is %d rows tall on a 120x40 terminal, want <= 40", rows)
+			}
+		})
+	}
+}
+
+// TestBoardLayoutFitsWidth pins the layout arithmetic itself: however many columns a board has,
+// the columns it chooses to show must actually fit side by side in the terminal, and the
+// focused column must be one of them (otherwise moving with h/l scrolls into nothing).
+func TestBoardLayoutFitsWidth(t *testing.T) {
+	for width := 20; width <= 300; width++ {
+		for _, columns := range []int{1, 2, 3, 5, 6, 8, 12, 20} {
+			for _, focused := range []int{0, columns / 2, columns - 1} {
+				colWidth, first, visible := boardLayout(width, columns, focused)
+				if visible < 1 || visible > columns {
+					t.Fatalf("width=%d columns=%d: showed %d columns", width, columns, visible)
+				}
+				if colWidth < minColWidth {
+					t.Fatalf("width=%d columns=%d: column width %d is below minColWidth %d", width, columns, colWidth, minColWidth)
+				}
+				if used := visible * (colWidth + colFrame); used > width && width >= minColWidth+colFrame {
+					t.Fatalf("width=%d columns=%d: %d columns of %d need %d terminal columns", width, columns, visible, colWidth, used)
+				}
+				if focused < first || focused >= first+visible {
+					t.Fatalf("width=%d columns=%d focused=%d: window [%d,%d) leaves the focused column off screen",
+						width, columns, focused, first, first+visible)
+				}
+			}
+		}
+	}
+}
+
+// TestBoardLayoutShowsEveryColumnWhenTheyFit guards the other direction: a wide terminal must
+// not collapse to a window when there is room for the whole board.
+func TestBoardLayoutShowsEveryColumnWhenTheyFit(t *testing.T) {
+	if _, _, visible := boardLayout(230, 6, 0); visible != 6 {
+		t.Errorf("6 columns on a 230-column terminal: showed %d, want all 6", visible)
+	}
+	if colWidth, _, _ := boardLayout(600, 3, 0); colWidth != maxColWidth {
+		t.Errorf("3 columns on a 600-column terminal: column width %d, want maxColWidth %d", colWidth, maxColWidth)
+	}
+	if _, _, visible := boardLayout(60, 6, 0); visible >= 6 {
+		t.Errorf("6 columns on a 60-column terminal: showed %d, want a smaller window", visible)
+	}
+}
+
+// TestRenderColumnRowsAreExactlyOneLineEach is the invariant the row budget is built on: a
+// column of maxRows cards is maxRows+colChromeRows rows tall, no matter how long the titles
+// are. Cards wrapping onto a second line here is what doubled the height of the whole board.
+func TestRenderColumnRowsAreExactlyOneLineEach(t *testing.T) {
+	for _, colWidth := range []int{minColWidth, 24, 30, maxColWidth, 110} {
+		for _, maxRows := range []int{3, 10, 40} {
+			m := boardFixture(1, 900, 120, 40)
+			got := lipgloss.Height(m.renderColumn(0, colWidth, maxRows))
+			if want := maxRows + colChromeRows; got != want {
+				t.Errorf("renderColumn(colWidth=%d, maxRows=%d) is %d rows tall, want %d",
+					colWidth, maxRows, got, want)
+			}
+		}
+	}
+}
+
+// TestCardLineFitsInsideCard checks a card's text always fits the card's own content area
+// (cardStyle adds cardFrame columns of padding inside the width it is rendered at), including
+// for the multi-byte titles where byte length and display width disagree.
+func TestCardLineFitsInsideCard(t *testing.T) {
+	for _, cardWidth := range []int{6, 10, 18, 28, 38, 100} {
+		for i, name := range longNames {
+			it := api.WorkItem{SequenceID: 100000 + i, Name: name}
+			line := cardLine(it, cardWidth)
+			if got, want := lipgloss.Width(line), cardWidth-cardFrame; got > want {
+				t.Errorf("cardLine(%q, cardWidth=%d) is %d columns wide, want <= %d", name, cardWidth, got, want)
+			}
+			if rendered := cardStyle.Width(cardWidth).Render(line); lipgloss.Height(rendered) != 1 {
+				t.Errorf("cardLine(%q, cardWidth=%d) renders on %d rows, want 1", name, cardWidth, lipgloss.Height(rendered))
+			}
+		}
+	}
+}
+
+// TestCardLineFlattensMultilineNames keeps a work item whose name contains a newline from
+// breaking its card out of its row and misaligning every column beside it.
+func TestCardLineFlattensMultilineNames(t *testing.T) {
+	it := api.WorkItem{SequenceID: 42, Name: "first line\nsecond line"}
+	if got := cardLine(it, 40); strings.ContainsAny(got, "\n\r\t") {
+		t.Errorf("cardLine kept a line break: %q", got)
+	}
+}
+
+// TestTruncateMeasuresDisplayWidth covers the truncation bug visible in the report's
+// screenshot: truncating by byte length sliced multi-byte runes in half (rendering a
+// replacement character mid-word) and clipped Cyrillic titles to roughly half the room they
+// actually had.
+func TestTruncateMeasuresDisplayWidth(t *testing.T) {
+	if got := truncate("hello", 10); got != "hello" {
+		t.Errorf("short string should be unchanged, got %q", got)
+	}
+	if got := truncate("hello world", 6); got != "hello…" {
+		t.Errorf("truncate(%q, 6) = %q, want %q", "hello world", got, "hello…")
+	}
+
+	cyrillic := "перевірити CFS-throttling"
+	for n := 1; n <= 30; n++ {
+		got := truncate(cyrillic, n)
+		if !utf8.ValidString(got) {
+			t.Fatalf("truncate(%q, %d) = %q, which is not valid UTF-8", cyrillic, n, got)
+		}
+		if w := lipgloss.Width(got); w > n {
+			t.Fatalf("truncate(%q, %d) is %d columns wide", cyrillic, n, w)
+		}
+	}
+	if got, want := truncate(cyrillic, 12), 12; lipgloss.Width(got) != want {
+		t.Errorf("truncate(%q, 12) = %q (%d columns), want %d — a byte-wise clip wastes half the width",
+			cyrillic, got, lipgloss.Width(got), want)
+	}
+}
+
+// TestPackHintsFitsWidth keeps the footer's key hints inside the terminal: the full hint line
+// is 131 columns wide, so on anything narrower the terminal wrapped it and silently took a row
+// the board had already given to a column.
+func TestPackHintsFitsWidth(t *testing.T) {
+	for _, width := range []int{20, 40, 80, 120, 200} {
+		out := packHints(boardHints, width)
+		for _, line := range strings.Split(out, "\n") {
+			if lipgloss.Width(line) > width {
+				t.Errorf("packHints(width=%d) produced a %d-column line: %q", width, lipgloss.Width(line), line)
+			}
+		}
+		for _, hint := range boardHints {
+			if !strings.Contains(out, hint) {
+				t.Errorf("packHints(width=%d) dropped hint %q", width, hint)
+			}
+		}
+	}
+}
+
+// TestUpdateForcesClearScreenOnBoardWithUnknownSize guards against the bug behind an earlier
+// "still wrong" report: on a terminal that never reports its size (m.width/m.height stay 0 —
+// the same never-reported-size terminal defaultTerminalWidth/defaultTerminalHeight exist for),
+// bubbletea's own renderer only erases a line's stale tail, or drops now-unused trailing lines,
+// once it knows the terminal width (see standard_renderer.go's `if r.width > 0` guard around
+// EraseLineRight). With that guard permanently disabled, a board frame that shrinks between
+// renders leaves the previous, wider frame's leftover characters on screen. Update must route
+// around this by forcing a full ClearScreen on every board update while the size is unknown.
 func TestUpdateForcesClearScreenOnBoardWithUnknownSize(t *testing.T) {
 	m := Model{
 		screen:    screenBoard,
@@ -126,14 +333,5 @@ func TestUpdateDoesNotForceClearScreenWithKnownSize(t *testing.T) {
 
 	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyDown}); cmd != nil {
 		t.Fatalf("Update on board with known size returned a non-nil Cmd (%#v), want nil", cmd())
-	}
-}
-
-func TestTruncate(t *testing.T) {
-	if got := truncate("hello", 10); got != "hello" {
-		t.Errorf("short string should be unchanged, got %q", got)
-	}
-	if got := truncate("hello world", 6); got != "hello…" {
-		t.Errorf("truncate(11 chars, 6) = %q, want %q", got, "hello…")
 	}
 }
