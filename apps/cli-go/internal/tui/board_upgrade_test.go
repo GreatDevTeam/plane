@@ -362,6 +362,7 @@ func TestShouldSkipRefresh(t *testing.T) {
 		"paging in items":        func(m *Model) { m.itemsLoadingMore = true },
 		"picker open":            func(m *Model) { m.pickerOpen = "state" },
 		"filter open":            func(m *Model) { m.filterOpen = "label" },
+		"id prompt open":         func(m *Model) { m.idPromptOpen = true },
 		"on the projects screen": func(m *Model) { m.screen = screenProjects },
 	}
 	for name, setup := range cases {

@@ -137,6 +137,11 @@ type Model struct {
 	newItemStateID  string
 	newItemPriority string
 	newItemAssignee string // member ID, "" = unassigned
+
+	// idPromptOpen/idInput drive the board's "open by work item id" prompt (g): a bare
+	// numeric input, looked up against the board's own m.items (see updateIDPrompt).
+	idPromptOpen bool
+	idInput      textinput.Model
 }
 
 // New builds the initial model. If cfg has a saved server+token, the model starts by
@@ -161,6 +166,7 @@ func New(cfg config.Config) Model {
 	m.editor.SetHeight(5)
 	m.sortMode = normalizeSortMode(cfg.SortMode)
 	m.hiddenStates = make(map[string]bool)
+	m.idInput = newInput("e.g. 123", 12)
 
 	if cfg.ServerURL != "" && cfg.Token != "" {
 		m.screen = screenServerInput
@@ -318,8 +324,14 @@ func (m *Model) setError(err error) {
 	}
 }
 
+// footer renders the screen's bottom area: hint, then an error line, then a status line —
+// each only if set. hint is taken as already styled (packHints and every literal hint string
+// passed in wrap themselves in helpStyle/helpKeyStyle) rather than wrapped here, which is what
+// lets a hint line color its shortcuts (helpKeyStyle) differently from the text describing
+// them (helpStyle) — wrapping the whole thing in one style here, as this used to, would have
+// made that impossible.
 func (m Model) footer(hint string) string {
-	out := helpStyle.Render(hint)
+	out := hint
 	if m.err != "" {
 		out += "\n" + errorStyle.Render("Error: "+m.err)
 	}
@@ -360,8 +372,11 @@ var helpSections = []helpSection{
 		{"enter", "open item"},
 		{"s", "change state"},
 		{"y", "change priority"},
+		{"A", "change assignee"},
 		{"a", "filter by assignee"},
 		{"L", "filter by label"},
+		{"u", "copy work item url"},
+		{"g", "open by work item id"},
 		{"o", "card order"},
 		{"n", "new work item"},
 		{"x", "hide/show this column"},
@@ -372,9 +387,11 @@ var helpSections = []helpSection{
 	{"Detail", [][2]string{
 		{"s", "change state"},
 		{"y", "change priority"},
+		{"A", "change assignee"},
 		{"d", "edit description"},
 		{"g", "go to parent work item"},
 		{"S", "jump to a sub-task"},
+		{"u", "copy work item url"},
 		{"j/k or up/down", "select comment"},
 		{"c", "add comment"},
 		{"e", "edit selected comment (own only)"},

@@ -129,8 +129,13 @@ func TestCardShowsParentAndSubTaskBadges(t *testing.T) {
 		t.Fatalf("a card with relations is %d rows, want cardRows=%d", len(lines), cardRows)
 	}
 	meta := lines[cardRows-1]
-	if !strings.Contains(meta, "↑100") {
-		t.Errorf("card does not show its parent's work item number:\n%q", meta)
+	// The parent badge is deliberately bare on a board card — no work item number, which is
+	// one "g" away on the detail screen's own Parent: line instead (see cardRelations).
+	if !strings.Contains(meta, "↑") {
+		t.Errorf("card does not show that it has a parent:\n%q", meta)
+	}
+	if strings.Contains(meta, "↑100") {
+		t.Errorf("board card should not show the parent's work item number:\n%q", meta)
 	}
 	if !strings.Contains(meta, "↳3") {
 		t.Errorf("card does not show how many sub-tasks it has:\n%q", meta)

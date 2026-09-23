@@ -111,20 +111,18 @@ func (m Model) relationSummary(it api.WorkItem) string {
 }
 
 // cardRelations is the compact parent/sub-task badge a board card carries on its meta line:
-// "↑2113" for the parent it belongs to and "↳3" for the sub-tasks hanging off it. It stays
+// a bare "↑" for the parent it belongs to and "↳3" for the sub-tasks hanging off it. It stays
 // on the existing meta line on purpose — a fourth card row would cost every column a quarter
 // of its cards (see cardRows).
 //
-// An item whose parent the board has not loaded still gets a bare "↑", so a card never looks
-// like a top-level item just because its parent is archived or on a page still in flight.
+// The parent badge carries no work item number — a board column is already tight on width
+// (see cardMetaLine's own comment on what gets cut first), and the number is one "g" away on
+// the detail screen's own Parent: line (parentLine), which is where it is actually useful for
+// jumping to it. "↑" alone is enough to say the card has one.
 func (m Model) cardRelations(it api.WorkItem) string {
 	out := ""
 	if it.Parent != "" {
-		if p := m.parentOf(it); p != nil {
-			out = fmt.Sprintf("↑%d", p.SequenceID)
-		} else {
-			out = "↑"
-		}
+		out = "↑"
 	}
 	if n := m.subIssueCount(it.ID); n > 0 {
 		if out != "" {

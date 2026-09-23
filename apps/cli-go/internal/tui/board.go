@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -92,7 +93,7 @@ func (m Model) shouldSkipRefresh() bool {
 	if m.loading || m.refreshing || m.itemsLoadingMore {
 		return true
 	}
-	if m.editorOn || m.pickerOpen != "" || m.filterOpen != "" {
+	if m.editorOn || m.pickerOpen != "" || m.filterOpen != "" || m.idPromptOpen {
 		return true
 	}
 	return false
@@ -334,6 +335,9 @@ func (m Model) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.creatingItem {
 		return m.updateNewItemReview(msg)
 	}
+	if m.idPromptOpen {
+		return m.updateIDPrompt(msg)
+	}
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
@@ -391,10 +395,16 @@ func (m Model) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openStatePicker()
 	case "y":
 		m.openPriorityPicker()
+	case "A":
+		m.openAssigneePicker()
 	case "a":
 		m.openFilterPicker("assignee")
 	case "L":
 		m.openFilterPicker("label")
+	case "u":
+		return m.copyItemURL(m.selectedItem())
+	case "g":
+		m.openIDPrompt()
 	}
 	return m, nil
 }
@@ -566,12 +576,68 @@ func (m Model) newItemAssigneeName() string {
 	return m.memberName(m.newItemAssignee)
 }
 
+// openIDPrompt opens the board's "open by work item id" prompt (g): the user types a work
+// item's number and enter opens it, the same way pressing enter on its card does.
+func (m *Model) openIDPrompt() {
+	m.setError(nil)
+	m.idInput.Reset()
+	m.idInput.Focus()
+	m.idPromptOpen = true
+}
+
+// closeIDPrompt puts the id prompt away without opening anything.
+func (m Model) closeIDPrompt() Model {
+	m.idPromptOpen = false
+	m.idInput.Blur()
+	m.idInput.Reset()
+	return m
+}
+
+// updateIDPrompt drives the board's "open by work item id" prompt. There is no by-sequence-
+// number lookup in Plane's public API (the work-items endpoint is only keyed by its own UUID),
+// so this can only find a work item the board has already loaded into m.items — on a large
+// project still streaming its later pages in, a very recently created item may not be there
+// yet.
+func (m Model) updateIDPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
+		case "esc":
+			return m.closeIDPrompt(), nil
+		case "enter":
+			raw := strings.TrimSpace(m.idInput.Value())
+			n, err := strconv.Atoi(raw)
+			if err != nil || n <= 0 {
+				m.setError(fmt.Errorf("enter a work item number"))
+				return m, nil
+			}
+			for _, it := range m.items {
+				if it.SequenceID == n {
+					m = m.closeIDPrompt()
+					return m.openWorkItem(it)
+				}
+			}
+			m.setError(fmt.Errorf("work item #%d is not loaded on this board", n))
+			return m, nil
+		}
+	}
+	var cmd tea.Cmd
+	m.idInput, cmd = m.idInput.Update(msg)
+	return m, cmd
+}
+
+// viewIDPrompt renders the board's "open by work item id" prompt.
+func (m Model) viewIDPrompt() string {
+	body := columnHeaderStyle.Render("Open work item by id") + "\n" + m.idInput.View() + "\n" +
+		helpStyle.Render("enter  open    esc  cancel")
+	return focusedInputStyle.Render(body)
+}
+
 func (m Model) viewBoard() string {
 	if m.loading {
 		return boardTitleStyle.Render(m.project.Name) + "\n\nLoading board...\n\n" + m.footer("")
 	}
 	if len(m.states) == 0 {
-		return boardTitleStyle.Render(m.project.Name) + "\n\n" + helpStyle.Render("This project has no states.") + "\n\n" + m.footer("p  switch board    q  quit")
+		return boardTitleStyle.Render(m.project.Name) + "\n\n" + helpStyle.Render("This project has no states.") + "\n\n" + m.footer(helpStyle.Render("p  switch board    q  quit"))
 	}
 
 	// Every card carries a sub-task badge, so count each item's children once here rather
@@ -619,6 +685,9 @@ func (m Model) viewBoard() string {
 	}
 	if m.creatingItem && m.pickerOpen == "" && !m.editorOn {
 		overlay += "\n\n" + m.viewNewItemReview()
+	}
+	if m.idPromptOpen {
+		overlay += "\n\n" + m.viewIDPrompt()
 	}
 
 	// Everything on screen that is not a card row: the header and its blank line, the blank
@@ -800,31 +869,44 @@ func clampLines(s string, width int) string {
 
 // boardHints are the board footer's key hints, kept as separate chunks so packHints can wrap
 // them at a word boundary instead of letting the terminal split one mid-hint.
-var boardHints = []string{
-	"h/l  column", "j/k  card", "enter  open", "s  state", "y  priority",
-	"a  assignee", "L  label", "o  order", "n  new item", "x  hide col", "r  refresh", "p  boards", "q  quit",
+var boardHints = [][2]string{
+	{"h/l", "column"}, {"j/k", "card"}, {"enter", "open"}, {"s", "state"}, {"y", "priority"},
+	{"A", "assignee"}, {"a", "filter assignee"}, {"L", "filter label"}, {"u", "copy url"},
+	{"g", "open by id"}, {"o", "order"}, {"n", "new item"}, {"x", "hide col"}, {"r", "refresh"},
+	{"p", "boards"}, {"q", "quit"},
 }
 
-// packHints joins hints into as few lines as fit within width. The full hint string is 131
-// columns wide, so on anything narrower the terminal used to wrap it — silently costing the
-// board a row it had not budgeted for, and pushing the bottom of the last column off screen.
-func packHints(hints []string, width int) string {
+// packHints joins hint key/description pairs into as few lines as fit within width, styling
+// each key in helpKeyStyle and its description (plus every separator) in helpStyle — a
+// shortcut used to read in exactly the same dim color as the text describing it, with nothing
+// to make it stand out as the part to actually press. The full hint line is 131 columns wide,
+// so on anything narrower the terminal used to wrap it — silently costing the board a row it
+// had not budgeted for, and pushing the bottom of the last column off screen. Line-breaking is
+// still decided from each pair's plain "key  desc" width (the same math as before this had any
+// per-part styling), never the styled one, so the ANSI escape bytes styling adds can never skew
+// where a line actually breaks.
+func packHints(hints [][2]string, width int) string {
 	const sep = "    "
+	plain := func(h [2]string) string { return h[0] + "  " + h[1] }
+	styled := func(h [2]string) string { return helpKeyStyle.Render(h[0]) + helpStyle.Render("  "+h[1]) }
+
 	var lines []string
-	cur := ""
+	var curPlain, curStyled string
 	for _, h := range hints {
+		p := plain(h)
 		switch {
-		case cur == "":
-			cur = h
-		case len(cur)+len(sep)+len(h) <= width:
-			cur += sep + h
+		case curPlain == "":
+			curPlain, curStyled = p, styled(h)
+		case len(curPlain)+len(sep)+len(p) <= width:
+			curPlain += sep + p
+			curStyled += helpStyle.Render(sep) + styled(h)
 		default:
-			lines = append(lines, cur)
-			cur = h
+			lines = append(lines, curStyled)
+			curPlain, curStyled = p, styled(h)
 		}
 	}
-	if cur != "" {
-		lines = append(lines, cur)
+	if curPlain != "" {
+		lines = append(lines, curStyled)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1000,10 +1082,20 @@ func (m Model) cardLines(it api.WorkItem, cardWidth int) []string {
 	if avail < 1 {
 		avail = 1
 	}
-	prefix := fmt.Sprintf("#%d ", it.SequenceID)
+	plainPrefix := fmt.Sprintf("#%d ", it.SequenceID)
 	title := oneLine(it.Name)
 
-	line1, rest := wrapLine(prefix+title, avail)
+	// wrapLine cuts the plain (unstyled) "#123 title" text so the wrap point is decided by
+	// what is actually on screen; only afterwards is cardNumberStyle applied to however much
+	// of plainPrefix survived onto line1 — on a card too narrow to fit even the number, that
+	// is less than the whole prefix, so the split has to measure the real cut rather than
+	// assuming line1 starts with plainPrefix in full.
+	line1, rest := wrapLine(plainPrefix+title, avail)
+	prefixLen := len(plainPrefix)
+	if prefixLen > len(line1) {
+		prefixLen = len(line1)
+	}
+	line1 = cardNumberStyle.Render(line1[:prefixLen]) + line1[prefixLen:]
 	line2 := truncate(strings.TrimSpace(rest), avail)
 	line3 := truncate(m.cardMetaLine(it), avail)
 
@@ -1046,8 +1138,9 @@ func (m Model) cardMetaLine(it api.WorkItem) string {
 	return strings.Join(parts, "  ")
 }
 
-// labelNames resolves label IDs to their names against the board's label list, dropping any
-// ID the board does not (yet) know about rather than showing a raw UUID.
+// labelNames resolves label IDs to their names, each rendered in that label's own color (see
+// labelText) against the board's label list, dropping any ID the board does not (yet) know
+// about rather than showing a raw UUID.
 func (m Model) labelNames(ids []string) []string {
 	if len(ids) == 0 {
 		return nil
@@ -1056,7 +1149,7 @@ func (m Model) labelNames(ids []string) []string {
 	for _, id := range ids {
 		for _, l := range m.labels {
 			if l.ID == id {
-				names = append(names, l.Name)
+				names = append(names, labelText(l.Name, l.Color))
 				break
 			}
 		}

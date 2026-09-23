@@ -1,6 +1,10 @@
 package tui
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 // TestPastelStateColorLightensTowardWhite checks a state's own color comes out visibly
 // lighter (closer to white) than the original, rather than being rendered at full saturation
@@ -15,6 +19,20 @@ func TestPastelStateColorLightensTowardWhite(t *testing.T) {
 	for _, bad := range []string{"", "not-a-color", "#zzzzzz", "#fff"} {
 		if got := pastelStateColor(bad); got != colorMuted {
 			t.Errorf("pastelStateColor(%q) = %v, want the colorMuted fallback %v", bad, got, colorMuted)
+		}
+	}
+}
+
+// TestLabelColor checks a label's own color is used as-is (unlike pastelStateColor, which
+// blends toward white) and that a malformed/empty color falls back to colorMuted rather than a
+// zero-value black — the task that asked for labels to carry their own color at all.
+func TestLabelColor(t *testing.T) {
+	if got := labelColor("#f59e0b"); got != lipgloss.Color("#f59e0b") {
+		t.Errorf("labelColor(#f59e0b) = %v, want #f59e0b unchanged", got)
+	}
+	for _, bad := range []string{"", "not-a-color", "#zzzzzz"} {
+		if got := labelColor(bad); got != colorMuted {
+			t.Errorf("labelColor(%q) = %v, want the colorMuted fallback %v", bad, got, colorMuted)
 		}
 	}
 }

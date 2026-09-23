@@ -71,6 +71,11 @@ var (
 
 	cardSelectedStyle = cardStyle.Background(colorSelect).Foreground(lipgloss.Color("255"))
 
+	// cardNumberStyle is a card's "#123" prefix — dimmer than the title next to it, the same
+	// way priorityStyles/pastelStateColor exist so a card's title is the thing that actually
+	// draws the eye rather than competing equally with its own work item number.
+	cardNumberStyle = lipgloss.NewStyle().Foreground(colorMuted)
+
 	priorityStyles = map[string]lipgloss.Style{
 		"urgent": lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true),
 		"high":   lipgloss.NewStyle().Foreground(lipgloss.Color("208")),
@@ -110,6 +115,25 @@ func parseHexColor(s string) (r, g, b uint8, ok bool) {
 		return 0, 0, 0, false
 	}
 	return uint8(v >> 16), uint8(v >> 8), uint8(v), true
+}
+
+// labelColor is a label's own color (api.Label.Color, e.g. "#f59e0b"), or colorMuted for an
+// empty or malformed one. Unlike pastelStateColor this is not blended toward white: a label is
+// a handful of characters on a card, not a whole column header, so it can afford the same
+// full-saturation color the web app shows it in.
+func labelColor(hex string) lipgloss.Color {
+	r, g, b, ok := parseHexColor(hex)
+	if !ok {
+		return colorMuted
+	}
+	return lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", r, g, b))
+}
+
+// labelText renders a label's name in its own color (see labelColor) so a card's labels read
+// as distinct tags rather than plain text indistinguishable from the rest of its meta line —
+// the same reason priorityLabel colors a priority.
+func labelText(name, hex string) string {
+	return lipgloss.NewStyle().Foreground(labelColor(hex)).Render(name)
 }
 
 func priorityLabel(p string) string {
