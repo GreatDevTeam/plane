@@ -153,3 +153,63 @@ func editComment(client *api.Client, workspaceSlug, projectID, workItemID, comme
 		return commentSavedMsg{comment: cm, editing: true, err: err}
 	}
 }
+
+// boardRefreshInterval is how often the board re-fetches itself in the background.
+const boardRefreshInterval = 30 * time.Second
+
+// refreshTimeout is the deadline for a background refresh. It is more generous than
+// requestTimeout because one refresh walks every page of a project's work items, so that the
+// whole board can be swapped in at once instead of page by page (which is what would make it
+// blink).
+const refreshTimeout = 60 * time.Second
+
+// boardTickMsg fires every boardRefreshInterval while a board is open.
+type boardTickMsg time.Time
+
+func boardTick() tea.Cmd {
+	return tea.Tick(boardRefreshInterval, func(t time.Time) tea.Msg { return boardTickMsg(t) })
+}
+
+// boardRefreshedMsg carries a complete, freshly fetched board. Unlike boardDataMsg it is
+// applied on top of the board already on screen: the states and items are swapped in one go,
+// keeping the focused column, the cursors and the filters, so a refresh is invisible unless
+// something actually changed.
+type boardRefreshedMsg struct {
+	states []api.State
+	items  []api.WorkItem
+	labels []api.Label
+	err    error
+}
+
+func refreshBoard(client *api.Client, workspaceSlug, projectID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), refreshTimeout)
+		defer cancel()
+		states, err := client.ListStates(ctx, workspaceSlug, projectID)
+		if err != nil {
+			return boardRefreshedMsg{err: err}
+		}
+		items, err := client.ListWorkItems(ctx, workspaceSlug, projectID)
+		if err != nil {
+			return boardRefreshedMsg{err: err}
+		}
+		labels, _ := client.ListLabels(ctx, workspaceSlug, projectID)
+		return boardRefreshedMsg{states: states, items: items, labels: labels}
+	}
+}
+
+// workItemLoadedMsg carries the freshly fetched copy of the work item the detail screen has
+// open — the background half of opening a card from the board's cache.
+type workItemLoadedMsg struct {
+	item *api.WorkItem
+	err  error
+}
+
+func fetchWorkItem(client *api.Client, workspaceSlug, projectID, workItemID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		item, err := client.GetWorkItem(ctx, workspaceSlug, projectID, workItemID)
+		return workItemLoadedMsg{item: item, err: err}
+	}
+}

@@ -3,6 +3,7 @@ package tui
 import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/makeplane/plane/apps/cli-go/internal/api"
+	"github.com/makeplane/plane/apps/cli-go/internal/config"
 )
 
 // activeItem returns whichever work item the currently open picker applies to: the one
@@ -44,9 +45,25 @@ func (m *Model) openPriorityPicker() {
 	}
 }
 
+// openSortPicker opens the list of card orderings, with the board's current one selected.
+func (m *Model) openSortPicker() {
+	m.pickerOpen = "sort"
+	m.pickerIdx = 0
+	current := normalizeSortMode(m.sortMode)
+	for i, sm := range sortModes {
+		if sm.key == current {
+			m.pickerIdx = i
+			break
+		}
+	}
+}
+
 func (m Model) pickerOptionCount() int {
-	if m.pickerOpen == "state" {
+	switch m.pickerOpen {
+	case "state":
 		return len(m.states)
+	case "sort":
+		return len(sortModes)
 	}
 	return len(api.Priorities)
 }
@@ -68,6 +85,20 @@ func (m Model) updatePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pickerIdx++
 		}
 	case "enter":
+		if m.pickerOpen == "sort" {
+			// Ordering is a view setting, not a change to any work item: apply it locally
+			// (and remember it for the next run) instead of PATCHing anything.
+			if m.pickerIdx >= 0 && m.pickerIdx < len(sortModes) {
+				m.sortMode = sortModes[m.pickerIdx].key
+				m.cfg.SortMode = m.sortMode
+				if err := config.Save(m.cfg); err != nil {
+					m.setError(err)
+				}
+				m.clampBoardCursors()
+			}
+			m.pickerOpen = ""
+			return m, nil
+		}
 		item := m.activeItem()
 		if item == nil {
 			m.pickerOpen = ""
@@ -87,15 +118,23 @@ func (m Model) updatePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) viewPicker() string {
 	title := "Change state"
-	if m.pickerOpen == "priority" {
+	switch m.pickerOpen {
+	case "priority":
 		title = "Change priority"
+	case "sort":
+		title = "Order cards by"
 	}
 	out := columnHeaderStyle.Render(title) + "\n"
-	if m.pickerOpen == "state" {
+	switch {
+	case m.pickerOpen == "state":
 		for i, st := range m.states {
 			out += pickerLine(st.Name, i == m.pickerIdx)
 		}
-	} else {
+	case m.pickerOpen == "sort":
+		for i, sm := range sortModes {
+			out += pickerLine(sm.label, i == m.pickerIdx)
+		}
+	default:
 		for i, p := range api.Priorities {
 			out += pickerLine(p, i == m.pickerIdx)
 		}
@@ -119,6 +158,11 @@ func (m Model) handleWorkItemUpdated(msg workItemUpdatedMsg) (tea.Model, tea.Cmd
 		return m, nil
 	}
 	m.setError(nil)
+	// A description edit lands here too (it is a PATCH like any other field change), so
+	// close the editor once the save comes back.
+	if m.editorOn && m.editorMode == "description" {
+		m.closeEditor()
+	}
 	for i := range m.items {
 		if m.items[i].ID == msg.item.ID {
 			m.items[i] = *msg.item
@@ -128,5 +172,6 @@ func (m Model) handleWorkItemUpdated(msg workItemUpdatedMsg) (tea.Model, tea.Cmd
 	if m.detailItem != nil && m.detailItem.ID == msg.item.ID {
 		m.detailItem = msg.item
 	}
+	m.clampBoardCursors()
 	return m, nil
 }

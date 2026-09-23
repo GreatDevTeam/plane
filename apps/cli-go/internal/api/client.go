@@ -136,6 +136,17 @@ func (c *Client) ListWorkItemsPage(ctx context.Context, workspaceSlug, projectID
 	return page.Results, page.NextCursor, page.NextPageResults && page.NextCursor != "", nil
 }
 
+// GetWorkItem fetches a single work item by ID. The board keeps a cached copy of every
+// item, so this is what refreshes the one the user actually opened.
+func (c *Client) GetWorkItem(ctx context.Context, workspaceSlug, projectID, workItemID string) (*WorkItem, error) {
+	var wi WorkItem
+	path := fmt.Sprintf("/api/v1/workspaces/%s/projects/%s/work-items/%s/", workspaceSlug, projectID, workItemID)
+	if err := c.do(ctx, http.MethodGet, path, nil, nil, &wi); err != nil {
+		return nil, err
+	}
+	return &wi, nil
+}
+
 // ListComments returns every comment on a work item, oldest first.
 func (c *Client) ListComments(ctx context.Context, workspaceSlug, projectID, workItemID string) ([]Comment, error) {
 	path := fmt.Sprintf("/api/v1/workspaces/%s/projects/%s/work-items/%s/comments/", workspaceSlug, projectID, workItemID)
@@ -218,12 +229,4 @@ func listAllQuery[T any](ctx context.Context, c *Client, path string, extra url.
 		cursor = page.NextCursor
 	}
 	return all, nil
-}
-
-func sortStates(states []State) {
-	for i := 1; i < len(states); i++ {
-		for j := i; j > 0 && states[j].Sequence < states[j-1].Sequence; j-- {
-			states[j], states[j-1] = states[j-1], states[j]
-		}
-	}
 }

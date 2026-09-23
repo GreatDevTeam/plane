@@ -1,7 +1,10 @@
 // Package api is a client for Plane's public REST API (/api/v1/).
 package api
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // User is the authenticated user, as returned by GET /api/v1/users/me/.
 type User struct {
@@ -42,13 +45,27 @@ type Member struct {
 	DisplayName string `json:"display_name"`
 }
 
-// Name returns the best available display name for a member.
+// Name returns the best available display name for a member. Plane's display_name is
+// usually a handle ("jane.doe"), which is what compact lists (filters, pickers) want.
 func (m Member) Name() string {
 	if m.DisplayName != "" {
 		return m.DisplayName
 	}
 	if m.FirstName != "" || m.LastName != "" {
 		return strings.TrimSpace(m.FirstName + " " + m.LastName)
+	}
+	return m.Email
+}
+
+// FullName returns the member's real name ("Jane Doe") where the account has one, falling
+// back to the display-name handle and then the email. Used wherever there is room for a
+// person's actual name rather than a handle, e.g. the work item detail screen.
+func (m Member) FullName() string {
+	if full := strings.TrimSpace(m.FirstName + " " + m.LastName); full != "" {
+		return full
+	}
+	if m.DisplayName != "" {
+		return m.DisplayName
 	}
 	return m.Email
 }
@@ -61,6 +78,37 @@ type State struct {
 	Group    string  `json:"group"`
 	Sequence float64 `json:"sequence"`
 	Default  bool    `json:"default"`
+}
+
+// StateGroups are Plane's fixed state groups, in the order the web app lays its board
+// columns out (see sortStates in packages/utils/src/work-item/state.ts, which orders states
+// by their group's index in STATE_GROUPS before their sequence).
+var StateGroups = []string{"backlog", "unstarted", "started", "completed", "cancelled"}
+
+// stateGroupIndex is a state group's position in StateGroups. An unknown group (e.g.
+// "triage", which the web board does not show as a column) sorts after every known one
+// rather than jumping to the front.
+func stateGroupIndex(group string) int {
+	for i, g := range StateGroups {
+		if g == group {
+			return i
+		}
+	}
+	return len(StateGroups)
+}
+
+// sortStates orders states the way the web app's board does: by their group's position in
+// StateGroups first, then by sequence inside the group. Sorting by sequence alone (which is
+// what the CLI used to do) interleaves the groups, so a board's columns came out in a
+// different order than the same board in the browser.
+func sortStates(states []State) {
+	sort.SliceStable(states, func(i, j int) bool {
+		gi, gj := stateGroupIndex(states[i].Group), stateGroupIndex(states[j].Group)
+		if gi != gj {
+			return gi < gj
+		}
+		return states[i].Sequence < states[j].Sequence
+	})
 }
 
 // WorkItem is a Plane issue.
@@ -79,6 +127,20 @@ type WorkItem struct {
 
 // Priorities are the valid values of WorkItem.Priority, in display order.
 var Priorities = []string{"urgent", "high", "medium", "low", "none"}
+
+// PriorityRank is a priority's position in Priorities (urgent first). An empty priority is
+// Plane's "none", and anything unrecognised sorts last.
+func PriorityRank(priority string) int {
+	if priority == "" {
+		priority = "none"
+	}
+	for i, p := range Priorities {
+		if p == priority {
+			return i
+		}
+	}
+	return len(Priorities)
+}
 
 // Comment is a comment on a work item.
 type Comment struct {
