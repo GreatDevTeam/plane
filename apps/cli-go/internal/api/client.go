@@ -120,6 +120,48 @@ func (c *Client) ListWorkItems(ctx context.Context, workspaceSlug, projectID str
 	return listAll[WorkItem](ctx, c, fmt.Sprintf("/api/v1/workspaces/%s/projects/%s/work-items/", workspaceSlug, projectID))
 }
 
+// ListWorkItemsPage fetches a single page of work items (100 per page), starting at cursor
+// (pass "" for the first page). Callers use this instead of ListWorkItems to render a board
+// as pages arrive rather than blocking on the whole project up front.
+func (c *Client) ListWorkItemsPage(ctx context.Context, workspaceSlug, projectID, cursor string) (items []WorkItem, nextCursor string, hasNext bool, err error) {
+	path := fmt.Sprintf("/api/v1/workspaces/%s/projects/%s/work-items/", workspaceSlug, projectID)
+	q := url.Values{"per_page": {"100"}}
+	if cursor != "" {
+		q.Set("cursor", cursor)
+	}
+	var page paginatedResponse[WorkItem]
+	if err := c.do(ctx, http.MethodGet, path, q, nil, &page); err != nil {
+		return nil, "", false, err
+	}
+	return page.Results, page.NextCursor, page.NextPageResults && page.NextCursor != "", nil
+}
+
+// ListComments returns every comment on a work item, oldest first.
+func (c *Client) ListComments(ctx context.Context, workspaceSlug, projectID, workItemID string) ([]Comment, error) {
+	path := fmt.Sprintf("/api/v1/workspaces/%s/projects/%s/work-items/%s/comments/", workspaceSlug, projectID, workItemID)
+	return listAllQuery[Comment](ctx, c, path, url.Values{"order_by": {"created_at"}})
+}
+
+// CreateComment adds a new comment (as HTML) to a work item.
+func (c *Client) CreateComment(ctx context.Context, workspaceSlug, projectID, workItemID, commentHTML string) (*Comment, error) {
+	var cm Comment
+	path := fmt.Sprintf("/api/v1/workspaces/%s/projects/%s/work-items/%s/comments/", workspaceSlug, projectID, workItemID)
+	if err := c.do(ctx, http.MethodPost, path, nil, map[string]any{"comment_html": commentHTML}, &cm); err != nil {
+		return nil, err
+	}
+	return &cm, nil
+}
+
+// UpdateComment edits an existing comment's HTML body.
+func (c *Client) UpdateComment(ctx context.Context, workspaceSlug, projectID, workItemID, commentID, commentHTML string) (*Comment, error) {
+	var cm Comment
+	path := fmt.Sprintf("/api/v1/workspaces/%s/projects/%s/work-items/%s/comments/%s/", workspaceSlug, projectID, workItemID, commentID)
+	if err := c.do(ctx, http.MethodPatch, path, nil, map[string]any{"comment_html": commentHTML}, &cm); err != nil {
+		return nil, err
+	}
+	return &cm, nil
+}
+
 // ListLabels returns every label defined on the given project.
 func (c *Client) ListLabels(ctx context.Context, workspaceSlug, projectID string) ([]Label, error) {
 	return listAll[Label](ctx, c, fmt.Sprintf("/api/v1/workspaces/%s/projects/%s/labels/", workspaceSlug, projectID))
@@ -149,10 +191,19 @@ func (c *Client) UpdateWorkItem(ctx context.Context, workspaceSlug, projectID, w
 
 // listAll follows Plane's cursor pagination until every page has been fetched.
 func listAll[T any](ctx context.Context, c *Client, path string) ([]T, error) {
+	return listAllQuery[T](ctx, c, path, nil)
+}
+
+// listAllQuery is listAll with extra fixed query parameters (e.g. order_by) merged into
+// every page request.
+func listAllQuery[T any](ctx context.Context, c *Client, path string, extra url.Values) ([]T, error) {
 	var all []T
 	cursor := ""
 	for {
 		q := url.Values{"per_page": {"100"}}
+		for k, v := range extra {
+			q[k] = v
+		}
 		if cursor != "" {
 			q.Set("cursor", cursor)
 		}

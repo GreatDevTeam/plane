@@ -80,6 +80,16 @@ type WorkItem struct {
 // Priorities are the valid values of WorkItem.Priority, in display order.
 var Priorities = []string{"urgent", "high", "medium", "low", "none"}
 
+// Comment is a comment on a work item.
+type Comment struct {
+	ID          string `json:"id"`
+	CommentHTML string `json:"comment_html"`
+	Actor       string `json:"actor"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+	EditedAt    string `json:"edited_at"`
+}
+
 // paginatedResponse is the envelope every Plane list endpoint returns.
 type paginatedResponse[T any] struct {
 	Results         []T    `json:"results"`

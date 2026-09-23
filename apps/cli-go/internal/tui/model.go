@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/makeplane/plane/apps/cli-go/internal/api"
@@ -63,14 +64,16 @@ type Model struct {
 	projectIdx int
 	loading    bool
 
-	project    api.Project
-	states     []api.State
-	items      []api.WorkItem
-	labels     []api.Label
-	members    []api.Member
-	focusedCol int
-	colCursor  []int
-	detailItem *api.WorkItem
+	project          api.Project
+	states           []api.State
+	items            []api.WorkItem
+	itemsNextCursor  string
+	itemsLoadingMore bool
+	labels           []api.Label
+	members          []api.Member
+	focusedCol       int
+	colCursor        []int
+	detailItem       *api.WorkItem
 
 	pickerOpen string // "" | "state" | "priority"
 	pickerIdx  int
@@ -79,6 +82,14 @@ type Model struct {
 	filterIdx      int
 	filterAssignee string // member ID, "" = no filter
 	filterLabel    string // label ID, "" = no filter
+
+	comments        []api.Comment
+	commentsLoading bool
+	commentCursor   int
+
+	commentEditor    textarea.Model
+	commentEditorOn  bool
+	editingCommentID string // "" while composing a new comment, set while editing an existing one
 }
 
 // New builds the initial model. If cfg has a saved server+token, the model starts by
@@ -94,6 +105,13 @@ func New(cfg config.Config) Model {
 	}
 	m.passwordInput.EchoMode = textinput.EchoPassword
 	m.passwordInput.EchoCharacter = '*'
+
+	m.commentEditor = textarea.New()
+	m.commentEditor.Placeholder = "Write a comment..."
+	m.commentEditor.ShowLineNumbers = false
+	m.commentEditor.CharLimit = 0
+	m.commentEditor.SetWidth(70)
+	m.commentEditor.SetHeight(5)
 
 	if cfg.ServerURL != "" && cfg.Token != "" {
 		m.screen = screenServerInput
@@ -134,7 +152,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showHelp = false
 			return m, nil
 		}
-		if msg.String() == "?" && !isTextInputScreen(m.screen) {
+		if msg.String() == "?" && !isTextInputScreen(m.screen) && !m.commentEditorOn {
 			m.showHelp = true
 			return m, nil
 		}
@@ -145,8 +163,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleProjects(msg)
 	case boardDataMsg:
 		return m.handleBoardData(msg)
+	case boardItemsPageMsg:
+		return m.handleBoardItemsPage(msg)
 	case workItemUpdatedMsg:
 		return m.handleWorkItemUpdated(msg)
+	case commentsMsg:
+		return m.handleComments(msg)
+	case commentSavedMsg:
+		return m.handleCommentSaved(msg)
 	}
 
 	switch m.screen {
@@ -263,7 +287,14 @@ var helpSections = []helpSection{
 	{"Detail", [][2]string{
 		{"s", "change state"},
 		{"y", "change priority"},
+		{"j/k or up/down", "select comment"},
+		{"c", "add comment"},
+		{"e", "edit selected comment (own only)"},
 		{"esc/backspace", "back"},
+	}},
+	{"Comment editor", [][2]string{
+		{"ctrl+s", "save"},
+		{"esc", "cancel"},
 	}},
 	{"Picker", [][2]string{
 		{"j/k", "move"},
