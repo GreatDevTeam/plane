@@ -51,12 +51,17 @@ func fetchProjects(client *api.Client, workspaceSlug string) tea.Cmd {
 	}
 }
 
+// boardDataMsg carries the board's states/labels/members plus the first page of work
+// items. The board renders as soon as this arrives; remaining pages stream in afterwards
+// via boardItemsPageMsg so a large project never blocks the whole board behind one request.
 type boardDataMsg struct {
-	states  []api.State
-	items   []api.WorkItem
-	labels  []api.Label
-	members []api.Member
-	err     error
+	states      []api.State
+	items       []api.WorkItem
+	nextCursor  string
+	hasNextPage bool
+	labels      []api.Label
+	members     []api.Member
+	err         error
 }
 
 func fetchBoard(client *api.Client, workspaceSlug, projectID string) tea.Cmd {
@@ -67,7 +72,7 @@ func fetchBoard(client *api.Client, workspaceSlug, projectID string) tea.Cmd {
 		if err != nil {
 			return boardDataMsg{err: err}
 		}
-		items, err := client.ListWorkItems(ctx, workspaceSlug, projectID)
+		items, nextCursor, hasNext, err := client.ListWorkItemsPage(ctx, workspaceSlug, projectID, "")
 		if err != nil {
 			return boardDataMsg{err: err}
 		}
@@ -75,7 +80,7 @@ func fetchBoard(client *api.Client, workspaceSlug, projectID string) tea.Cmd {
 		// board, just without those two filters populated.
 		labels, _ := client.ListLabels(ctx, workspaceSlug, projectID)
 		members, _ := client.ListMembers(ctx, workspaceSlug, projectID)
-		return boardDataMsg{states: states, items: items, labels: labels, members: members}
+		return boardDataMsg{states: states, items: items, nextCursor: nextCursor, hasNextPage: hasNext, labels: labels, members: members}
 	}
 }
 
@@ -90,5 +95,61 @@ func updateWorkItem(client *api.Client, workspaceSlug, projectID, workItemID str
 		defer cancel()
 		item, err := client.UpdateWorkItem(ctx, workspaceSlug, projectID, workItemID, patch)
 		return workItemUpdatedMsg{item: item, err: err}
+	}
+}
+
+// boardItemsPageMsg carries a single page of work items so the board can render as soon as
+// the first page arrives, instead of blocking on the whole project.
+type boardItemsPageMsg struct {
+	items      []api.WorkItem
+	nextCursor string
+	hasNext    bool
+	err        error
+}
+
+func fetchWorkItemsPage(client *api.Client, workspaceSlug, projectID, cursor string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		items, nextCursor, hasNext, err := client.ListWorkItemsPage(ctx, workspaceSlug, projectID, cursor)
+		return boardItemsPageMsg{items: items, nextCursor: nextCursor, hasNext: hasNext, err: err}
+	}
+}
+
+type commentsMsg struct {
+	items []api.Comment
+	err   error
+}
+
+func fetchComments(client *api.Client, workspaceSlug, projectID, workItemID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		items, err := client.ListComments(ctx, workspaceSlug, projectID, workItemID)
+		return commentsMsg{items: items, err: err}
+	}
+}
+
+type commentSavedMsg struct {
+	comment *api.Comment
+	editing bool
+	err     error
+}
+
+func createComment(client *api.Client, workspaceSlug, projectID, workItemID, commentHTML string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		cm, err := client.CreateComment(ctx, workspaceSlug, projectID, workItemID, commentHTML)
+		return commentSavedMsg{comment: cm, err: err}
+	}
+}
+
+func editComment(client *api.Client, workspaceSlug, projectID, workItemID, commentID, commentHTML string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		cm, err := client.UpdateComment(ctx, workspaceSlug, projectID, workItemID, commentID, commentHTML)
+		return commentSavedMsg{comment: cm, editing: true, err: err}
 	}
 }

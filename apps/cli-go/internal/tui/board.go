@@ -20,6 +20,7 @@ func (m Model) handleBoardData(msg boardDataMsg) (tea.Model, tea.Cmd) {
 	m.setError(nil)
 	m.states = msg.states
 	m.items = msg.items
+	m.itemsNextCursor = msg.nextCursor
 	m.labels = msg.labels
 	m.members = msg.members
 	m.focusedCol = 0
@@ -27,6 +28,29 @@ func (m Model) handleBoardData(msg boardDataMsg) (tea.Model, tea.Cmd) {
 	m.filterAssignee = ""
 	m.filterLabel = ""
 	m.screen = screenBoard
+	if msg.hasNextPage {
+		m.itemsLoadingMore = true
+		return m, fetchWorkItemsPage(m.client, m.workspaceSlug, m.project.ID, msg.nextCursor)
+	}
+	return m, nil
+}
+
+// handleBoardItemsPage appends a streamed-in page of work items to the board that is
+// already on screen, and immediately requests the next page if there is one. This is what
+// lets a large project's board fill in progressively instead of blocking on every page
+// before showing anything (and timing out entirely for very large projects).
+func (m Model) handleBoardItemsPage(msg boardItemsPageMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.itemsLoadingMore = false
+		m.setError(msg.err)
+		return m, nil
+	}
+	m.items = append(m.items, msg.items...)
+	m.itemsNextCursor = msg.nextCursor
+	if msg.hasNext {
+		return m, fetchWorkItemsPage(m.client, m.workspaceSlug, m.project.ID, msg.nextCursor)
+	}
+	m.itemsLoadingMore = false
 	return m, nil
 }
 
@@ -124,7 +148,11 @@ func (m Model) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "enter":
 		if item := m.selectedItem(); item != nil {
 			m.detailItem = item
+			m.comments = nil
+			m.commentCursor = 0
+			m.commentsLoading = true
 			m.screen = screenDetail
+			return m, fetchComments(m.client, m.workspaceSlug, m.project.ID, item.ID)
 		}
 	case "s":
 		m.openStatePicker()
@@ -156,6 +184,9 @@ func (m Model) viewBoard() string {
 	header := titleStyle.Render(m.project.Name)
 	if f := m.activeFilterSummary(); f != "" {
 		header += "  " + helpStyle.Render(f)
+	}
+	if m.itemsLoadingMore {
+		header += "  " + helpStyle.Render(fmt.Sprintf("loading more… (%d so far)", len(m.items)))
 	}
 	header += "\n\n"
 	var body string
