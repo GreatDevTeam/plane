@@ -130,6 +130,26 @@ gofmt -l .        # lists any unformatted files (empty output = clean); use `gof
 
 All four must pass/print nothing before committing a Go change.
 
+### Verifying TUI rendering (no pty needed)
+
+Do **not** try to reproduce a "the board/screen does not fit / looks garbled" report by driving a real terminal — there is no pty here that can be forced to a given size, and the CLI needs a live Plane login to reach the board at all. Every `view*` method on `tui.Model` is a pure `Model -> string`, so build the model directly, set `width`/`height` to the terminal size being reported, call the view, and **measure the frame**:
+
+```go
+m := Model{states: ..., items: ..., colCursor: make([]int, n), width: 230, height: 52}
+lines := strings.Split(m.viewBoard(), "\n")          // rows the frame occupies
+w := 0                                               // widest row, ANSI-aware
+for _, l := range lines { w = max(w, lipgloss.Width(l)) }
+```
+
+`len(lines) > height` or `w > width` means the frame overflows the terminal — which is what every "cannot show the board" report so far has actually been. Assert the fit rather than eyeballing the output; see `TestViewBoardFitsTerminal` in `apps/cli-go/internal/tui/board_test.go`.
+
+Two things that make a frame silently bigger than the arithmetic suggests, both of which caused real bugs:
+
+- **lipgloss sizes are not the rendered size.** `columnStyle.Width(w)` renders `w+2` columns (the border is added _outside_ the width), while `cardStyle.Width(w)` renders `w` columns but only leaves `w-2` for text (padding is _inside_ it). Text sized to `w` in a card wraps onto a second row, doubling the height of every column. The `colFrame`/`colPadding`/`cardFrame` constants in `board.go` exist for exactly this and should be used instead of new magic numbers.
+- **`lipgloss.Height` does not count terminal wrapping** — it only counts the `\n`s in the string. A single-line 131-column footer on an 80-column terminal is 2 rows on screen but `Height` says 1. Use `visualHeight(s, width)` in `board.go` when budgeting rows.
+
+Truncate with `ansi.Truncate` (display width), never by slicing bytes: task names are routinely Cyrillic, and a byte slice both cuts runes in half and clips non-ASCII titles to roughly half the room they have.
+
 ### Attaching a built binary to a task
 
 When a task asks for a built `plane-cli` binary to be attached for manual testing (e.g. via `docs/plane.sh upload-asset`), always name the archive with a UTC timestamp, e.g. `plane-cli_20260923T115000Z.zip` (`date -u +%Y%m%dT%H%M%SZ`) — a fixed name like `plane-cli.zip` makes it impossible to tell, from the task's attachment list, which build a given zip is without opening it. Strip debug info before zipping (`go build -ldflags="-s -w" ./cmd/plane-cli`) — the workspace's asset upload enforces a hard 5 MiB size cap and rejects unstripped/unzipped executable mime types outright.
