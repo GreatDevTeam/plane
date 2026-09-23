@@ -76,6 +76,16 @@ type Model struct {
 	colCursor        []int
 	detailItem       *api.WorkItem
 
+	// relatedItems caches work items fetched by ID because they are referenced by one on
+	// screen but are missing from `items` — currently only the parent of an opened card
+	// (archived, or on a page that has not arrived yet). See relations.go.
+	relatedItems map[string]api.WorkItem
+
+	// subCounts is how many sub-tasks each work item has, rebuilt once per board frame by
+	// viewBoard so that rendering a card does not rescan the whole project. nil outside a
+	// board render, where subIssueCount falls back to scanning.
+	subCounts map[string]int
+
 	// hiddenStates holds the state IDs whose columns are collapsed to a narrow placeholder
 	// on the current project's board. It is loaded from (and saved back to) the config file,
 	// so a board opens with the same columns collapsed as when it was last closed.
@@ -93,7 +103,7 @@ type Model struct {
 	// (the detail screen renders the cached copy meanwhile).
 	detailLoading bool
 
-	pickerOpen string // "" | "state" | "priority" | "sort"
+	pickerOpen string // "" | "state" | "priority" | "sort" | "subissue"
 	pickerIdx  int
 
 	filterOpen     string // "" | "assignee" | "label"
@@ -230,6 +240,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleCommentSaved(msg)
 	case workItemCreatedMsg:
 		return m.handleWorkItemCreated(msg)
+	case relatedWorkItemMsg:
+		return m.handleRelatedWorkItem(msg)
 	}
 
 	switch m.screen {
@@ -350,6 +362,8 @@ var helpSections = []helpSection{
 		{"s", "change state"},
 		{"y", "change priority"},
 		{"d", "edit description"},
+		{"g", "go to parent work item"},
+		{"S", "jump to a sub-task"},
 		{"j/k or up/down", "select comment"},
 		{"c", "add comment"},
 		{"e", "edit selected comment (own only)"},

@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/makeplane/plane/apps/cli-go/internal/api"
 	"github.com/makeplane/plane/apps/cli-go/internal/config"
@@ -64,6 +66,8 @@ func (m Model) pickerOptionCount() int {
 		return len(m.states)
 	case "sort":
 		return len(sortModes)
+	case "subissue":
+		return len(m.subIssueOptions())
 	}
 	return len(api.Priorities)
 }
@@ -99,6 +103,16 @@ func (m Model) updatePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pickerOpen = ""
 			return m, nil
 		}
+		if m.pickerOpen == "subissue" {
+			// Not a change to any work item either: this picker navigates, so enter opens
+			// the chosen sub-task the same way the board's enter opens a card.
+			opts := m.subIssueOptions()
+			if m.pickerIdx < 0 || m.pickerIdx >= len(opts) {
+				m.pickerOpen = ""
+				return m, nil
+			}
+			return m.openWorkItem(opts[m.pickerIdx])
+		}
 		item := m.activeItem()
 		if item == nil {
 			m.pickerOpen = ""
@@ -123,8 +137,11 @@ func (m Model) viewPicker() string {
 		title = "Change priority"
 	case "sort":
 		title = "Order cards by"
+	case "subissue":
+		title = "Jump to sub-task"
 	}
 	out := columnHeaderStyle.Render(title) + "\n"
+	hint := "j/k  move    enter  apply    esc  cancel"
 	switch {
 	case m.pickerOpen == "state":
 		for i, st := range m.states {
@@ -134,12 +151,25 @@ func (m Model) viewPicker() string {
 		for i, sm := range sortModes {
 			out += pickerLine(sm.label, i == m.pickerIdx)
 		}
+	case m.pickerOpen == "subissue":
+		opts := m.subIssueOptions()
+		// Windowed, unlike the lists above: the number of sub-tasks is project data with no
+		// upper bound, and this picker is drawn below the detail screen's two panes, so an
+		// unwindowed list would push its own bottom off the terminal (see pickerWindow).
+		start, count, scrolled := pickerWindow(len(opts), m.pickerIdx, m.subIssuePickerRows())
+		if scrolled {
+			out = columnHeaderStyle.Render(fmt.Sprintf("%s (%d-%d of %d)", title, start+1, start+count, len(opts))) + "\n"
+		}
+		for i := start; i < start+count; i++ {
+			out += pickerLine(m.relationSummary(opts[i]), i == m.pickerIdx)
+		}
+		hint = "j/k  move    enter  open    esc  cancel"
 	default:
 		for i, p := range api.Priorities {
 			out += pickerLine(p, i == m.pickerIdx)
 		}
 	}
-	out += helpStyle.Render("j/k  move    enter  apply    esc  cancel")
+	out += helpStyle.Render(hint)
 	return focusedInputStyle.Render(out)
 }
 

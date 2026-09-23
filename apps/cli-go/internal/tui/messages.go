@@ -213,6 +213,24 @@ func refreshBoard(client *api.Client, workspaceSlug, projectID string) tea.Cmd {
 	}
 }
 
+// relatedWorkItemMsg carries a work item fetched purely because something on screen refers
+// to it — a parent the board's own item list does not have (see fetchMissingParent). It is
+// kept apart from workItemLoadedMsg so that landing one never swaps the work item the user
+// is actually looking at.
+type relatedWorkItemMsg struct {
+	item *api.WorkItem
+	err  error
+}
+
+func fetchRelatedWorkItem(client *api.Client, workspaceSlug, projectID, workItemID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		item, err := client.GetWorkItem(ctx, workspaceSlug, projectID, workItemID)
+		return relatedWorkItemMsg{item: item, err: err}
+	}
+}
+
 // workItemLoadedMsg carries the freshly fetched copy of the work item the detail screen has
 // open — the background half of opening a card from the board's cache.
 type workItemLoadedMsg struct {
