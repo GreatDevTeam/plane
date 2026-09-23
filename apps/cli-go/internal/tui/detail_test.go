@@ -202,6 +202,79 @@ func TestHandleCommentsOnEmptyList(t *testing.T) {
 	}
 }
 
+// TestHandleCommentsBackgroundRefreshNoOpsWhenUnchanged covers the auto-refresh blink: the 30s
+// tick re-fetches comments unconditionally (TestBoardTickRefreshesDetailComments), and if the
+// thread has not actually changed, handleComments must leave the cursor and the rendered
+// content exactly as they were rather than replacing everything (which is what made the pane
+// blink even on a no-op refresh).
+func TestHandleCommentsBackgroundRefreshNoOpsWhenUnchanged(t *testing.T) {
+	m := detailFixture()
+	same := []api.Comment{
+		{ID: "c1", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z", CommentHTML: "<p>hi</p>"},
+		{ID: "c2", Actor: "u2", CreatedAt: "2026-01-02T00:00:00Z", CommentHTML: "<p>hey</p>"},
+	}
+	next, _ := m.handleComments(commentsMsg{items: same})
+	m = next.(Model)
+	m.commentCursor = 0 // simulate the user having scrolled back to the first comment
+
+	// A background refresh (comments already loaded) with an identical thread.
+	unchanged := []api.Comment{
+		{ID: "c1", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z", CommentHTML: "<p>hi</p>"},
+		{ID: "c2", Actor: "u2", CreatedAt: "2026-01-02T00:00:00Z", CommentHTML: "<p>hey</p>"},
+	}
+	next, _ = m.handleComments(commentsMsg{items: unchanged})
+	m = next.(Model)
+	if m.commentCursor != 0 {
+		t.Errorf("an unchanged background refresh moved the cursor to %d, want it left at 0", m.commentCursor)
+	}
+}
+
+// TestHandleCommentsBackgroundRefreshKeepsCursorOnSameComment covers a real change arriving in
+// the background (a new comment posted elsewhere): the cursor must stay on the same comment the
+// user was reading, not jump to the newest one the way the very first load does.
+func TestHandleCommentsBackgroundRefreshKeepsCursorOnSameComment(t *testing.T) {
+	m := detailFixture()
+	first := []api.Comment{
+		{ID: "c1", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z"},
+		{ID: "c2", Actor: "u2", CreatedAt: "2026-01-02T00:00:00Z"},
+	}
+	next, _ := m.handleComments(commentsMsg{items: first})
+	m = next.(Model)
+	m.commentCursor = 0 // reading the first comment when a new one arrives
+
+	withNewComment := []api.Comment{
+		{ID: "c1", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z"},
+		{ID: "c2", Actor: "u2", CreatedAt: "2026-01-02T00:00:00Z"},
+		{ID: "c3", Actor: "u1", CreatedAt: "2026-01-03T00:00:00Z"},
+	}
+	next, _ = m.handleComments(commentsMsg{items: withNewComment})
+	m = next.(Model)
+	if m.commentCursor != 0 || m.comments[m.commentCursor].ID != "c1" {
+		t.Errorf("commentCursor = %d (%q), want it to stay on c1", m.commentCursor, m.comments[m.commentCursor].ID)
+	}
+}
+
+// TestCommentsContentDoesNotBlankDuringBackgroundRefresh covers the other half of the blink:
+// commentsLoading flips true the instant the 30s tick fires a re-fetch (handleBoardTick), but
+// the thread already on screen must stay visible until handleComments actually has something
+// new — not get replaced by the loading placeholder every tick.
+func TestCommentsContentDoesNotBlankDuringBackgroundRefresh(t *testing.T) {
+	m := detailFixture()
+	next, _ := m.handleComments(commentsMsg{items: []api.Comment{
+		{ID: "c1", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z", CommentHTML: "<p>hi there</p>"},
+	}})
+	m = next.(Model)
+	m.commentsLoading = true // a background refresh is now in flight
+
+	view, _, _ := m.commentsContent(m.width)
+	if strings.Contains(view, "Loading comments") {
+		t.Error("a background refresh blanked the comments pane with the loading placeholder")
+	}
+	if !strings.Contains(view, "hi there") {
+		t.Errorf("the existing comment disappeared while a background refresh was in flight: %q", view)
+	}
+}
+
 // TestHandleWorkItemLoadedIgnoresAStaleAnswer covers the race the lazy open creates: the user
 // can be looking at another card by the time a slow fetch lands.
 func TestHandleWorkItemLoadedIgnoresAStaleAnswer(t *testing.T) {

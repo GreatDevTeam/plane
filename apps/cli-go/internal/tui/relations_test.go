@@ -124,7 +124,7 @@ func TestCardShowsParentAndSubTaskBadges(t *testing.T) {
 		return api.WorkItem{}
 	}
 
-	lines := m.cardLines(byID("wi"), 40)
+	lines := m.cardLines(byID("wi"), 40, false)
 	if len(lines) != cardRows {
 		t.Fatalf("a card with relations is %d rows, want cardRows=%d", len(lines), cardRows)
 	}
@@ -141,7 +141,7 @@ func TestCardShowsParentAndSubTaskBadges(t *testing.T) {
 		t.Errorf("card does not show how many sub-tasks it has:\n%q", meta)
 	}
 
-	if meta := m.cardLines(byID("lone"), 40)[cardRows-1]; strings.ContainsAny(meta, "↑↳") {
+	if meta := m.cardLines(byID("lone"), 40, false)[cardRows-1]; strings.ContainsAny(meta, "↑↳") {
 		t.Errorf("an item with no parent and no sub-tasks got a relations badge:\n%q", meta)
 	}
 

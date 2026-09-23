@@ -76,6 +76,13 @@ type Model struct {
 	colCursor        []int
 	detailItem       *api.WorkItem
 
+	// extrasCache holds the last labels/members fetched for each project (fetchBoardExtras),
+	// keyed by project ID, so switching back to a project already visited this session shows
+	// them straight away instead of the picker going empty while a fresh copy loads — see
+	// applyBoardExtras and the task that asked for it. Entries are refreshed at most every
+	// extrasCacheTTL rather than on every board load/tick.
+	extrasCache map[string]extrasCacheEntry
+
 	// relatedItems caches work items fetched by ID because they are referenced by one on
 	// screen but are missing from `items` — currently only the parent of an opened card
 	// (archived, or on a page that has not arrived yet). See relations.go.
@@ -174,6 +181,7 @@ func New(cfg config.Config) Model {
 	m.sortMode = normalizeSortMode(cfg.SortMode)
 	m.hiddenStates = make(map[string]bool)
 	m.idInput = newInput("e.g. 123", 12)
+	m.extrasCache = make(map[string]extrasCacheEntry)
 
 	if cfg.ServerURL != "" && cfg.Token != "" {
 		m.screen = screenServerInput

@@ -28,11 +28,16 @@ var (
 	// out from titleStyle's blue, which every other screen's title still uses.
 	colorBoardTitle = lipgloss.Color("255")
 
-	// colorHiddenBg/colorHiddenFg render a collapsed board column's placeholder as dimmed
-	// text on a light grey background, rather than just narrow, so a hidden state visibly
-	// reads as out-of-the-way at a glance.
-	colorHiddenBg = lipgloss.Color("252")
-	colorHiddenFg = lipgloss.Color("238")
+	// colorHiddenBg/colorHiddenFg render a collapsed board column's placeholder as dimmed text
+	// on a filled-in background, rather than just narrow, so a hidden state visibly reads as
+	// out-of-the-way at a glance. This used to be a light grey background with dark text —
+	// inverted from every other panel in the UI, which is a light-mode-appropriate way to draw
+	// the eye but reads as a jarringly bright block against a dark/night terminal theme, where
+	// everything else on screen is dark background with light text. A dark background with a
+	// muted (not full-brightness) light foreground keeps the placeholder visually distinct
+	// without that glare.
+	colorHiddenBg = lipgloss.Color("236")
+	colorHiddenFg = lipgloss.Color("245")
 
 	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
 
@@ -145,4 +150,13 @@ func priorityLabel(p string) string {
 		style = priorityStyles["none"]
 	}
 	return style.Render(p)
+}
+
+// priorityText is priorityLabel without the color — used on a selected board card, where the
+// outer highlight must not be interrupted by a nested style's own reset (see cardLines).
+func priorityText(p string) string {
+	if p == "" {
+		return "none"
+	}
+	return p
 }
