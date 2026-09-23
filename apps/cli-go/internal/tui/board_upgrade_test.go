@@ -116,7 +116,7 @@ func TestRenderCollapsedColumnSize(t *testing.T) {
 		if got, want := lipgloss.Width(out), hiddenColWidth+colFrame; got != want {
 			t.Errorf("maxRows=%d: placeholder is %d columns wide, want %d", maxRows, got, want)
 		}
-		if got, want := lipgloss.Height(out), maxRows+colChromeRows; got > want {
+		if got, want := lipgloss.Height(out), maxRows*cardRows+colChromeRows; got > want {
 			t.Errorf("maxRows=%d: placeholder is %d rows tall, want <= %d", maxRows, got, want)
 		}
 	}

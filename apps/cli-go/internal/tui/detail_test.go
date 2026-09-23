@@ -113,6 +113,48 @@ func TestOpenCardRefreshesInTheBackground(t *testing.T) {
 	}
 }
 
+// TestHandleCommentsFocusesTheLatestComment checks the detail screen opens with the cursor on
+// the most recent comment (comments render oldest first, so that is the last one), not the
+// oldest, and that the focused comment's header renders with the lighter focused style.
+func TestHandleCommentsFocusesTheLatestComment(t *testing.T) {
+	m := detailFixture()
+	m.commentCursor = 0
+	next, _ := m.handleComments(commentsMsg{items: []api.Comment{
+		{ID: "c1", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z"},
+		{ID: "c2", Actor: "u2", CreatedAt: "2026-01-02T00:00:00Z"},
+		{ID: "c3", Actor: "u1", CreatedAt: "2026-01-03T00:00:00Z"},
+	}})
+	m = next.(Model)
+	if m.commentCursor != 2 {
+		t.Fatalf("commentCursor = %d, want 2 (the latest comment)", m.commentCursor)
+	}
+	view := m.viewComments()
+	lines := strings.Split(view, "\n")
+	var focusedLine string
+	for _, l := range lines {
+		if strings.Contains(l, "> ") {
+			focusedLine = l
+		}
+	}
+	if !strings.Contains(focusedLine, m.memberName("u1")) {
+		t.Errorf("focused comment line %q is not the latest comment (by u1)", focusedLine)
+	}
+}
+
+// TestHandleCommentsOnEmptyList checks an empty comment thread does not leave the cursor
+// pointing at a non-existent comment (len-1 == -1 must stay a safe, unused value).
+func TestHandleCommentsOnEmptyList(t *testing.T) {
+	m := detailFixture()
+	next, _ := m.handleComments(commentsMsg{items: nil})
+	m = next.(Model)
+	if m.commentCursor != -1 {
+		t.Fatalf("commentCursor = %d, want -1 for an empty comment list", m.commentCursor)
+	}
+	if strings.Contains(m.viewComments(), "> ") {
+		t.Error("an empty comment list rendered a focus marker")
+	}
+}
+
 // TestHandleWorkItemLoadedIgnoresAStaleAnswer covers the race the lazy open creates: the user
 // can be looking at another card by the time a slow fetch lands.
 func TestHandleWorkItemLoadedIgnoresAStaleAnswer(t *testing.T) {

@@ -187,9 +187,9 @@ func (m Model) handleComments(msg commentsMsg) (tea.Model, tea.Cmd) {
 	}
 	m.setError(nil)
 	m.comments = msg.items
-	if m.commentCursor >= len(m.comments) {
-		m.commentCursor = len(m.comments) - 1
-	}
+	// Comments render oldest first, so the most recently active discussion is the last one —
+	// open the detail screen focused there rather than on the oldest comment.
+	m.commentCursor = len(m.comments) - 1
 	return m, nil
 }
 
@@ -337,12 +337,14 @@ func (m Model) viewComments() string {
 		if cm.EditedAt != "" {
 			header += "  (edited)"
 		}
+		style := helpStyle
 		if i == m.commentCursor {
 			header = "> " + header
+			style = commentHeaderFocusedStyle
 		} else {
 			header = "  " + header
 		}
-		out += helpStyle.Render(header) + "\n"
+		out += style.Render(header) + "\n"
 		body := formatRichText(cm.CommentHTML)
 		for _, line := range strings.Split(body, "\n") {
 			out += "    " + line + "\n"
