@@ -116,6 +116,25 @@ func (m *Model) openNewItemAssigneePicker() {
 	}
 }
 
+// openLabelPicker opens the project's label list against the active item (the board's
+// selected card, or the detail screen's open item) as a toggle-multiple-then-confirm picker:
+// unlike openStatePicker/openPriorityPicker/openAssigneePicker, which pick exactly one entry,
+// a work item can carry several labels at once, so this one tracks a working set in
+// m.labelPickerSelected (seeded from the item's current labels) that space toggles and enter
+// PATCHes as a whole.
+func (m *Model) openLabelPicker() {
+	item := m.activeItem()
+	if item == nil {
+		return
+	}
+	m.pickerOpen = "labels"
+	m.pickerIdx = 0
+	m.labelPickerSelected = make(map[string]bool, len(item.Labels))
+	for _, id := range item.Labels {
+		m.labelPickerSelected[id] = true
+	}
+}
+
 // openSortPicker opens the list of card orderings, with the board's current one selected.
 func (m *Model) openSortPicker() {
 	m.pickerOpen = "sort"
@@ -139,6 +158,8 @@ func (m Model) pickerOptionCount() int {
 		return len(m.subIssueOptions())
 	case "assignee", "new-item-assignee":
 		return len(m.members) + 1 // +1 for "Unassigned"
+	case "labels":
+		return len(m.labels)
 	}
 	return len(api.Priorities)
 }
@@ -158,6 +179,11 @@ func (m Model) updatePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		if m.pickerIdx < m.pickerOptionCount()-1 {
 			m.pickerIdx++
+		}
+	case " ", "x":
+		if m.pickerOpen == "labels" && m.pickerIdx >= 0 && m.pickerIdx < len(m.labels) {
+			id := m.labels[m.pickerIdx].ID
+			m.labelPickerSelected[id] = !m.labelPickerSelected[id]
 		}
 	case "enter":
 		if m.pickerOpen == "sort" {
@@ -224,6 +250,17 @@ func (m Model) updatePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 				ids = []string{m.members[idx].ID}
 			}
 			patch = map[string]any{"assignees": ids}
+		case "labels":
+			// ids starts non-nil for the same reason the assignee PATCH above does: a nil
+			// slice marshals to JSON null, and clearing every label needs to PATCH "labels":
+			// [] instead.
+			ids := []string{}
+			for _, l := range m.labels {
+				if m.labelPickerSelected[l.ID] {
+					ids = append(ids, l.ID)
+				}
+			}
+			patch = map[string]any{"labels": ids}
 		default:
 			patch = map[string]any{"priority": api.Priorities[m.pickerIdx]}
 		}
@@ -246,6 +283,8 @@ func (m Model) viewPicker() string {
 		title = "Change assignee"
 	case "new-item-assignee":
 		title = "New item assignee"
+	case "labels":
+		title = "Change labels"
 	}
 	if m.creatingItem {
 		switch m.pickerOpen {
@@ -271,6 +310,15 @@ func (m Model) viewPicker() string {
 		for i, mem := range m.members {
 			out += pickerLine(mem.Name(), m.pickerIdx == i+1)
 		}
+	case m.pickerOpen == "labels":
+		for i, l := range m.labels {
+			box := "[ ] "
+			if m.labelPickerSelected[l.ID] {
+				box = "[x] "
+			}
+			out += pickerLine(box+l.Name, i == m.pickerIdx)
+		}
+		hint = "j/k  move    space  toggle    enter  save    esc  cancel"
 	case m.pickerOpen == "subissue":
 		opts := m.subIssueOptions()
 		// Windowed, unlike the lists above: the number of sub-tasks is project data with no

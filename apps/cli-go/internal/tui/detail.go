@@ -48,6 +48,8 @@ func (m Model) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openPriorityPicker()
 	case "A":
 		m.openAssigneePicker()
+	case "T":
+		m.openLabelPicker()
 	case "u":
 		return m.copyItemURL(m.detailItem)
 	case "c":
@@ -318,9 +320,9 @@ func formatTimestamp(s string) string {
 // detailHints are the detail screen's key hints, kept as separate chunks so packHints can
 // wrap them at a word boundary rather than letting the terminal split one mid-hint.
 var detailHints = [][2]string{
-	{"s", "state"}, {"y", "priority"}, {"A", "assignee"}, {"d", "description"}, {"g", "parent"}, {"S", "sub-tasks"},
-	{"u", "copy url"}, {"tab", "switch pane"}, {"j/k", "scroll"}, {"c", "add comment"}, {"e", "edit comment"},
-	{"r", "refresh"}, {"esc", "back"}, {"q", "quit"},
+	{"s", "state"}, {"y", "priority"}, {"A", "assignee"}, {"T", "labels"}, {"d", "description"}, {"g", "parent"},
+	{"S", "sub-tasks"}, {"u", "copy url"}, {"tab", "switch pane"}, {"j/k", "scroll"}, {"c", "add comment"},
+	{"e", "edit comment"}, {"r", "refresh"}, {"esc", "back"}, {"q", "quit"},
 }
 
 func (m Model) viewDetail() string {
