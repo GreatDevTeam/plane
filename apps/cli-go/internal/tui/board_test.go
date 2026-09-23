@@ -49,10 +49,35 @@ func TestRenderColumnClipsBigListWithUnknownHeight(t *testing.T) {
 		colCursor: []int{0},
 	}
 
-	out := m.renderColumn(0, 40, false)
+	out := m.renderColumn(0, 40)
 	lines := strings.Split(out, "\n")
 	if len(lines) > defaultTerminalHeight {
 		t.Fatalf("renderColumn with unknown height produced %d lines, want <= %d (defaultTerminalHeight)", len(lines), defaultTerminalHeight)
+	}
+}
+
+// TestViewBoardFallsBackToNarrowWithUnknownWidth guards against the companion bug to
+// TestRenderColumnClipsBigListWithUnknownHeight: on a terminal that never reports its size,
+// m.width stays 0 just like m.height did. Before the defaultTerminalWidth fallback, the
+// narrow-terminal check (`m.width > 0 && ...`) read width==0 as "not narrow" and rendered
+// every column at full maxColWidth side by side regardless of the real (unknown) terminal
+// width, which line-wrapped the whole board into an unreadable mess. With 5 states and an
+// unset width, the board must fall back to the narrow single-column layout — i.e. render
+// exactly one bordered column, not five joined side by side.
+func TestViewBoardFallsBackToNarrowWithUnknownWidth(t *testing.T) {
+	m := Model{
+		project: api.Project{Name: "Test Project"},
+		states: []api.State{
+			{ID: "s1", Name: "Backlog"}, {ID: "s2", Name: "In Progress"},
+			{ID: "s3", Name: "Review"}, {ID: "s4", Name: "Done"}, {ID: "s5", Name: "Cancelled"},
+		},
+		items:     []api.WorkItem{{ID: "1", State: "s1", Name: "task"}},
+		colCursor: []int{0, 0, 0, 0, 0},
+	}
+
+	out := m.viewBoard()
+	if got := strings.Count(out, "╭"); got != 1 {
+		t.Fatalf("viewBoard with unknown width rendered %d columns, want 1 (narrow fallback)", got)
 	}
 }
 

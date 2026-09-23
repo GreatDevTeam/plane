@@ -177,9 +177,17 @@ func (m Model) viewBoard() string {
 	const minColWidth = 20
 	const maxColWidth = 40
 
+	// width falls back the same way height does (see defaultTerminalWidth below): on a
+	// terminal that never reports a size, m.width stays 0, which must not be mistaken for
+	// "plenty of room" below.
+	width := m.width
+	if width <= 0 {
+		width = defaultTerminalWidth
+	}
+
 	// Narrow terminal (or many columns): showing every column side by side would squeeze
 	// each below a usable width, so show only the focused column, full width, instead.
-	narrow := m.width > 0 && m.width/len(m.states) < minColWidth
+	narrow := width/len(m.states) < minColWidth
 
 	header := titleStyle.Render(m.project.Name)
 	if f := m.activeFilterSummary(); f != "" {
@@ -191,16 +199,20 @@ func (m Model) viewBoard() string {
 	header += "\n\n"
 	var body string
 	if narrow {
-		body = m.renderColumn(m.focusedCol, minColWidth, true)
+		colWidth := width - 4
+		if colWidth < minColWidth {
+			colWidth = minColWidth
+		}
+		body = m.renderColumn(m.focusedCol, colWidth)
 		body += "\n" + helpStyle.Render(fmt.Sprintf("column %d/%d", m.focusedCol+1, len(m.states)))
 	} else {
 		colWidth := maxColWidth
-		if w := m.width/len(m.states) - 4; w >= minColWidth && w < colWidth {
+		if w := width/len(m.states) - 4; w >= minColWidth && w < colWidth {
 			colWidth = w
 		}
 		var cols []string
 		for ci := range m.states {
-			cols = append(cols, m.renderColumn(ci, colWidth, false))
+			cols = append(cols, m.renderColumn(ci, colWidth))
 		}
 		body = lipgloss.JoinHorizontal(lipgloss.Top, cols...)
 	}
@@ -223,17 +235,21 @@ func (m Model) viewBoard() string {
 // can actually show.
 const defaultTerminalHeight = 24
 
-// renderColumn renders a single kanban column, clipping its card list to the terminal
-// height (minus room for the title/header/footer) so a long column's own header always
-// stays visible instead of being pushed off-screen.
-func (m Model) renderColumn(ci, colWidth int, fullWidth bool) string {
+// defaultTerminalWidth is the same kind of fallback as defaultTerminalHeight, for the
+// horizontal dimension: on a terminal that never reports its size, m.width stays 0, which
+// must not be read as "plenty of room" — that skipped the narrow-terminal single-column
+// layout entirely and rendered every column at full width side by side, producing lines far
+// wider than the real (unknown) terminal and wrapping the whole board into an unreadable mess.
+const defaultTerminalWidth = 80
+
+// renderColumn renders a single kanban column at the given width, clipping its card list to
+// the terminal height (minus room for the title/header/footer) so a long column's own header
+// always stays visible instead of being pushed off-screen.
+func (m Model) renderColumn(ci, colWidth int) string {
 	st := m.states[ci]
 	style := columnStyle
 	if ci == m.focusedCol {
 		style = columnFocusedStyle
-	}
-	if fullWidth && m.width > 0 {
-		colWidth = m.width - 4
 	}
 
 	items := m.columnItems(st.ID)
