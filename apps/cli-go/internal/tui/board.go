@@ -20,21 +20,42 @@ func (m Model) handleBoardData(msg boardDataMsg) (tea.Model, tea.Cmd) {
 	m.setError(nil)
 	m.states = msg.states
 	m.items = msg.items
+	m.labels = msg.labels
+	m.members = msg.members
 	m.focusedCol = 0
 	m.colCursor = make([]int, len(m.states))
+	m.filterAssignee = ""
+	m.filterLabel = ""
 	m.screen = screenBoard
 	return m, nil
 }
 
-// columnItems returns the work items in the given state, in a stable order.
+// columnItems returns the work items in the given state that also pass the active
+// assignee/label filters (see filter.go), in a stable order.
 func (m Model) columnItems(stateID string) []api.WorkItem {
 	var out []api.WorkItem
 	for _, it := range m.items {
-		if it.State == stateID {
-			out = append(out, it)
+		if it.State != stateID {
+			continue
 		}
+		if m.filterAssignee != "" && !containsStr(it.Assignees, m.filterAssignee) {
+			continue
+		}
+		if m.filterLabel != "" && !containsStr(it.Labels, m.filterLabel) {
+			continue
+		}
+		out = append(out, it)
 	}
 	return out
+}
+
+func containsStr(list []string, v string) bool {
+	for _, s := range list {
+		if s == v {
+			return true
+		}
+	}
+	return false
 }
 
 func (m Model) selectedItem() *api.WorkItem {
@@ -64,6 +85,9 @@ func (m Model) findState(id string) *api.State {
 func (m Model) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.pickerOpen != "" {
 		return m.updatePicker(msg)
+	}
+	if m.filterOpen != "" {
+		return m.updateFilterPicker(msg)
 	}
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
@@ -96,8 +120,7 @@ func (m Model) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "p":
 		m.screen = screenProjects
 	case "w":
-		m.screen = screenWorkspaceInput
-		m.workspaceInput.Focus()
+		return m.switchWorkspace()
 	case "enter":
 		if item := m.selectedItem(); item != nil {
 			m.detailItem = item
@@ -107,6 +130,10 @@ func (m Model) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openStatePicker()
 	case "y":
 		m.openPriorityPicker()
+	case "a":
+		m.openFilterPicker("assignee")
+	case "L":
+		m.openFilterPicker("label")
 	}
 	return m, nil
 }
@@ -119,40 +146,95 @@ func (m Model) viewBoard() string {
 		return titleStyle.Render(m.project.Name) + "\n\n" + helpStyle.Render("This project has no states.") + "\n\n" + m.footer("p  switch board    q  quit")
 	}
 
-	colWidth := 24
-	if m.width > 0 {
-		if w := m.width/len(m.states) - 4; w >= 12 {
+	const minColWidth = 20
+	const maxColWidth = 40
+
+	// Narrow terminal (or many columns): showing every column side by side would squeeze
+	// each below a usable width, so show only the focused column, full width, instead.
+	narrow := m.width > 0 && m.width/len(m.states) < minColWidth
+
+	header := titleStyle.Render(m.project.Name)
+	if f := m.activeFilterSummary(); f != "" {
+		header += "  " + helpStyle.Render(f)
+	}
+	header += "\n\n"
+	var body string
+	if narrow {
+		body = m.renderColumn(m.focusedCol, minColWidth, true)
+		body += "\n" + helpStyle.Render(fmt.Sprintf("column %d/%d", m.focusedCol+1, len(m.states)))
+	} else {
+		colWidth := maxColWidth
+		if w := m.width/len(m.states) - 4; w >= minColWidth && w < colWidth {
 			colWidth = w
 		}
+		var cols []string
+		for ci := range m.states {
+			cols = append(cols, m.renderColumn(ci, colWidth, false))
+		}
+		body = lipgloss.JoinHorizontal(lipgloss.Top, cols...)
 	}
 
-	var cols []string
-	for ci, st := range m.states {
-		style := columnStyle
-		if ci == m.focusedCol {
-			style = columnFocusedStyle
-		}
-		items := m.columnItems(st.ID)
-		header := columnHeaderStyle.Render(fmt.Sprintf("%s (%d)", st.Name, len(items)))
-		body := header + "\n"
-		for ii, it := range items {
-			line := fmt.Sprintf("#%d %s", it.SequenceID, truncate(it.Name, colWidth-6))
-			if ci == m.focusedCol && ii == m.colCursor[ci] {
-				body += cardSelectedStyle.Width(colWidth).Render(line) + "\n"
-			} else {
-				body += cardStyle.Width(colWidth).Render(line) + "\n"
-			}
-		}
-		cols = append(cols, style.Width(colWidth).Render(strings.TrimRight(body, "\n")))
-	}
-
-	out := titleStyle.Render(m.project.Name) + "\n\n"
-	out += lipgloss.JoinHorizontal(lipgloss.Top, cols...)
-	out += "\n\n" + m.footer("h/l  column    j/k  card    enter  open    s  state    y  priority    r  refresh    p  boards    q  quit")
+	out := header + body
+	out += "\n\n" + m.footer("h/l  column    j/k  card    enter  open    s  state    y  priority    a  assignee    L  label    r  refresh    p  boards    q  quit")
 	if m.pickerOpen != "" {
 		out += "\n\n" + m.viewPicker()
 	}
+	if m.filterOpen != "" {
+		out += "\n\n" + m.viewFilterPicker()
+	}
 	return out
+}
+
+// renderColumn renders a single kanban column, clipping its card list to the terminal
+// height (minus room for the title/header/footer) so a long column's own header always
+// stays visible instead of being pushed off-screen.
+func (m Model) renderColumn(ci, colWidth int, fullWidth bool) string {
+	st := m.states[ci]
+	style := columnStyle
+	if ci == m.focusedCol {
+		style = columnFocusedStyle
+	}
+	if fullWidth && m.width > 0 {
+		colWidth = m.width - 4
+	}
+
+	items := m.columnItems(st.ID)
+	cursor := m.colCursor[ci]
+	visible := items
+	scrolled := false
+	if m.height > 0 {
+		maxRows := m.height - 8
+		if maxRows < 3 {
+			maxRows = 3
+		}
+		if len(items) > maxRows {
+			start := cursor - maxRows/2
+			if start < 0 {
+				start = 0
+			}
+			if start+maxRows > len(items) {
+				start = len(items) - maxRows
+			}
+			visible = items[start : start+maxRows]
+			cursor -= start
+			scrolled = true
+		}
+	}
+
+	headerText := fmt.Sprintf("%s (%d)", st.Name, len(items))
+	if scrolled {
+		headerText += " *"
+	}
+	out := columnHeaderStyle.Render(headerText) + "\n"
+	for ii, it := range visible {
+		line := fmt.Sprintf("#%d %s", it.SequenceID, truncate(it.Name, colWidth-6))
+		if ci == m.focusedCol && ii == cursor {
+			out += cardSelectedStyle.Width(colWidth).Render(line) + "\n"
+		} else {
+			out += cardStyle.Width(colWidth).Render(line) + "\n"
+		}
+	}
+	return style.Width(colWidth).Render(strings.TrimRight(out, "\n"))
 }
 
 func truncate(s string, n int) string {

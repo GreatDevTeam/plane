@@ -56,7 +56,14 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("request to %s: %w", path, err)
+		// net/http wraps transport failures in a *url.Error whose Error() repeats the
+		// full request URL (including query string); unwrap it so a connectivity error
+		// reads as "GET /path failed: <cause>" instead of dumping the whole URL.
+		cause := err
+		if uerr, ok := err.(*url.Error); ok {
+			cause = uerr.Err
+		}
+		return fmt.Errorf("%s %s failed: %w", method, path, cause)
 	}
 	defer resp.Body.Close()
 
@@ -111,6 +118,23 @@ func (c *Client) ListStates(ctx context.Context, workspaceSlug, projectID string
 // ListWorkItems returns every work item in the given project.
 func (c *Client) ListWorkItems(ctx context.Context, workspaceSlug, projectID string) ([]WorkItem, error) {
 	return listAll[WorkItem](ctx, c, fmt.Sprintf("/api/v1/workspaces/%s/projects/%s/work-items/", workspaceSlug, projectID))
+}
+
+// ListLabels returns every label defined on the given project.
+func (c *Client) ListLabels(ctx context.Context, workspaceSlug, projectID string) ([]Label, error) {
+	return listAll[Label](ctx, c, fmt.Sprintf("/api/v1/workspaces/%s/projects/%s/labels/", workspaceSlug, projectID))
+}
+
+// ListMembers returns every member of the given project (used to resolve assignee IDs to
+// display names). Unlike the other list endpoints this one is not paginated: it returns a
+// plain JSON array.
+func (c *Client) ListMembers(ctx context.Context, workspaceSlug, projectID string) ([]Member, error) {
+	var members []Member
+	path := fmt.Sprintf("/api/v1/workspaces/%s/projects/%s/members/", workspaceSlug, projectID)
+	if err := c.do(ctx, http.MethodGet, path, nil, nil, &members); err != nil {
+		return nil, err
+	}
+	return members, nil
 }
 
 // UpdateWorkItem PATCHes the given fields (e.g. {"state": id} or {"priority": "high"}) on a work item.

@@ -25,6 +25,10 @@ var (
 
 	columnHeaderStyle = lipgloss.NewStyle().Bold(true)
 
+	helpSectionStyle = lipgloss.NewStyle().Bold(true).Foreground(colorGood)
+
+	helpKeyStyle = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+
 	cardStyle = lipgloss.NewStyle().Padding(0, 1)
 
 	cardSelectedStyle = cardStyle.Background(colorAccent).Foreground(lipgloss.Color("0"))

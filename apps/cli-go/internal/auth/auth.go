@@ -35,13 +35,15 @@ func TokenLogin(ctx context.Context, baseURL, token string) (*api.Client, *api.U
 
 // PasswordLogin signs in with email/password, mints a fresh API token for future runs, and
 // returns a ready-to-use client alongside the minted token (callers should persist it so the
-// next run can use TokenLogin instead).
-func PasswordLogin(ctx context.Context, baseURL, email, password string) (client *api.Client, user *api.User, token string, err error) {
+// next run can use TokenLogin instead). It also returns every workspace the user belongs to,
+// fetched via the session established by sign-in: that listing endpoint is session-only (no
+// API-key auth), so it is only ever available right here, not from an existing token.
+func PasswordLogin(ctx context.Context, baseURL, email, password string) (client *api.Client, user *api.User, token string, workspaces []api.Workspace, err error) {
 	base := strings.TrimRight(baseURL, "/")
 
 	jar, err := cookiejar.New(nil)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, "", nil, err
 	}
 	hc := &http.Client{
 		Timeout: 20 * time.Second,
@@ -54,24 +56,56 @@ func PasswordLogin(ctx context.Context, baseURL, email, password string) (client
 
 	csrfToken, err := fetchCSRFToken(ctx, hc, base)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("fetching csrf token: %w", err)
+		return nil, nil, "", nil, fmt.Errorf("fetching csrf token: %w", err)
 	}
 
 	if err := signIn(ctx, hc, base, csrfToken, email, password); err != nil {
-		return nil, nil, "", err
+		return nil, nil, "", nil, err
 	}
+
+	// Best-effort: an empty/nil result just means the caller falls back to asking for the
+	// workspace slug by hand, same as with a bare API token.
+	workspaces, _ = listWorkspaces(ctx, hc, base)
 
 	token, err = mintAPIToken(ctx, hc, base)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("signed in, but could not create an API token: %w", err)
+		return nil, nil, "", nil, fmt.Errorf("signed in, but could not create an API token: %w", err)
 	}
 
 	client = api.New(base, token)
 	user, err = client.Me(ctx)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("signed in, but the minted token was rejected: %w", err)
+		return nil, nil, "", nil, fmt.Errorf("signed in, but the minted token was rejected: %w", err)
 	}
-	return client, user, token, nil
+	return client, user, token, workspaces, nil
+}
+
+// listWorkspaces fetches every workspace the session-authenticated user belongs to via
+// Plane's session-only app API (GET /api/workspaces/, the same endpoint the web app calls) —
+// there is no equivalent in the API-key-authenticated public /api/v1/ surface.
+func listWorkspaces(ctx context.Context, hc *http.Client, base string) ([]api.Workspace, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/workspaces/", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	var workspaces []api.Workspace
+	if err := json.Unmarshal(body, &workspaces); err != nil {
+		return nil, err
+	}
+	return workspaces, nil
 }
 
 func fetchCSRFToken(ctx context.Context, hc *http.Client, base string) (string, error) {
