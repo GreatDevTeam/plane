@@ -44,7 +44,7 @@ func (m Model) updateServerInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) viewServerInput() string {
 	return titleStyle.Render("plane-cli") + "\n\n" +
 		"Server URL:\n" + focusedInputStyle.Render(m.serverInput.View()) + "\n\n" +
-		m.footer("enter  continue    ctrl+c  quit")
+		m.footer(helpStyle.Render("enter  continue    ctrl+c  quit"))
 }
 
 // --- auth method choice ---
@@ -87,7 +87,7 @@ func (m Model) viewAuthChoice() string {
 			out += cardStyle.Render("  "+c) + "\n"
 		}
 	}
-	out += "\n" + m.footer("j/k  move    enter  select    esc  back")
+	out += "\n" + m.footer(helpStyle.Render("j/k  move    enter  select    esc  back"))
 	return out
 }
 
@@ -119,7 +119,7 @@ func (m Model) updateTokenInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) viewTokenInput() string {
 	return titleStyle.Render("Sign in to "+m.serverURL) + "\n\n" +
 		"API token (Settings -> API tokens in Plane):\n" + focusedInputStyle.Render(m.tokenInput.View()) + "\n\n" +
-		m.footer("enter  sign in    esc  back")
+		m.footer(helpStyle.Render("enter  sign in    esc  back"))
 }
 
 // --- email / password ---
@@ -152,7 +152,7 @@ func (m Model) updateEmailInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) viewEmailInput() string {
 	return titleStyle.Render("Sign in to "+m.serverURL) + "\n\n" +
 		"Email:\n" + focusedInputStyle.Render(m.emailInput.View()) + "\n\n" +
-		m.footer("enter  continue    esc  back")
+		m.footer(helpStyle.Render("enter  continue    esc  back"))
 }
 
 func (m Model) updatePasswordInput(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -181,7 +181,7 @@ func (m Model) updatePasswordInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) viewPasswordInput() string {
 	return titleStyle.Render("Sign in to "+m.serverURL) + "\n\n" +
 		"Password for " + m.pendingEmail + ":\n" + focusedInputStyle.Render(m.passwordInput.View()) + "\n\n" +
-		m.footer("enter  sign in    esc  back")
+		m.footer(helpStyle.Render("enter  sign in    esc  back"))
 }
 
 // --- shared login result handling ---

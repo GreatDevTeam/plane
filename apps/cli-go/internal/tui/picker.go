@@ -47,6 +47,31 @@ func (m *Model) openPriorityPicker() {
 	}
 }
 
+// openAssigneePicker opens the project's member list — with a leading "Unassigned" entry —
+// against the active item (the board's selected card, or the detail screen's open item). Like
+// openStatePicker/openPriorityPicker it PATCHes the work item itself (see updatePicker's
+// "assignee" case), unlike the board's own "a" key, which only filters what the board shows.
+// A work item can carry several assignees, but this picker is a single choice — picking one
+// replaces the whole list, the same way the new-item review step's assignee picker sets one.
+func (m *Model) openAssigneePicker() {
+	item := m.activeItem()
+	if item == nil {
+		return
+	}
+	m.pickerOpen = "assignee"
+	m.pickerIdx = 0
+	if len(item.Assignees) == 0 {
+		return
+	}
+	first := item.Assignees[0]
+	for i, mem := range m.members {
+		if mem.ID == first {
+			m.pickerIdx = i + 1 // +1 for the leading "Unassigned" entry
+			break
+		}
+	}
+}
+
 // openNewItemStatePicker/openNewItemPriorityPicker/openNewItemAssigneePicker are the state,
 // priority and assignee pickers for the board's new-work-item review step
 // (updateNewItemReview): unlike openStatePicker/openPriorityPicker, which act on
@@ -112,7 +137,7 @@ func (m Model) pickerOptionCount() int {
 		return len(sortModes)
 	case "subissue":
 		return len(m.subIssueOptions())
-	case "new-item-assignee":
+	case "assignee", "new-item-assignee":
 		return len(m.members) + 1 // +1 for "Unassigned"
 	}
 	return len(api.Priorities)
@@ -187,9 +212,19 @@ func (m Model) updatePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		var patch map[string]any
-		if m.pickerOpen == "state" {
+		switch m.pickerOpen {
+		case "state":
 			patch = map[string]any{"state": m.states[m.pickerIdx].ID}
-		} else {
+		case "assignee":
+			// ids starts non-nil (rather than a nil slice) so clearing the assignee PATCHes
+			// "assignees": [] — a nil slice marshals to JSON null, which is not the same
+			// instruction to the API as an empty list.
+			ids := []string{}
+			if idx := m.pickerIdx - 1; idx >= 0 && idx < len(m.members) {
+				ids = []string{m.members[idx].ID}
+			}
+			patch = map[string]any{"assignees": ids}
+		default:
 			patch = map[string]any{"priority": api.Priorities[m.pickerIdx]}
 		}
 		m.status = "Updating..."
@@ -207,6 +242,8 @@ func (m Model) viewPicker() string {
 		title = "Order cards by"
 	case "subissue":
 		title = "Jump to sub-task"
+	case "assignee":
+		title = "Change assignee"
 	case "new-item-assignee":
 		title = "New item assignee"
 	}
@@ -229,7 +266,7 @@ func (m Model) viewPicker() string {
 		for i, sm := range sortModes {
 			out += pickerLine(sm.label, i == m.pickerIdx)
 		}
-	case m.pickerOpen == "new-item-assignee":
+	case m.pickerOpen == "assignee", m.pickerOpen == "new-item-assignee":
 		out += pickerLine("Unassigned", m.pickerIdx == 0)
 		for i, mem := range m.members {
 			out += pickerLine(mem.Name(), m.pickerIdx == i+1)

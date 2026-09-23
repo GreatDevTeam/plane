@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/makeplane/plane/apps/cli-go/internal/api"
 )
 
@@ -459,11 +460,24 @@ func TestPackHintsFitsWidth(t *testing.T) {
 				t.Errorf("packHints(width=%d) produced a %d-column line: %q", width, lipgloss.Width(line), line)
 			}
 		}
+		plain := ansi.Strip(out)
 		for _, hint := range boardHints {
-			if !strings.Contains(out, hint) {
-				t.Errorf("packHints(width=%d) dropped hint %q", width, hint)
+			if want := hint[0] + "  " + hint[1]; !strings.Contains(plain, want) {
+				t.Errorf("packHints(width=%d) dropped hint %q", width, want)
 			}
 		}
+	}
+}
+
+// TestPackHintsStylesKeySeparatelyFromDescription checks the key/description split the task
+// asked for: a hint's key renders in helpKeyStyle, distinct from the muted helpStyle its
+// description (and the surrounding whitespace) renders in — previously the whole hint line was
+// wrapped in one style, so a shortcut read in exactly the same color as the text describing it.
+func TestPackHintsStylesKeySeparatelyFromDescription(t *testing.T) {
+	out := packHints([][2]string{{"s", "state"}}, 80)
+	want := helpKeyStyle.Render("s") + helpStyle.Render("  state")
+	if out != want {
+		t.Errorf("packHints one-hint output = %q, want %q", out, want)
 	}
 }
 
@@ -509,5 +523,68 @@ func TestUpdateDoesNotForceClearScreenWithKnownSize(t *testing.T) {
 
 	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyDown}); cmd != nil {
 		t.Fatalf("Update on board with known size returned a non-nil Cmd (%#v), want nil", cmd())
+	}
+}
+
+// TestIDPromptOpensMatchingWorkItem covers the board's "g" (open by work item id) flow end to
+// end: typing a known sequence number and pressing enter opens that work item's detail screen,
+// the same way pressing enter on its card does.
+func TestIDPromptOpensMatchingWorkItem(t *testing.T) {
+	m := boardFixture(2, 4, 120, 40) // sequence IDs 1000..1003, see boardFixture
+	m.idInput = newInput("", 12)
+	m.client = api.New("http://example.invalid", "token")
+
+	next, _ := m.updateBoard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	m = next.(Model)
+	if !m.idPromptOpen {
+		t.Fatal("g did not open the id prompt")
+	}
+
+	for _, r := range "1002" {
+		next, _ = m.updateBoard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = next.(Model)
+	}
+	next, _ = m.updateBoard(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+
+	if m.idPromptOpen {
+		t.Error("the id prompt stayed open after a match")
+	}
+	if m.screen != screenDetail {
+		t.Fatalf("screen = %v, want screenDetail", m.screen)
+	}
+	if m.detailItem == nil || m.detailItem.SequenceID != 1002 {
+		t.Fatalf("detailItem = %+v, want work item #1002", m.detailItem)
+	}
+}
+
+// TestIDPromptReportsNotFoundAndEscCancels covers the two ways out of the prompt that do not
+// open anything: a number the board has not loaded, and esc.
+func TestIDPromptReportsNotFoundAndEscCancels(t *testing.T) {
+	m := boardFixture(2, 4, 120, 40)
+	m.idInput = newInput("", 12)
+	m.idPromptOpen = true
+	m.idInput.Focus()
+	m.idInput.SetValue("9999")
+
+	next, _ := m.updateBoard(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if !m.idPromptOpen {
+		t.Error("the id prompt closed on a number that is not on the board")
+	}
+	if m.screen == screenDetail {
+		t.Error("a not-found id must not open the detail screen")
+	}
+	if m.err == "" {
+		t.Error("a not-found id must report an error")
+	}
+
+	next, _ = m.updateBoard(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(Model)
+	if m.idPromptOpen {
+		t.Error("esc did not close the id prompt")
+	}
+	if m.screen == screenDetail {
+		t.Error("esc must not open anything")
 	}
 }

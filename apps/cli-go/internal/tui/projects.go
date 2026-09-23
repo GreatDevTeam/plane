@@ -54,6 +54,6 @@ func (m Model) viewProjects() string {
 			out += cardStyle.Render("  "+line) + "\n"
 		}
 	}
-	out += "\n" + m.footer("j/k  move    enter  open board    w  switch workspace    q  quit")
+	out += "\n" + m.footer(helpStyle.Render("j/k  move    enter  open board    w  switch workspace    q  quit"))
 	return out
 }

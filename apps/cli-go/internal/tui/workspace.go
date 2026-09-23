@@ -85,7 +85,7 @@ func (m Model) viewWorkspacePicker() string {
 			out += cardStyle.Render("  "+line) + "\n"
 		}
 	}
-	out += "\n" + m.footer("j/k  move    enter  select    esc  type slug instead    q  quit")
+	out += "\n" + m.footer(helpStyle.Render("j/k  move    enter  select    esc  type slug instead    q  quit"))
 	return out
 }
 
@@ -118,7 +118,7 @@ func (m Model) viewWorkspaceInput() string {
 	return titleStyle.Render("Workspace") + "\n\n" + who +
 		"Workspace slug (from the URL, e.g. app.plane.so/<slug>):\n" +
 		focusedInputStyle.Render(m.workspaceInput.View()) + "\n\n" +
-		m.footer("enter  continue    ctrl+c  quit")
+		m.footer(helpStyle.Render("enter  continue    ctrl+c  quit"))
 }
 
 func (m Model) handleProjects(msg projectsMsg) (tea.Model, tea.Cmd) {

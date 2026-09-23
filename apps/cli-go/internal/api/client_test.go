@@ -3,8 +3,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -71,6 +76,62 @@ func TestListWorkItemsPageOrderBy(t *testing.T) {
 	}
 	if sawOrderByParam {
 		t.Error("empty orderBy should not send an order_by query param at all")
+	}
+}
+
+// TestListAllQueryParallelPages checks that a listing spanning several pages fetches the
+// first page once and every later page exactly once, and reassembles them in page order even
+// though they are requested concurrently — see listAllQuery.
+func TestListAllQueryParallelPages(t *testing.T) {
+	var firstPageRequests int32
+	seen := map[int]int32{}
+	var mu sync.Mutex
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cursor := r.URL.Query().Get("cursor")
+		page := 0
+		if cursor == "" {
+			atomic.AddInt32(&firstPageRequests, 1)
+		} else {
+			bits := strings.Split(cursor, ":")
+			page, _ = strconv.Atoi(bits[1])
+		}
+		mu.Lock()
+		seen[page]++
+		mu.Unlock()
+
+		_ = json.NewEncoder(w).Encode(paginatedResponse[WorkItem]{
+			Results:         []WorkItem{{ID: fmt.Sprintf("p%d-a", page)}, {ID: fmt.Sprintf("p%d-b", page)}},
+			TotalCount:      250, // three pages at per_page=100
+			NextCursor:      "100:1:0",
+			NextPageResults: page == 0,
+		})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok")
+	items, err := listAll[WorkItem](context.Background(), c, "/x/")
+	if err != nil {
+		t.Fatalf("listAll: %v", err)
+	}
+
+	want := []string{"p0-a", "p0-b", "p1-a", "p1-b", "p2-a", "p2-b"}
+	if len(items) != len(want) {
+		t.Fatalf("got %d items, want %d: %+v", len(items), len(want), items)
+	}
+	for i, id := range want {
+		if items[i].ID != id {
+			t.Errorf("items[%d].ID = %q, want %q (pages must reassemble in page order)", i, items[i].ID, id)
+		}
+	}
+
+	if firstPageRequests != 1 {
+		t.Errorf("first page requested %d times, want 1", firstPageRequests)
+	}
+	for p := 0; p < 3; p++ {
+		if seen[p] != 1 {
+			t.Errorf("page %d requested %d times, want 1", p, seen[p])
+		}
 	}
 }
 

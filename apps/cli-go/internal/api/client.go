@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -215,23 +216,119 @@ func (c *Client) UpdateWorkItem(ctx context.Context, workspaceSlug, projectID, w
 	return &wi, nil
 }
 
+// listAllPerPage is the page size every listAllQuery request asks for. It has to stay fixed
+// for one listing: the parallel fetch below constructs every page's cursor itself (rather
+// than chaining each page's own next_cursor), and that only lands on the right rows if every
+// request in the batch agrees on the page size.
+const listAllPerPage = 100
+
+// listAllMaxParallelPages bounds how many pages listAllQuery has in flight at once, so paging
+// through a very large project does not open dozens of simultaneous requests.
+const listAllMaxParallelPages = 8
+
 // listAll follows Plane's cursor pagination until every page has been fetched.
 func listAll[T any](ctx context.Context, c *Client, path string) ([]T, error) {
 	return listAllQuery[T](ctx, c, path, nil)
 }
 
-// listAllQuery is listAll with extra fixed query parameters (e.g. order_by) merged into
-// every page request.
+// listAllQuery is listAll with extra fixed query parameters (e.g. order_by) merged into every
+// page request.
+//
+// The first page is fetched alone — there is nothing to parallelize until it reports how many
+// more pages exist — and every remaining page is then requested concurrently, rather than one
+// round trip at a time as this used to. That is safe because Plane's cursor pagination is a
+// plain offset/limit paginator: a cursor is "<anything>:<page number>:0", and the offset it
+// decodes to is cursor.offset*limit using the request's own per_page, not anything encoded in
+// the cursor's own first field (apps/api/plane/utils/paginator.py OffsetPaginator.get_result,
+// "offset = cursor.offset * limit # use limit instead of cursor.value for consistent
+// pagination"). So every page's cursor can be built up front from its page number instead of
+// waiting for the previous page's response to hand back the next one. This is what made the
+// CLI's 30s board refresh (refreshBoard -> ListWorkItems) so much slower than the equivalent
+// web app fetch on a project with more than one page of work items: it walked every page
+// sequentially where nothing requires that.
+//
+// If the server ever does not report total_count for a listing with more pages (a paginator
+// this client has not seen do that), it falls back to the old page-at-a-time walk from the
+// first page's next_cursor rather than silently dropping whatever the count did not cover.
 func listAllQuery[T any](ctx context.Context, c *Client, path string, extra url.Values) ([]T, error) {
+	q := url.Values{"per_page": {fmt.Sprint(listAllPerPage)}}
+	for k, v := range extra {
+		q[k] = v
+	}
+	var first paginatedResponse[T]
+	if err := c.do(ctx, http.MethodGet, path, q, nil, &first); err != nil {
+		return nil, err
+	}
+	if !first.NextPageResults || first.NextCursor == "" {
+		return first.Results, nil
+	}
+
+	totalPages := (first.TotalCount + listAllPerPage - 1) / listAllPerPage
+	if totalPages < 2 {
+		// total_count did not actually cover a second page: fall back to walking the cursor
+		// chain the server did give us, rather than trusting a count that disagrees with it.
+		rest, err := listRemainingPagesSequential[T](ctx, c, path, extra, first.NextCursor)
+		if err != nil {
+			return nil, err
+		}
+		return append(first.Results, rest...), nil
+	}
+
+	pages := make([][]T, totalPages)
+	pages[0] = first.Results
+
+	sem := make(chan struct{}, listAllMaxParallelPages)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
+
+	for p := 1; p < totalPages; p++ {
+		wg.Add(1)
+		go func(p int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			pq := url.Values{
+				"per_page": {fmt.Sprint(listAllPerPage)},
+				"cursor":   {fmt.Sprintf("%d:%d:0", listAllPerPage, p)},
+			}
+			for k, v := range extra {
+				pq[k] = v
+			}
+			var page paginatedResponse[T]
+			if err := c.do(ctx, http.MethodGet, path, pq, nil, &page); err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+				return
+			}
+			pages[p] = page.Results
+		}(p)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+
 	var all []T
-	cursor := ""
-	for {
-		q := url.Values{"per_page": {"100"}}
+	for _, pg := range pages {
+		all = append(all, pg...)
+	}
+	return all, nil
+}
+
+// listRemainingPagesSequential is listAllQuery's original page-at-a-time walk, kept as the
+// fallback for a listing whose total_count does not actually cover the pages its
+// next_page_results promises (see listAllQuery).
+func listRemainingPagesSequential[T any](ctx context.Context, c *Client, path string, extra url.Values, cursor string) ([]T, error) {
+	var all []T
+	for cursor != "" {
+		q := url.Values{"per_page": {fmt.Sprint(listAllPerPage)}, "cursor": {cursor}}
 		for k, v := range extra {
 			q[k] = v
-		}
-		if cursor != "" {
-			q.Set("cursor", cursor)
 		}
 		var page paginatedResponse[T]
 		if err := c.do(ctx, http.MethodGet, path, q, nil, &page); err != nil {

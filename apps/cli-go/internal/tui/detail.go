@@ -46,6 +46,10 @@ func (m Model) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openStatePicker()
 	case "y":
 		m.openPriorityPicker()
+	case "A":
+		m.openAssigneePicker()
+	case "u":
+		return m.copyItemURL(m.detailItem)
 	case "c":
 		return m.openCommentEditor("")
 	case "d":
@@ -313,15 +317,16 @@ func formatTimestamp(s string) string {
 
 // detailHints are the detail screen's key hints, kept as separate chunks so packHints can
 // wrap them at a word boundary rather than letting the terminal split one mid-hint.
-var detailHints = []string{
-	"s  state", "y  priority", "d  description", "g  parent", "S  sub-tasks",
-	"tab  switch pane", "j/k  scroll", "c  add comment", "e  edit comment", "r  refresh", "esc  back", "q  quit",
+var detailHints = [][2]string{
+	{"s", "state"}, {"y", "priority"}, {"A", "assignee"}, {"d", "description"}, {"g", "parent"}, {"S", "sub-tasks"},
+	{"u", "copy url"}, {"tab", "switch pane"}, {"j/k", "scroll"}, {"c", "add comment"}, {"e", "edit comment"},
+	{"r", "refresh"}, {"esc", "back"}, {"q", "quit"},
 }
 
 func (m Model) viewDetail() string {
 	item := m.detailItem
 	if item == nil {
-		return "No work item selected.\n\n" + m.footer("esc  back")
+		return "No work item selected.\n\n" + m.footer(helpStyle.Render("esc  back"))
 	}
 	_, height := m.termSize()
 	width, descRows, commentsRows := m.detailLayout()
@@ -519,7 +524,7 @@ func (m Model) detailBottom(width int) string {
 			if hint != "" {
 				hint += "\n"
 			}
-			hint += loader
+			hint += helpStyle.Render(loader)
 		}
 		bottom = m.footer(hint)
 	}
