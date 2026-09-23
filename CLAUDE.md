@@ -130,6 +130,10 @@ gofmt -l .        # lists any unformatted files (empty output = clean); use `gof
 
 All four must pass/print nothing before committing a Go change.
 
+### Attaching a built binary to a task
+
+When a task asks for a built `plane-cli` binary to be attached for manual testing (e.g. via `docs/plane.sh upload-asset`), always name the archive with a UTC timestamp, e.g. `plane-cli_20260923T115000Z.zip` (`date -u +%Y%m%dT%H%M%SZ`) — a fixed name like `plane-cli.zip` makes it impossible to tell, from the task's attachment list, which build a given zip is without opening it. Strip debug info before zipping (`go build -ldflags="-s -w" ./cmd/plane-cli`) — the workspace's asset upload enforces a hard 5 MiB size cap and rejects unstripped/unzipped executable mime types outright.
+
 ## GitHub / PR workflow
 
 - **PR base branch is `master`** — always open PRs against `master`, not `preview` or `dev`.
