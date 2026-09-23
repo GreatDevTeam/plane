@@ -121,11 +121,16 @@ func (c *Client) ListWorkItems(ctx context.Context, workspaceSlug, projectID str
 }
 
 // ListWorkItemsPage fetches a single page of work items (100 per page), starting at cursor
-// (pass "" for the first page). Callers use this instead of ListWorkItems to render a board
-// as pages arrive rather than blocking on the whole project up front.
-func (c *Client) ListWorkItemsPage(ctx context.Context, workspaceSlug, projectID, cursor string) (items []WorkItem, nextCursor string, hasNext bool, err error) {
+// (pass "" for the first page) and ordered by orderBy (pass "" for the API's default). Callers
+// use this instead of ListWorkItems to render a board as pages arrive rather than blocking on
+// the whole project up front. Every page of one pagination sequence must use the same orderBy:
+// the cursor encodes a position in that ordering.
+func (c *Client) ListWorkItemsPage(ctx context.Context, workspaceSlug, projectID, cursor, orderBy string) (items []WorkItem, nextCursor string, hasNext bool, err error) {
 	path := fmt.Sprintf("/api/v1/workspaces/%s/projects/%s/work-items/", workspaceSlug, projectID)
 	q := url.Values{"per_page": {"100"}}
+	if orderBy != "" {
+		q.Set("order_by", orderBy)
+	}
 	if cursor != "" {
 		q.Set("cursor", cursor)
 	}

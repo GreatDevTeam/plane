@@ -47,6 +47,50 @@ func (m *Model) openPriorityPicker() {
 	}
 }
 
+// openNewItemStatePicker/openNewItemPriorityPicker/openNewItemAssigneePicker are the state,
+// priority and assignee pickers for the board's new-work-item review step
+// (updateNewItemReview): unlike openStatePicker/openPriorityPicker, which act on
+// m.activeItem() (an existing work item), these apply to the item still being composed —
+// there's nothing yet to patch, so the choice just lands in m.newItem*.
+
+func (m *Model) openNewItemStatePicker() {
+	m.pickerOpen = "state"
+	m.pickerIdx = 0
+	for i, st := range m.states {
+		if st.ID == m.newItemStateID {
+			m.pickerIdx = i
+			break
+		}
+	}
+}
+
+func (m *Model) openNewItemPriorityPicker() {
+	m.pickerOpen = "priority"
+	m.pickerIdx = 0
+	for i, p := range api.Priorities {
+		if p == m.newItemPriority {
+			m.pickerIdx = i
+			break
+		}
+	}
+}
+
+// openNewItemAssigneePicker opens the project's member list with a leading "Unassigned"
+// entry, the same shape the assignee filter picker uses (see filterOptionLabels).
+func (m *Model) openNewItemAssigneePicker() {
+	m.pickerOpen = "new-item-assignee"
+	m.pickerIdx = 0
+	if m.newItemAssignee == "" {
+		return
+	}
+	for i, mem := range m.members {
+		if mem.ID == m.newItemAssignee {
+			m.pickerIdx = i + 1 // +1 for the leading "Unassigned" entry
+			break
+		}
+	}
+}
+
 // openSortPicker opens the list of card orderings, with the board's current one selected.
 func (m *Model) openSortPicker() {
 	m.pickerOpen = "sort"
@@ -68,6 +112,8 @@ func (m Model) pickerOptionCount() int {
 		return len(sortModes)
 	case "subissue":
 		return len(m.subIssueOptions())
+	case "new-item-assignee":
+		return len(m.members) + 1 // +1 for "Unassigned"
 	}
 	return len(api.Priorities)
 }
@@ -113,6 +159,28 @@ func (m Model) updatePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m.openWorkItem(opts[m.pickerIdx])
 		}
+		if m.creatingItem {
+			// The item being composed does not exist yet, so there is nothing to PATCH: the
+			// choice just lands in m.newItem* for the review step (viewNewItemReview) to show.
+			switch m.pickerOpen {
+			case "state":
+				if m.pickerIdx >= 0 && m.pickerIdx < len(m.states) {
+					m.newItemStateID = m.states[m.pickerIdx].ID
+				}
+			case "priority":
+				if m.pickerIdx >= 0 && m.pickerIdx < len(api.Priorities) {
+					m.newItemPriority = api.Priorities[m.pickerIdx]
+				}
+			case "new-item-assignee":
+				if m.pickerIdx == 0 {
+					m.newItemAssignee = ""
+				} else if idx := m.pickerIdx - 1; idx >= 0 && idx < len(m.members) {
+					m.newItemAssignee = m.members[idx].ID
+				}
+			}
+			m.pickerOpen = ""
+			return m, nil
+		}
 		item := m.activeItem()
 		if item == nil {
 			m.pickerOpen = ""
@@ -139,6 +207,16 @@ func (m Model) viewPicker() string {
 		title = "Order cards by"
 	case "subissue":
 		title = "Jump to sub-task"
+	case "new-item-assignee":
+		title = "New item assignee"
+	}
+	if m.creatingItem {
+		switch m.pickerOpen {
+		case "state":
+			title = "New item state"
+		case "priority":
+			title = "New item priority"
+		}
 	}
 	out := columnHeaderStyle.Render(title) + "\n"
 	hint := "j/k  move    enter  apply    esc  cancel"
@@ -150,6 +228,11 @@ func (m Model) viewPicker() string {
 	case m.pickerOpen == "sort":
 		for i, sm := range sortModes {
 			out += pickerLine(sm.label, i == m.pickerIdx)
+		}
+	case m.pickerOpen == "new-item-assignee":
+		out += pickerLine("Unassigned", m.pickerIdx == 0)
+		for i, mem := range m.members {
+			out += pickerLine(mem.Name(), m.pickerIdx == i+1)
 		}
 	case m.pickerOpen == "subissue":
 		opts := m.subIssueOptions()

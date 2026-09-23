@@ -27,7 +27,7 @@ func TestListWorkItemsPage(t *testing.T) {
 
 	c := New(srv.URL, "tok")
 
-	items, cursor, hasNext, err := c.ListWorkItemsPage(context.Background(), "ws", "proj", "")
+	items, cursor, hasNext, err := c.ListWorkItemsPage(context.Background(), "ws", "proj", "", "")
 	if err != nil {
 		t.Fatalf("first page: %v", err)
 	}
@@ -35,12 +35,42 @@ func TestListWorkItemsPage(t *testing.T) {
 		t.Fatalf("first page = %+v, %q, %v; want 2 items, cursor page2, hasNext true", items, cursor, hasNext)
 	}
 
-	items, cursor, hasNext, err = c.ListWorkItemsPage(context.Background(), "ws", "proj", cursor)
+	items, cursor, hasNext, err = c.ListWorkItemsPage(context.Background(), "ws", "proj", cursor, "")
 	if err != nil {
 		t.Fatalf("second page: %v", err)
 	}
 	if len(items) != 1 || cursor != "" || hasNext {
 		t.Fatalf("second page = %+v, %q, %v; want 1 item, no next", items, cursor, hasNext)
+	}
+}
+
+// TestListWorkItemsPageOrderBy checks orderBy is forwarded as order_by when set, and left off
+// the query entirely when empty — the board's page requests always pass one (boardItemOrderBy)
+// so its cursor pagination stays consistent, but the parameter itself is optional API-side.
+func TestListWorkItemsPageOrderBy(t *testing.T) {
+	var gotOrderBy string
+	var sawOrderByParam bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotOrderBy = r.URL.Query().Get("order_by")
+		sawOrderByParam = r.URL.Query().Has("order_by")
+		_ = json.NewEncoder(w).Encode(paginatedResponse[WorkItem]{Results: []WorkItem{{ID: "1"}}})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok")
+
+	if _, _, _, err := c.ListWorkItemsPage(context.Background(), "ws", "proj", "", "state__group"); err != nil {
+		t.Fatalf("ListWorkItemsPage: %v", err)
+	}
+	if gotOrderBy != "state__group" {
+		t.Errorf("order_by = %q, want state__group", gotOrderBy)
+	}
+
+	if _, _, _, err := c.ListWorkItemsPage(context.Background(), "ws", "proj", "", ""); err != nil {
+		t.Fatalf("ListWorkItemsPage: %v", err)
+	}
+	if sawOrderByParam {
+		t.Error("empty orderBy should not send an order_by query param at all")
 	}
 }
 

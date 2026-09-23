@@ -24,8 +24,11 @@ func (m Model) handleBoardData(msg boardDataMsg) (tea.Model, tea.Cmd) {
 	m.states = msg.states
 	m.items = msg.items
 	m.itemsNextCursor = msg.nextCursor
-	m.labels = msg.labels
-	m.members = msg.members
+	// A new board's labels/members are fetched separately (fetchBoardExtras, batched
+	// alongside fetchBoard by updateProjects) so they never delay this render; the previous
+	// project's copies are dropped here rather than left on screen until the new ones land.
+	m.labels = nil
+	m.members = nil
 	m.focusedCol = 0
 	m.colCursor = make([]int, len(m.states))
 	m.filterAssignee = ""
@@ -48,15 +51,32 @@ func (m Model) handleBoardData(msg boardDataMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// handleBoardExtras applies a board's labels and members once fetchBoardExtras returns —
+// independently of boardDataMsg, so a slow labels/members request never blocks the board
+// itself from rendering (see fetchBoard).
+func (m Model) handleBoardExtras(msg boardExtrasMsg) (tea.Model, tea.Cmd) {
+	m.labels = msg.labels
+	m.members = msg.members
+	return m, nil
+}
+
 // handleBoardTick fires every boardRefreshInterval. It re-arms itself unconditionally, so
 // the board keeps refreshing after a skipped tick, and starts a background refresh unless
-// something on screen would be disturbed by one (see shouldSkipRefresh).
+// something on screen would be disturbed by one (see shouldSkipRefresh). While the detail
+// screen is open this also re-fetches its comments — applyBoardRefresh already keeps the open
+// item's own fields in sync, but comments are a separate endpoint the board refresh never
+// touches.
 func (m Model) handleBoardTick(boardTickMsg) (tea.Model, tea.Cmd) {
 	if m.shouldSkipRefresh() {
 		return m, boardTick()
 	}
 	m.refreshing = true
-	return m, tea.Batch(refreshBoard(m.client, m.workspaceSlug, m.project.ID), boardTick())
+	cmds := []tea.Cmd{refreshBoard(m.client, m.workspaceSlug, m.project.ID), boardTick()}
+	if m.screen == screenDetail && m.detailItem != nil {
+		m.commentsLoading = true
+		cmds = append(cmds, fetchComments(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID))
+	}
+	return m, tea.Batch(cmds...)
 }
 
 // shouldSkipRefresh reports whether a background refresh would get in the user's way right
@@ -311,6 +331,9 @@ func (m Model) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.editorOn {
 		return m.updateEditor(msg)
 	}
+	if m.creatingItem {
+		return m.updateNewItemReview(msg)
+	}
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
@@ -426,14 +449,64 @@ func (m Model) toggleHiddenColumn() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// openNewItemEditor opens the shared textarea to compose a new work item's title. The item is
-// created in the currently focused column's state, so it appears where the user was looking.
+// openNewItemEditor opens the shared textarea to compose a new work item's title. The item
+// defaults to the currently focused column's state and no priority/assignee — all three can
+// still be changed on the review step that follows (see updateNewItemReview) before it is
+// actually created.
 func (m Model) openNewItemEditor() (tea.Model, tea.Cmd) {
 	if m.focusedCol < 0 || m.focusedCol >= len(m.states) {
 		return m, nil
 	}
 	m.openEditor("new-item", "New work item title...", "", 3)
+	m.creatingItem = true
 	m.newItemStateID = m.states[m.focusedCol].ID
+	m.newItemPriority = "none"
+	m.newItemAssignee = ""
+	return m, nil
+}
+
+// resetNewItem clears everything openNewItemEditor set up, whether creation finished
+// (handleWorkItemCreated) or the user backed out of it (esc, on the title editor or the
+// review step).
+func (m *Model) resetNewItem() {
+	m.creatingItem = false
+	m.newItemName = ""
+	m.newItemStateID = ""
+	m.newItemPriority = ""
+	m.newItemAssignee = ""
+}
+
+// updateNewItemReview drives the board's new-work-item review step: once a title has been
+// typed (openNewItemEditor's editor, confirmed with ctrl+s — see updateEditor), the user lands
+// here and can still change the state/priority/assignee it will be created with, the same s/y
+// keys the board and detail screens already use, plus a on this screen for the assignee. enter
+// fires the actual POST; esc cancels the whole thing.
+func (m Model) updateNewItemReview(msg tea.Msg) (tea.Model, tea.Cmd) {
+	key, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	switch key.String() {
+	case "esc":
+		m.resetNewItem()
+	case "s":
+		m.openNewItemStatePicker()
+	case "y":
+		m.openNewItemPriorityPicker()
+	case "a":
+		m.openNewItemAssigneePicker()
+	case "enter":
+		fields := map[string]any{
+			"name":     m.newItemName,
+			"state":    m.newItemStateID,
+			"priority": m.newItemPriority,
+		}
+		if m.newItemAssignee != "" {
+			fields["assignees"] = []string{m.newItemAssignee}
+		}
+		m.status = "Creating work item..."
+		return m, createWorkItem(m.client, m.workspaceSlug, m.project.ID, fields)
+	}
 	return m, nil
 }
 
@@ -443,6 +516,7 @@ func (m Model) openNewItemEditor() (tea.Model, tea.Cmd) {
 func (m Model) handleWorkItemCreated(msg workItemCreatedMsg) (tea.Model, tea.Cmd) {
 	m.status = ""
 	m.closeEditor()
+	m.resetNewItem()
 	if msg.err != nil {
 		m.setError(msg.err)
 		return m, nil
@@ -462,19 +536,42 @@ func (m Model) handleWorkItemCreated(msg workItemCreatedMsg) (tea.Model, tea.Cmd
 	return m, nil
 }
 
-// viewNewItemEditor renders the board's new-work-item composer, in the same style
+// viewNewItemEditor renders the board's new-work-item title composer, in the same style
 // detailBottom uses for the comment/description editor.
 func (m Model) viewNewItemEditor() string {
 	return focusedInputStyle.Render(columnHeaderStyle.Render("New work item") + "\n" + m.editor.View() + "\n" +
-		helpStyle.Render("ctrl+s  create    esc  cancel"))
+		helpStyle.Render("ctrl+s  next    esc  cancel"))
+}
+
+// viewNewItemReview renders the review step that follows the title editor: the item's name
+// plus the state/priority/assignee it will be created with, each changeable before enter
+// fires the actual create.
+func (m Model) viewNewItemReview() string {
+	lines := []string{
+		"Name:      " + m.newItemName,
+		"State:     " + m.stateName(m.newItemStateID),
+		"Priority:  " + priorityLabel(m.newItemPriority),
+		"Assignee:  " + m.newItemAssigneeName(),
+	}
+	body := columnHeaderStyle.Render("New work item") + "\n" + strings.Join(lines, "\n") + "\n" +
+		helpStyle.Render("s  state    y  priority    a  assignee    enter  create    esc  cancel")
+	return focusedInputStyle.Render(body)
+}
+
+// newItemAssigneeName is the review step's "Assignee:" value.
+func (m Model) newItemAssigneeName() string {
+	if m.newItemAssignee == "" {
+		return "Unassigned"
+	}
+	return m.memberName(m.newItemAssignee)
 }
 
 func (m Model) viewBoard() string {
 	if m.loading {
-		return titleStyle.Render(m.project.Name) + "\n\nLoading board...\n\n" + m.footer("")
+		return boardTitleStyle.Render(m.project.Name) + "\n\nLoading board...\n\n" + m.footer("")
 	}
 	if len(m.states) == 0 {
-		return titleStyle.Render(m.project.Name) + "\n\n" + helpStyle.Render("This project has no states.") + "\n\n" + m.footer("p  switch board    q  quit")
+		return boardTitleStyle.Render(m.project.Name) + "\n\n" + helpStyle.Render("This project has no states.") + "\n\n" + m.footer("p  switch board    q  quit")
 	}
 
 	// Every card carries a sub-task badge, so count each item's children once here rather
@@ -486,7 +583,7 @@ func (m Model) viewBoard() string {
 	hidden := m.hiddenColumns()
 	colWidth, firstCol, visibleCols := boardLayoutFor(width, hidden, m.focusedCol)
 
-	header := titleStyle.Render(m.project.Name)
+	header := boardTitleStyle.Render(m.project.Name)
 	if f := m.activeFilterSummary(); f != "" {
 		header += "  " + helpStyle.Render(f)
 	}
@@ -519,6 +616,9 @@ func (m Model) viewBoard() string {
 	}
 	if m.editorOn {
 		overlay += "\n\n" + m.viewNewItemEditor()
+	}
+	if m.creatingItem && m.pickerOpen == "" && !m.editorOn {
+		overlay += "\n\n" + m.viewNewItemReview()
 	}
 
 	// Everything on screen that is not a card row: the header and its blank line, the blank
@@ -829,9 +929,12 @@ func (m Model) renderColumn(ci, colWidth, maxRows int) string {
 	if scrolled {
 		headerText += " *"
 	}
-	headerStyle := columnHeaderStyle
+	// The header is tinted with the state's own (pastelized) color so a column reads as
+	// which state it is at a glance; the focused column additionally gets an underline,
+	// rather than losing its color to swap to the plain focus style.
+	headerStyle := columnHeaderStyle.Foreground(pastelStateColor(st.Color))
 	if ci == m.focusedCol {
-		headerStyle = columnHeaderFocusedStyle
+		headerStyle = headerStyle.Underline(true)
 	}
 	out := headerStyle.Render(truncate(headerText, cardWidth)) + "\n"
 	for ii, it := range visible {
@@ -852,9 +955,12 @@ func (m Model) renderColumn(ci, colWidth, maxRows int) string {
 // height an expanded column of maxRows cards would take, so every column in a row lines up.
 func (m Model) renderCollapsedColumn(ci, maxRows int) string {
 	st := m.states[ci]
-	headerStyle := columnHeaderStyle
+	// A plain style, not hiddenColumnStyle itself: that one carries columnStyle's horizontal
+	// padding, which would widen just this one row beyond hiddenColWidth and wrap it onto an
+	// extra line once the whole block is re-rendered at that width below.
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(colorHiddenFg)
 	if ci == m.focusedCol {
-		headerStyle = columnHeaderFocusedStyle
+		headerStyle = headerStyle.Underline(true)
 	}
 	if maxRows < minCardRows {
 		maxRows = minCardRows
@@ -871,7 +977,9 @@ func (m Model) renderCollapsedColumn(ci, maxRows int) string {
 		}
 		rows = append(rows, cell(string(r), hiddenColWidth))
 	}
-	return columnStyle.Width(hiddenColWidth).Render(strings.Join(rows, "\n"))
+	// hiddenColumnStyle's light grey background (colorHiddenBg) is what marks this column as
+	// collapsed, rather than just its reduced width — see the task that asked for it.
+	return hiddenColumnStyle.Width(hiddenColWidth).Render(strings.Join(rows, "\n"))
 }
 
 // cell renders s in exactly width terminal columns, truncating or right-padding it so a

@@ -28,7 +28,10 @@ func (m Model) updateProjects(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = true
 		m.status = "Loading board..."
 		m.screen = screenBoard
-		return m, fetchBoard(m.client, m.workspaceSlug, m.project.ID)
+		return m, tea.Batch(
+			fetchBoard(m.client, m.workspaceSlug, m.project.ID),
+			fetchBoardExtras(m.client, m.workspaceSlug, m.project.ID),
+		)
 	}
 	return m, nil
 }

@@ -51,36 +51,67 @@ func fetchProjects(client *api.Client, workspaceSlug string) tea.Cmd {
 	}
 }
 
-// boardDataMsg carries the board's states/labels/members plus the first page of work
-// items. The board renders as soon as this arrives; remaining pages stream in afterwards
-// via boardItemsPageMsg so a large project never blocks the whole board behind one request.
+// boardItemOrderBy sorts a board's work-item pages by state group (backlog/unstarted/
+// started/completed/cancelled — see sortStates), the same left-to-right order the columns
+// render in, so that as pages stream in, cards tend to fill their columns in board order
+// rather than in whatever order the database returned them (its default is -created_at).
+const boardItemOrderBy = "state__group"
+
+// boardDataMsg carries the board's states plus the first page of work items. The board
+// renders as soon as this arrives; remaining pages stream in afterwards via boardItemsPageMsg
+// so a large project never blocks the whole board behind one request. Labels and members
+// arrive separately (see fetchBoardExtras) rather than being bundled in here, so a slow
+// labels/members request can never delay — or, worse, starve the timeout of — the items
+// request that actually renders the board.
 type boardDataMsg struct {
 	states      []api.State
 	items       []api.WorkItem
 	nextCursor  string
 	hasNextPage bool
-	labels      []api.Label
-	members     []api.Member
 	err         error
 }
 
+// fetchBoard fetches just enough to render the board: its states and the first page of work
+// items. Each call gets its own fresh requestTimeout budget — previously both shared one
+// context for the whole chain (states, items, labels, members in sequence), so a slow first
+// call could starve the work-items request of any time at all, surfacing as a bare "context
+// deadline exceeded" with no indication which request actually starved.
 func fetchBoard(client *api.Client, workspaceSlug, projectID string) tea.Cmd {
+	return func() tea.Msg {
+		statesCtx, statesCancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer statesCancel()
+		states, err := client.ListStates(statesCtx, workspaceSlug, projectID)
+		if err != nil {
+			return boardDataMsg{err: err}
+		}
+
+		itemsCtx, itemsCancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer itemsCancel()
+		items, nextCursor, hasNext, err := client.ListWorkItemsPage(itemsCtx, workspaceSlug, projectID, "", boardItemOrderBy)
+		if err != nil {
+			return boardDataMsg{err: err}
+		}
+		return boardDataMsg{states: states, items: items, nextCursor: nextCursor, hasNextPage: hasNext}
+	}
+}
+
+// boardExtrasMsg carries a board's labels and members — fetched apart from fetchBoard so they
+// never sit on the critical path of showing the board itself (see boardDataMsg).
+type boardExtrasMsg struct {
+	labels  []api.Label
+	members []api.Member
+}
+
+// fetchBoardExtras fetches a board's labels and members. Best-effort: a project without
+// label/member read access still shows a working board, just without those two filters
+// populated.
+func fetchBoardExtras(client *api.Client, workspaceSlug, projectID string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
-		states, err := client.ListStates(ctx, workspaceSlug, projectID)
-		if err != nil {
-			return boardDataMsg{err: err}
-		}
-		items, nextCursor, hasNext, err := client.ListWorkItemsPage(ctx, workspaceSlug, projectID, "")
-		if err != nil {
-			return boardDataMsg{err: err}
-		}
-		// Best-effort: a project without label/member read access still shows a working
-		// board, just without those two filters populated.
 		labels, _ := client.ListLabels(ctx, workspaceSlug, projectID)
 		members, _ := client.ListMembers(ctx, workspaceSlug, projectID)
-		return boardDataMsg{states: states, items: items, nextCursor: nextCursor, hasNextPage: hasNext, labels: labels, members: members}
+		return boardExtrasMsg{labels: labels, members: members}
 	}
 }
 
@@ -126,7 +157,10 @@ func fetchWorkItemsPage(client *api.Client, workspaceSlug, projectID, cursor str
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
-		items, nextCursor, hasNext, err := client.ListWorkItemsPage(ctx, workspaceSlug, projectID, cursor)
+		// Every page of one board load must ask for the same order_by as the first page:
+		// Plane's cursor encodes a position in that ordering, so switching it mid-pagination
+		// would produce duplicate or skipped items.
+		items, nextCursor, hasNext, err := client.ListWorkItemsPage(ctx, workspaceSlug, projectID, cursor, boardItemOrderBy)
 		return boardItemsPageMsg{items: items, nextCursor: nextCursor, hasNext: hasNext, err: err}
 	}
 }
