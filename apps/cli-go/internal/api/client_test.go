@@ -108,3 +108,29 @@ func TestCreateAndUpdateComment(t *testing.T) {
 		t.Fatalf("edited = %+v", edited)
 	}
 }
+
+func TestCreateWorkItem(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(WorkItem{ID: "wi-1", Name: gotBody["name"].(string), State: gotBody["state"].(string)})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok")
+	item, err := c.CreateWorkItem(context.Background(), "ws", "proj", map[string]any{"name": "New card", "state": "s1"})
+	if err != nil {
+		t.Fatalf("CreateWorkItem: %v", err)
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %s, want POST", gotMethod)
+	}
+	if want := "/api/v1/workspaces/ws/projects/proj/work-items/"; gotPath != want {
+		t.Errorf("path = %s, want %s", gotPath, want)
+	}
+	if item.ID != "wi-1" || item.Name != "New card" || item.State != "s1" {
+		t.Fatalf("created = %+v", item)
+	}
+}

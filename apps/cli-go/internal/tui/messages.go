@@ -98,6 +98,21 @@ func updateWorkItem(client *api.Client, workspaceSlug, projectID, workItemID str
 	}
 }
 
+// workItemCreatedMsg carries the result of creating a new work item from the board.
+type workItemCreatedMsg struct {
+	item *api.WorkItem
+	err  error
+}
+
+func createWorkItem(client *api.Client, workspaceSlug, projectID string, fields map[string]any) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		item, err := client.CreateWorkItem(ctx, workspaceSlug, projectID, fields)
+		return workItemCreatedMsg{item: item, err: err}
+	}
+}
+
 // boardItemsPageMsg carries a single page of work items so the board can render as soon as
 // the first page arrives, instead of blocking on the whole project.
 type boardItemsPageMsg struct {
