@@ -4,6 +4,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -20,6 +21,7 @@ const (
 	screenEmailInput
 	screenPasswordInput
 	screenWorkspaceInput
+	screenWorkspacePicker
 	screenProjects
 	screenBoard
 	screenDetail
@@ -51,6 +53,12 @@ type Model struct {
 	serverURL     string
 	pendingEmail  string
 
+	// workspaces is the list fetched right after an email/password sign-in (see
+	// auth.PasswordLogin); a bare API token has no session to fetch it with, so this stays
+	// nil in that case and the user is asked for the slug directly instead.
+	workspaces     []api.Workspace
+	workspacePicks int
+
 	projects   []api.Project
 	projectIdx int
 	loading    bool
@@ -58,12 +66,19 @@ type Model struct {
 	project    api.Project
 	states     []api.State
 	items      []api.WorkItem
+	labels     []api.Label
+	members    []api.Member
 	focusedCol int
 	colCursor  []int
 	detailItem *api.WorkItem
 
 	pickerOpen string // "" | "state" | "priority"
 	pickerIdx  int
+
+	filterOpen     string // "" | "assignee" | "label"
+	filterIdx      int
+	filterAssignee string // member ID, "" = no filter
+	filterLabel    string // label ID, "" = no filter
 }
 
 // New builds the initial model. If cfg has a saved server+token, the model starts by
@@ -147,6 +162,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updatePasswordInput(msg)
 	case screenWorkspaceInput:
 		return m.updateWorkspaceInput(msg)
+	case screenWorkspacePicker:
+		return m.updateWorkspacePicker(msg)
 	case screenProjects:
 		return m.updateProjects(msg)
 	case screenBoard:
@@ -172,6 +189,8 @@ func (m Model) View() string {
 		body = m.viewPasswordInput()
 	case screenWorkspaceInput:
 		body = m.viewWorkspaceInput()
+	case screenWorkspacePicker:
+		body = m.viewWorkspacePicker()
 	case screenProjects:
 		body = m.viewProjects()
 	case screenBoard:
@@ -204,27 +223,72 @@ func (m Model) footer(hint string) string {
 	return out
 }
 
+// helpSection is a titled group of shortcut lines in the help overlay.
+type helpSection struct {
+	heading string
+	lines   [][2]string // [keys, description]
+}
+
+var helpSections = []helpSection{
+	{"Global", [][2]string{
+		{"?", "toggle this help"},
+		{"ctrl+c", "quit"},
+	}},
+	{"Text field", [][2]string{
+		{"enter", "confirm"},
+		{"esc", "back"},
+	}},
+	{"Workspace picker", [][2]string{
+		{"j/k", "move"},
+		{"enter", "select"},
+		{"esc", "type slug instead"},
+	}},
+	{"Projects", [][2]string{
+		{"j/k or up/down", "move"},
+		{"enter", "open board"},
+		{"q", "quit"},
+	}},
+	{"Board", [][2]string{
+		{"h/l or left/right", "switch column"},
+		{"j/k or up/down", "move card"},
+		{"enter", "open item"},
+		{"s", "change state"},
+		{"y", "change priority"},
+		{"a", "filter by assignee"},
+		{"L", "filter by label"},
+		{"p", "switch board (project)"},
+		{"r", "refresh"},
+		{"q", "quit"},
+	}},
+	{"Detail", [][2]string{
+		{"s", "change state"},
+		{"y", "change priority"},
+		{"esc/backspace", "back"},
+	}},
+	{"Picker", [][2]string{
+		{"j/k", "move"},
+		{"enter", "apply"},
+		{"esc", "cancel"},
+	}},
+}
+
 func (m Model) viewHelp() string {
-	title := titleStyle.Render("Shortcuts")
-	lines := []string{
-		title,
-		"",
-		"Global:      ?  toggle this help    ctrl+c  quit",
-		"Text field:  enter  confirm         esc  back",
-		"",
-		"Projects:    j/k or up/down  move    enter  open board    q  quit",
-		"Board:       h/l or left/right  switch column",
-		"             j/k or up/down      move card",
-		"             enter  open item        s  change state    y  change priority",
-		"             p  switch board (project)    r  refresh    q  quit",
-		"Detail:      s  change state    y  change priority    esc/backspace  back",
-		"Picker:      j/k move   enter apply   esc cancel",
+	body := titleStyle.Render("Shortcuts") + "\n\n"
+	for _, sec := range helpSections {
+		body += helpSectionStyle.Render(sec.heading+":") + "\n"
+		for _, kv := range sec.lines {
+			body += "  " + helpKeyStyle.Render(padRight(kv[0], 20)) + "  " + kv[1] + "\n"
+		}
+		body += "\n"
 	}
-	body := ""
-	for _, l := range lines {
-		body += l + "\n"
+	return focusedInputStyle.Render(strings.TrimRight(body, "\n"))
+}
+
+func padRight(s string, n int) string {
+	if len(s) >= n {
+		return s
 	}
-	return focusedInputStyle.Render(body)
+	return s + strings.Repeat(" ", n-len(s))
 }
 
 func fmtUser(u *api.User) string {

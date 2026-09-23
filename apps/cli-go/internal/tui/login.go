@@ -198,6 +198,7 @@ func (m Model) handleLoginResult(msg loginResultMsg) (tea.Model, tea.Cmd) {
 	m.user = msg.user
 	m.cfg.ServerURL = m.serverURL
 	m.cfg.Token = msg.token
+	m.workspaces = msg.workspaces
 	_ = config.Save(m.cfg)
 
 	if m.cfg.WorkspaceSlug != "" {
@@ -208,9 +209,21 @@ func (m Model) handleLoginResult(msg loginResultMsg) (tea.Model, tea.Cmd) {
 		m.screen = screenProjects
 		return m, fetchProjects(m.client, m.workspaceSlug)
 	}
-	m.screen = screenWorkspaceInput
-	m.workspaceInput.Focus()
-	return m, nil
+
+	// No cached slug yet: if sign-in gave us the workspace list (only possible right after
+	// an email/password login — see auth.PasswordLogin), detect it instead of asking.
+	switch len(m.workspaces) {
+	case 0:
+		m.screen = screenWorkspaceInput
+		m.workspaceInput.Focus()
+		return m, nil
+	case 1:
+		return m.selectWorkspace(m.workspaces[0])
+	default:
+		m.workspacePicks = 0
+		m.screen = screenWorkspacePicker
+		return m, nil
+	}
 }
 
 func errRequired(field string) error {

@@ -19,8 +19,7 @@ func (m Model) updateProjects(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.projectIdx++
 		}
 	case "w":
-		m.screen = screenWorkspaceInput
-		m.workspaceInput.Focus()
+		return m.switchWorkspace()
 	case "enter":
 		if len(m.projects) == 0 {
 			return m, nil

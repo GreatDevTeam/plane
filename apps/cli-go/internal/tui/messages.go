@@ -12,10 +12,11 @@ import (
 const requestTimeout = 20 * time.Second
 
 type loginResultMsg struct {
-	client *api.Client
-	user   *api.User
-	token  string
-	err    error
+	client     *api.Client
+	user       *api.User
+	token      string
+	workspaces []api.Workspace
+	err        error
 }
 
 func loginWithToken(serverURL, token string) tea.Cmd {
@@ -31,8 +32,8 @@ func loginWithPassword(serverURL, email, password string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
-		client, user, token, err := auth.PasswordLogin(ctx, serverURL, email, password)
-		return loginResultMsg{client: client, user: user, token: token, err: err}
+		client, user, token, workspaces, err := auth.PasswordLogin(ctx, serverURL, email, password)
+		return loginResultMsg{client: client, user: user, token: token, workspaces: workspaces, err: err}
 	}
 }
 
@@ -51,9 +52,11 @@ func fetchProjects(client *api.Client, workspaceSlug string) tea.Cmd {
 }
 
 type boardDataMsg struct {
-	states []api.State
-	items  []api.WorkItem
-	err    error
+	states  []api.State
+	items   []api.WorkItem
+	labels  []api.Label
+	members []api.Member
+	err     error
 }
 
 func fetchBoard(client *api.Client, workspaceSlug, projectID string) tea.Cmd {
@@ -68,7 +71,11 @@ func fetchBoard(client *api.Client, workspaceSlug, projectID string) tea.Cmd {
 		if err != nil {
 			return boardDataMsg{err: err}
 		}
-		return boardDataMsg{states: states, items: items}
+		// Best-effort: a project without label/member read access still shows a working
+		// board, just without those two filters populated.
+		labels, _ := client.ListLabels(ctx, workspaceSlug, projectID)
+		members, _ := client.ListMembers(ctx, workspaceSlug, projectID)
+		return boardDataMsg{states: states, items: items, labels: labels, members: members}
 	}
 }
 
