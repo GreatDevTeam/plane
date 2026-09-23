@@ -34,6 +34,8 @@ func (m Model) handleBoardData(msg boardDataMsg) (tea.Model, tea.Cmd) {
 	m.colCursor = make([]int, len(m.states))
 	m.filterAssignee = ""
 	m.filterLabel = ""
+	m.filterState = ""
+	m.filterPriority = ""
 	m.hiddenStates = m.cfg.HiddenStatesFor(m.project.ID)
 	m.screen = screenBoard
 
@@ -202,7 +204,7 @@ func (m Model) handleBoardItemsPage(msg boardItemsPageMsg) (tea.Model, tea.Cmd) 
 }
 
 // columnItems returns the work items in the given state that also pass the active
-// assignee/label filters (see filter.go), ordered by the board's sort mode.
+// assignee/label/state/priority filters (see filter.go), ordered by the board's sort mode.
 func (m Model) columnItems(stateID string) []api.WorkItem {
 	var out []api.WorkItem
 	for _, it := range m.items {
@@ -213,6 +215,12 @@ func (m Model) columnItems(stateID string) []api.WorkItem {
 			continue
 		}
 		if m.filterLabel != "" && !containsStr(it.Labels, m.filterLabel) {
+			continue
+		}
+		if m.filterState != "" && it.State != m.filterState {
+			continue
+		}
+		if m.filterPriority != "" && it.Priority != m.filterPriority {
 			continue
 		}
 		out = append(out, it)
@@ -397,10 +405,16 @@ func (m Model) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openPriorityPicker()
 	case "A":
 		m.openAssigneePicker()
+	case "T":
+		m.openLabelPicker()
 	case "a":
 		m.openFilterPicker("assignee")
 	case "L":
 		m.openFilterPicker("label")
+	case "S":
+		m.openFilterPicker("state")
+	case "Y":
+		m.openFilterPicker("priority")
 	case "u":
 		return m.copyItemURL(m.selectedItem())
 	case "g":
@@ -871,7 +885,8 @@ func clampLines(s string, width int) string {
 // them at a word boundary instead of letting the terminal split one mid-hint.
 var boardHints = [][2]string{
 	{"h/l", "column"}, {"j/k", "card"}, {"enter", "open"}, {"s", "state"}, {"y", "priority"},
-	{"A", "assignee"}, {"a", "filter assignee"}, {"L", "filter label"}, {"u", "copy url"},
+	{"A", "assignee"}, {"T", "labels"}, {"a", "filter assignee"}, {"L", "filter label"},
+	{"S", "filter state"}, {"Y", "filter priority"}, {"u", "copy url"},
 	{"g", "open by id"}, {"o", "order"}, {"n", "new item"}, {"x", "hide col"}, {"r", "refresh"},
 	{"p", "boards"}, {"q", "quit"},
 }

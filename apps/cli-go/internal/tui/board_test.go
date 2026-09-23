@@ -16,9 +16,9 @@ func TestColumnItemsFiltersByAssigneeAndLabel(t *testing.T) {
 	m := Model{
 		states: []api.State{{ID: "s1"}},
 		items: []api.WorkItem{
-			{ID: "1", State: "s1", Assignees: []string{"u1"}, Labels: []string{"l1"}},
-			{ID: "2", State: "s1", Assignees: []string{"u2"}, Labels: []string{"l1"}},
-			{ID: "3", State: "s1", Assignees: []string{"u1"}, Labels: []string{"l2"}},
+			{ID: "1", State: "s1", Assignees: []string{"u1"}, Labels: []string{"l1"}, Priority: "high"},
+			{ID: "2", State: "s1", Assignees: []string{"u2"}, Labels: []string{"l1"}, Priority: "low"},
+			{ID: "3", State: "s1", Assignees: []string{"u1"}, Labels: []string{"l2"}, Priority: "high"},
 		},
 	}
 
@@ -34,6 +34,24 @@ func TestColumnItemsFiltersByAssigneeAndLabel(t *testing.T) {
 	m.filterLabel = "l1"
 	if got := len(m.columnItems("s1")); got != 1 {
 		t.Fatalf("assignee+label filter: got %d items, want 1", got)
+	}
+
+	m.filterAssignee = ""
+	m.filterLabel = ""
+	m.filterPriority = "high"
+	if got := len(m.columnItems("s1")); got != 2 {
+		t.Fatalf("priority filter: got %d items, want 2", got)
+	}
+
+	m.filterPriority = ""
+	m.filterState = "s1"
+	if got := len(m.columnItems("s1")); got != 3 {
+		t.Fatalf("state filter matching the column: got %d items, want 3", got)
+	}
+
+	m.filterState = "s2"
+	if got := len(m.columnItems("s1")); got != 0 {
+		t.Fatalf("state filter for a different state: got %d items, want 0", got)
 	}
 }
 

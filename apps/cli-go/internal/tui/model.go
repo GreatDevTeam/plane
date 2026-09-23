@@ -103,13 +103,20 @@ type Model struct {
 	// (the detail screen renders the cached copy meanwhile).
 	detailLoading bool
 
-	pickerOpen string // "" | "state" | "priority" | "sort" | "subissue"
+	pickerOpen string // "" | "state" | "priority" | "sort" | "subissue" | "assignee" | "labels"
 	pickerIdx  int
 
-	filterOpen     string // "" | "assignee" | "label"
+	// labelPickerSelected holds the working set of toggled-on label IDs while pickerOpen ==
+	// "labels" (openLabelPicker/updatePicker's "labels" case) — unlike every other picker,
+	// this one is multi-choice, so a single pickerIdx cannot also carry the selection.
+	labelPickerSelected map[string]bool
+
+	filterOpen     string // "" | "assignee" | "label" | "state" | "priority"
 	filterIdx      int
 	filterAssignee string // member ID, "" = no filter
 	filterLabel    string // label ID, "" = no filter
+	filterState    string // state ID, "" = no filter
+	filterPriority string // priority value, "" = no filter
 
 	comments        []api.Comment
 	commentsLoading bool

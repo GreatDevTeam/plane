@@ -1,16 +1,16 @@
 package tui
 
-import tea "github.com/charmbracelet/bubbletea"
+import (
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/makeplane/plane/apps/cli-go/internal/api"
+)
 
-// openFilterPicker opens a list of every assignee (or label) on the project, plus a
-// leading "All" entry, so the current filter's value stays selected.
+// openFilterPicker opens a list of every assignee (or label/state/priority) on the project,
+// plus a leading "All" entry, so the current filter's value stays selected.
 func (m *Model) openFilterPicker(kind string) {
 	m.filterOpen = kind
 	m.filterIdx = 0
-	active := m.filterAssignee
-	if kind == "label" {
-		active = m.filterLabel
-	}
+	active := m.filterActiveValue(kind)
 	if active == "" {
 		return
 	}
@@ -22,36 +22,70 @@ func (m *Model) openFilterPicker(kind string) {
 	}
 }
 
-// filterOptionIDs returns the selectable IDs (members or labels) for the open filter kind,
-// in the same order as filterOptionLabels.
+// filterActiveValue returns the currently applied filter value for the given kind.
+func (m Model) filterActiveValue(kind string) string {
+	switch kind {
+	case "assignee":
+		return m.filterAssignee
+	case "state":
+		return m.filterState
+	case "priority":
+		return m.filterPriority
+	default:
+		return m.filterLabel
+	}
+}
+
+// filterOptionIDs returns the selectable IDs for the open filter kind, in the same order as
+// filterOptionLabels.
 func (m Model) filterOptionIDs() []string {
-	if m.filterOpen == "assignee" {
+	switch m.filterOpen {
+	case "assignee":
 		ids := make([]string, len(m.members))
 		for i, mem := range m.members {
 			ids[i] = mem.ID
 		}
 		return ids
+	case "state":
+		ids := make([]string, len(m.states))
+		for i, st := range m.states {
+			ids[i] = st.ID
+		}
+		return ids
+	case "priority":
+		return append([]string{}, api.Priorities...)
+	default:
+		ids := make([]string, len(m.labels))
+		for i, l := range m.labels {
+			ids[i] = l.ID
+		}
+		return ids
 	}
-	ids := make([]string, len(m.labels))
-	for i, l := range m.labels {
-		ids[i] = l.ID
-	}
-	return ids
 }
 
 func (m Model) filterOptionLabels() []string {
-	if m.filterOpen == "assignee" {
+	switch m.filterOpen {
+	case "assignee":
 		out := make([]string, len(m.members))
 		for i, mem := range m.members {
 			out[i] = mem.Name()
 		}
 		return out
+	case "state":
+		out := make([]string, len(m.states))
+		for i, st := range m.states {
+			out[i] = st.Name
+		}
+		return out
+	case "priority":
+		return append([]string{}, api.Priorities...)
+	default:
+		out := make([]string, len(m.labels))
+		for i, l := range m.labels {
+			out[i] = l.Name
+		}
+		return out
 	}
-	out := make([]string, len(m.labels))
-	for i, l := range m.labels {
-		out[i] = l.Name
-	}
-	return out
 }
 
 func (m Model) updateFilterPicker(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -77,9 +111,14 @@ func (m Model) updateFilterPicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.filterIdx > 0 && m.filterIdx-1 < len(ids) {
 			value = ids[m.filterIdx-1]
 		}
-		if m.filterOpen == "assignee" {
+		switch m.filterOpen {
+		case "assignee":
 			m.filterAssignee = value
-		} else {
+		case "state":
+			m.filterState = value
+		case "priority":
+			m.filterPriority = value
+		default:
 			m.filterLabel = value
 		}
 		m.filterOpen = ""
@@ -89,8 +128,13 @@ func (m Model) updateFilterPicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) viewFilterPicker() string {
 	title := "Filter by assignee"
-	if m.filterOpen == "label" {
+	switch m.filterOpen {
+	case "label":
 		title = "Filter by label"
+	case "state":
+		title = "Filter by state"
+	case "priority":
+		title = "Filter by priority"
 	}
 	out := columnHeaderStyle.Render(title) + "\n"
 	out += pickerLine("All", m.filterIdx == 0)
@@ -120,6 +164,17 @@ func (m Model) activeFilterSummary() string {
 				break
 			}
 		}
+	}
+	if m.filterState != "" {
+		for _, st := range m.states {
+			if st.ID == m.filterState {
+				parts = append(parts, "state: "+st.Name)
+				break
+			}
+		}
+	}
+	if m.filterPriority != "" {
+		parts = append(parts, "priority: "+m.filterPriority)
 	}
 	if len(parts) == 0 {
 		return ""
