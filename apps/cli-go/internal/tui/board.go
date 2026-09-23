@@ -308,6 +308,9 @@ func (m Model) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.filterOpen != "" {
 		return m.updateFilterPicker(msg)
 	}
+	if m.editorOn {
+		return m.updateEditor(msg)
+	}
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
@@ -347,6 +350,8 @@ func (m Model) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.toggleHiddenColumn()
 	case "o":
 		m.openSortPicker()
+	case "n":
+		return m.openNewItemEditor()
 	case "p":
 		m.screen = screenProjects
 	case "w":
@@ -430,6 +435,49 @@ func (m Model) toggleHiddenColumn() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// openNewItemEditor opens the shared textarea to compose a new work item's title. The item is
+// created in the currently focused column's state, so it appears where the user was looking.
+func (m Model) openNewItemEditor() (tea.Model, tea.Cmd) {
+	if m.focusedCol < 0 || m.focusedCol >= len(m.states) {
+		return m, nil
+	}
+	m.openEditor("new-item", "New work item title...", "", 3)
+	m.newItemStateID = m.states[m.focusedCol].ID
+	return m, nil
+}
+
+// handleWorkItemCreated applies the result of creating a work item from the board: on success
+// the new item is appended to m.items and the focused column's cursor moved onto it, the same
+// way handleCommentSaved updates local state after a create.
+func (m Model) handleWorkItemCreated(msg workItemCreatedMsg) (tea.Model, tea.Cmd) {
+	m.status = ""
+	m.closeEditor()
+	if msg.err != nil {
+		m.setError(msg.err)
+		return m, nil
+	}
+	m.setError(nil)
+	m.items = append(m.items, *msg.item)
+	for i, st := range m.states {
+		if st.ID != msg.item.State {
+			continue
+		}
+		m.focusedCol = i
+		if i < len(m.colCursor) {
+			m.colCursor[i] = len(m.columnItems(st.ID)) - 1
+		}
+		break
+	}
+	return m, nil
+}
+
+// viewNewItemEditor renders the board's new-work-item composer, in the same style
+// detailBottom uses for the comment/description editor.
+func (m Model) viewNewItemEditor() string {
+	return focusedInputStyle.Render(columnHeaderStyle.Render("New work item") + "\n" + m.editor.View() + "\n" +
+		helpStyle.Render("ctrl+s  create    esc  cancel"))
+}
+
 func (m Model) viewBoard() string {
 	if m.loading {
 		return titleStyle.Render(m.project.Name) + "\n\nLoading board...\n\n" + m.footer("")
@@ -472,6 +520,9 @@ func (m Model) viewBoard() string {
 	}
 	if m.filterOpen != "" {
 		overlay += "\n\n" + m.viewFilterPicker()
+	}
+	if m.editorOn {
+		overlay += "\n\n" + m.viewNewItemEditor()
 	}
 
 	// Everything on screen that is not a card row: the header and its blank line, the blank
@@ -655,7 +706,7 @@ func clampLines(s string, width int) string {
 // them at a word boundary instead of letting the terminal split one mid-hint.
 var boardHints = []string{
 	"h/l  column", "j/k  card", "enter  open", "s  state", "y  priority",
-	"a  assignee", "L  label", "o  order", "x  hide col", "r  refresh", "p  boards", "q  quit",
+	"a  assignee", "L  label", "o  order", "n  new item", "x  hide col", "r  refresh", "p  boards", "q  quit",
 }
 
 // packHints joins hints into as few lines as fit within width. The full hint string is 131

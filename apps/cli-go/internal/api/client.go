@@ -190,6 +190,16 @@ func (c *Client) ListMembers(ctx context.Context, workspaceSlug, projectID strin
 	return members, nil
 }
 
+// CreateWorkItem creates a new work item with the given fields (minimum required: "name").
+func (c *Client) CreateWorkItem(ctx context.Context, workspaceSlug, projectID string, fields map[string]any) (*WorkItem, error) {
+	var wi WorkItem
+	path := fmt.Sprintf("/api/v1/workspaces/%s/projects/%s/work-items/", workspaceSlug, projectID)
+	if err := c.do(ctx, http.MethodPost, path, nil, fields, &wi); err != nil {
+		return nil, err
+	}
+	return &wi, nil
+}
+
 // UpdateWorkItem PATCHes the given fields (e.g. {"state": id} or {"priority": "high"}) on a work item.
 func (c *Client) UpdateWorkItem(ctx context.Context, workspaceSlug, projectID, workItemID string, patch map[string]any) (*WorkItem, error) {
 	var wi WorkItem

@@ -147,6 +147,7 @@ func (m *Model) closeEditor() {
 	m.editorOn = false
 	m.editorMode = ""
 	m.editingCommentID = ""
+	m.newItemStateID = ""
 	m.editor.Blur()
 	m.editor.Reset()
 }
@@ -159,6 +160,15 @@ func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.closeEditor()
 			return m, nil
 		case "ctrl+s":
+			if m.editorMode == "new-item" {
+				name := strings.TrimSpace(m.editor.Value())
+				if name == "" {
+					return m, nil
+				}
+				m.status = "Creating work item..."
+				return m, createWorkItem(m.client, m.workspaceSlug, m.project.ID,
+					map[string]any{"name": name, "state": m.newItemStateID})
+			}
 			if m.detailItem == nil {
 				return m, nil
 			}

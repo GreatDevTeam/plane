@@ -72,6 +72,75 @@ func boardFixture(columns, items, width, height int) Model {
 	}
 }
 
+// TestOpenNewItemEditorAndCreate covers the whole "n" create-from-board flow: opening the
+// editor targets the focused column's state, and a successful create appends the item to
+// m.items and moves that column's cursor onto it — the same local-state update
+// handleCommentSaved does after posting a comment.
+func TestOpenNewItemEditorAndCreate(t *testing.T) {
+	m := boardFixture(2, 2, 120, 40)
+	m.editor = newTestEditor()
+	m.focusedCol = 1
+
+	next, _ := m.updateBoard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = next.(Model)
+	if !m.editorOn || m.editorMode != "new-item" {
+		t.Fatalf("n did not open the new-item editor (on=%v mode=%q)", m.editorOn, m.editorMode)
+	}
+	if m.newItemStateID != "s1" {
+		t.Fatalf("newItemStateID = %q, want the focused column's state s1", m.newItemStateID)
+	}
+
+	m.editor.SetValue("A new card")
+	next, cmd := m.updateBoard(tea.KeyMsg{Type: tea.KeyCtrlS})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("ctrl+s did not save the new work item")
+	}
+	if !strings.Contains(m.status, "Creating work item") {
+		t.Errorf("status = %q, want it to mention creating the work item", m.status)
+	}
+
+	created := api.WorkItem{ID: "new-1", SequenceID: 9999, Name: "A new card", State: "s1"}
+	next, _ = m.handleWorkItemCreated(workItemCreatedMsg{item: &created})
+	m = next.(Model)
+	if m.editorOn {
+		t.Error("the editor stayed open after the create came back")
+	}
+	if len(m.items) != 3 {
+		t.Fatalf("len(items) = %d, want 3", len(m.items))
+	}
+	col := m.columnItems("s1")
+	if len(col) == 0 || col[len(col)-1].ID != "new-1" {
+		t.Fatalf("new item not appended to column s1: %+v", col)
+	}
+	if m.focusedCol != 1 || m.colCursor[1] != len(col)-1 {
+		t.Errorf("cursor = col %d idx %d, want col 1 idx %d", m.focusedCol, m.colCursor[1], len(col)-1)
+	}
+}
+
+// TestNewItemEditorEscCreatesNothing checks esc drops the draft without calling the API and
+// without touching the board's items.
+func TestNewItemEditorEscCreatesNothing(t *testing.T) {
+	m := boardFixture(2, 2, 120, 40)
+	m.editor = newTestEditor()
+
+	next, _ := m.openNewItemEditor()
+	m = next.(Model)
+	m.editor.SetValue("Abandoned title")
+
+	next, cmd := m.updateBoard(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(Model)
+	if cmd != nil {
+		t.Error("esc should not issue a create request")
+	}
+	if m.editorOn || m.editorMode != "" || m.newItemStateID != "" {
+		t.Errorf("esc left the editor behind (on=%v mode=%q state=%q)", m.editorOn, m.editorMode, m.newItemStateID)
+	}
+	if len(m.items) != 2 {
+		t.Fatalf("len(items) = %d, want unchanged 2", len(m.items))
+	}
+}
+
 // frameSize is the size of a rendered frame in terminal rows and columns.
 func frameSize(view string) (rows, cols int) {
 	lines := strings.Split(view, "\n")

@@ -115,8 +115,9 @@ type Model struct {
 
 	editor           textarea.Model
 	editorOn         bool
-	editorMode       string // "comment" | "description", meaningful while editorOn
+	editorMode       string // "comment" | "description" | "new-item", meaningful while editorOn
 	editingCommentID string // "" while composing a new comment, set while editing an existing one
+	newItemStateID   string // state the new item lands in, meaningful while editorMode == "new-item"
 }
 
 // New builds the initial model. If cfg has a saved server+token, the model starts by
@@ -227,6 +228,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleComments(msg)
 	case commentSavedMsg:
 		return m.handleCommentSaved(msg)
+	case workItemCreatedMsg:
+		return m.handleWorkItemCreated(msg)
 	}
 
 	switch m.screen {
@@ -337,6 +340,7 @@ var helpSections = []helpSection{
 		{"a", "filter by assignee"},
 		{"L", "filter by label"},
 		{"o", "card order"},
+		{"n", "new work item"},
 		{"x", "hide/show this column"},
 		{"p", "switch board (project)"},
 		{"r", "refresh"},
@@ -351,7 +355,7 @@ var helpSections = []helpSection{
 		{"e", "edit selected comment (own only)"},
 		{"esc/backspace", "back"},
 	}},
-	{"Editor (comment / description)", [][2]string{
+	{"Editor (comment / description / new item)", [][2]string{
 		{"ctrl+s", "save"},
 		{"esc", "cancel"},
 	}},
