@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -128,7 +129,7 @@ func TestHandleCommentsFocusesTheLatestComment(t *testing.T) {
 	if m.commentCursor != 2 {
 		t.Fatalf("commentCursor = %d, want 2 (the latest comment)", m.commentCursor)
 	}
-	view := m.viewComments()
+	view, _, _ := m.commentsContent(m.width)
 	lines := strings.Split(view, "\n")
 	var focusedLine string
 	for _, l := range lines {
@@ -150,7 +151,8 @@ func TestHandleCommentsOnEmptyList(t *testing.T) {
 	if m.commentCursor != -1 {
 		t.Fatalf("commentCursor = %d, want -1 for an empty comment list", m.commentCursor)
 	}
-	if strings.Contains(m.viewComments(), "> ") {
+	view, _, _ := m.commentsContent(m.width)
+	if strings.Contains(view, "> ") {
 		t.Error("an empty comment list rendered a focus marker")
 	}
 }
@@ -251,5 +253,139 @@ func TestEditorEscLeavesNoState(t *testing.T) {
 	m = next.(Model)
 	if m.editorOn || m.editorMode != "" || m.editor.Value() != "" {
 		t.Errorf("esc left the editor behind (on=%v mode=%q value=%q)", m.editorOn, m.editorMode, m.editor.Value())
+	}
+}
+
+// longDetailFixture builds a detailFixture with a long, multi-paragraph description and a
+// long comment thread — enough of both to overflow either pane at every size the tests below
+// use — sized to width x height.
+func longDetailFixture(width, height int) Model {
+	m := detailFixture()
+	m.width, m.height = width, height
+
+	var desc strings.Builder
+	for i := 0; i < 40; i++ {
+		fmt.Fprintf(&desc, "<p>%s paragraph %d of the description, long enough to wrap on a narrow terminal.</p>",
+			longNames[i%len(longNames)], i)
+	}
+	m.detailItem.DescriptionHTML = desc.String()
+
+	comments := make([]api.Comment, 30)
+	for i := range comments {
+		comments[i] = api.Comment{
+			ID:          fmt.Sprintf("c%d", i),
+			Actor:       "u1",
+			CreatedAt:   "2026-01-01T00:00:00Z",
+			CommentHTML: fmt.Sprintf("<p>%s comment %d, also long enough to wrap on its own.</p>", longNames[i%len(longNames)], i),
+		}
+	}
+	next, _ := m.handleComments(commentsMsg{items: comments})
+	return next.(Model)
+}
+
+// TestViewDetailFitsTerminal is the equivalent of TestViewBoardFitsTerminal for the detail
+// screen: before descViewport/commentsViewport existed, the screen concatenated the header,
+// description and every comment into one flat string with nothing to clip or scroll it, so a
+// long description or comment thread simply overflowed past the terminal height. The two
+// panes plus the header/meta/footer chrome around them must fit m.height and m.width exactly.
+func TestViewDetailFitsTerminal(t *testing.T) {
+	sizes := []struct{ width, height int }{
+		{230, 52}, // full screen, 1080p
+		{200, 50},
+		{160, 48},
+		{120, 40},
+		{100, 30},
+		{80, 24}, // the classic default
+		{60, 20},
+		{40, 12},
+	}
+	for _, size := range sizes {
+		m := longDetailFixture(size.width, size.height)
+		rows, cols := frameSize(m.viewDetail())
+		if rows > size.height {
+			t.Errorf("%dx%d terminal: frame is %d rows tall, want <= %d", size.width, size.height, rows, size.height)
+		}
+		if cols > size.width {
+			t.Errorf("%dx%d terminal: frame is %d columns wide, want <= %d", size.width, size.height, cols, size.width)
+		}
+	}
+}
+
+// TestViewDetailFitsTerminalWithOverlays checks the same invariant with the description
+// editor open and with a picker open, both of which push the two panes' row budget down —
+// detailLayout must account for whichever is open, not just the plain footer.
+func TestViewDetailFitsTerminalWithOverlays(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(*Model)
+	}{
+		{"editor open", func(m *Model) { next, _ := m.openDescriptionEditor(); *m = next.(Model) }},
+		{"picker open", func(m *Model) { m.openStatePicker() }},
+	} {
+		m := longDetailFixture(100, 30)
+		tc.setup(&m)
+		rows, cols := frameSize(m.viewDetail())
+		if rows > 30 {
+			t.Errorf("%s: frame is %d rows tall, want <= 30", tc.name, rows)
+		}
+		if cols > 100 {
+			t.Errorf("%s: frame is %d columns wide, want <= 100", tc.name, cols)
+		}
+	}
+}
+
+// TestDetailTabSwitchesPaneFocus checks tab toggles which pane j/k drives: within the
+// comments pane j/k still move commentCursor (the pre-existing behaviour), but once tab
+// moves focus to the description pane the same keys scroll it instead, leaving the comment
+// cursor untouched.
+func TestDetailTabSwitchesPaneFocus(t *testing.T) {
+	m := longDetailFixture(80, 24)
+	if m.detailFocus != detailPaneComments {
+		t.Fatalf("detailFocus = %v, want detailPaneComments by default", m.detailFocus)
+	}
+	m.commentCursor = 0
+	cursorBefore := m.commentCursor
+
+	next, _ := m.updateDetail(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = next.(Model)
+	if m.commentCursor == cursorBefore {
+		t.Fatal("j did not move the comment cursor while the comments pane was focused")
+	}
+
+	next, _ = m.updateDetail(tea.KeyMsg{Type: tea.KeyTab})
+	m = next.(Model)
+	if m.detailFocus != detailPaneDescription {
+		t.Fatalf("tab did not switch focus to the description pane (focus=%v)", m.detailFocus)
+	}
+
+	cursorBefore = m.commentCursor
+	offsetBefore := m.descViewport.YOffset
+	next, _ = m.updateDetail(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = next.(Model)
+	if m.commentCursor != cursorBefore {
+		t.Error("j moved the comment cursor while the description pane was focused")
+	}
+	if m.descViewport.YOffset <= offsetBefore {
+		t.Errorf("j did not scroll the description pane down (offset %d -> %d)", offsetBefore, m.descViewport.YOffset)
+	}
+
+	next, _ = m.updateDetail(tea.KeyMsg{Type: tea.KeyTab})
+	m = next.(Model)
+	if m.detailFocus != detailPaneComments {
+		t.Fatalf("a second tab did not switch focus back to the comments pane (focus=%v)", m.detailFocus)
+	}
+}
+
+// TestScrollCommentsToCursorKeepsLatestCommentVisible covers the notes on #2114: comments
+// already focus the latest comment on open, but before the comments pane could scroll on its
+// own that comment could still be cursor-selected far below the visible viewport. Once the
+// thread is longer than the pane, opening it must scroll so the latest comment is actually
+// on screen.
+func TestScrollCommentsToCursorKeepsLatestCommentVisible(t *testing.T) {
+	m := longDetailFixture(80, 20)
+	_, _, focusEnd := m.commentsContent(m.commentsViewport.Width)
+	if focusEnd < m.commentsViewport.YOffset || focusEnd > m.commentsViewport.YOffset+m.commentsViewport.Height-1 {
+		t.Errorf("latest comment (line %d) is not within the visible window [%d, %d)",
+			focusEnd, m.commentsViewport.YOffset, m.commentsViewport.YOffset+m.commentsViewport.Height)
 	}
 }

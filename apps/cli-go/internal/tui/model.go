@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/makeplane/plane/apps/cli-go/internal/api"
 	"github.com/makeplane/plane/apps/cli-go/internal/config"
@@ -103,6 +104,14 @@ type Model struct {
 	comments        []api.Comment
 	commentsLoading bool
 	commentCursor   int
+
+	// descViewport and commentsViewport are the detail screen's two independently
+	// scrollable panes (see detailPaneRows/detailLayout in detail.go). detailFocus says
+	// which one j/k currently drives: within detailPaneComments that still moves
+	// commentCursor, exactly as before this pair of viewports existed.
+	descViewport     viewport.Model
+	commentsViewport viewport.Model
+	detailFocus      detailPane
 
 	editor           textarea.Model
 	editorOn         bool
