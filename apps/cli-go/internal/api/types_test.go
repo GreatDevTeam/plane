@@ -1,6 +1,9 @@
 package api
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestMemberName(t *testing.T) {
 	cases := []struct {
@@ -82,5 +85,34 @@ func TestPriorityRank(t *testing.T) {
 	}
 	if PriorityRank("nonsense") < PriorityRank("none") {
 		t.Errorf("an unknown priority must sort last")
+	}
+}
+
+// TestWorkItemParentUnmarshal pins the shape Plane actually sends for a work item's parent:
+// the REST API serializes it as a bare work item UUID, and as JSON null for a top-level
+// item — which unmarshals into the zero value, so "" is what "no parent" looks like in Go.
+// There is no matching children field in the payload at all (sub_issues_count is annotated
+// on the API's queryset but never serialized), which is why the client derives sub-tasks by
+// scanning the project's own work items.
+func TestWorkItemParentUnmarshal(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"sub-task", `{"id":"a","parent":"11111111-2222-3333-4444-555555555555"}`, "11111111-2222-3333-4444-555555555555"},
+		{"top-level item", `{"id":"a","parent":null}`, ""},
+		{"field absent", `{"id":"a"}`, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var wi WorkItem
+			if err := json.Unmarshal([]byte(tc.body), &wi); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if wi.Parent != tc.want {
+				t.Errorf("Parent = %q, want %q", wi.Parent, tc.want)
+			}
+		})
 	}
 }

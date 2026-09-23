@@ -51,9 +51,12 @@ The server URL, token, and workspace slug are saved to `~/.config/plane-cli/conf
 |                  | `s` change state, `y` change priority                            |
 |                  | `a` filter by assignee, `L` filter by label                      |
 |                  | `o` card order, `x` hide/show the focused column                 |
+|                  | `n` new work item                                                |
 |                  | `r` refresh now, `p` switch board (project), `q` quit            |
 | Item detail      | `s` change state, `y` change priority, `d` edit description      |
-|                  | `j`/`k` select comment, `c` add comment, `e` edit own comment    |
+|                  | `g` go to parent, `S` jump to a sub-task                         |
+|                  | `tab` switch pane, `j`/`k` scroll / select comment               |
+|                  | `c` add comment, `e` edit own comment                            |
 |                  | `esc`/`backspace` back, `q` quit                                 |
 | Editor           | `ctrl+s` save, `esc` cancel                                      |
 | Picker           | `j`/`k` move, `enter` apply, `esc` cancel                        |
@@ -65,6 +68,12 @@ The server URL, token, and workspace slug are saved to `~/.config/plane-cli/conf
 - **Card order** inside a column is chosen with `o`: the API's own order (default), priority,
   created date (newest or oldest first), last updated, name, or work item number. The choice
   is saved to the config file.
+- **Parent and sub-tasks** show on every card's bottom line: `↑2113` is the work item this
+  card is a sub-task of, `↳3` is how many sub-tasks hang off it. The detail screen lists the
+  parent and the sub-tasks in full, each with its own state and priority; `g` opens the
+  parent and `S` opens a picker to jump to a sub-task. Plane's REST API only sends a work
+  item's `parent`, never its children, so sub-tasks are worked out from the project's own
+  work items — which is also why they are always within one project.
 - **Hiding a column** with `x` collapses it to a narrow placeholder — its name stays on the
   board, stacked vertically, so you can bring it back with `x` — and hands its width to the
   columns that are still expanded. Which columns are collapsed is saved per project.

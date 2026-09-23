@@ -360,18 +360,9 @@ func (m Model) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if item := m.selectedItem(); item != nil {
 			// Open on the board's cached copy straight away, then re-fetch the work item
 			// and its comments in the background so the card is never shown stale (the
-			// footer says a refresh is in flight — see detailLoader).
-			m.detailItem = item
-			m.comments = nil
-			m.commentCursor = 0
-			m.commentsLoading = true
-			m.detailLoading = true
-			m.resetDetailView()
-			m.screen = screenDetail
-			return m, tea.Batch(
-				fetchWorkItem(m.client, m.workspaceSlug, m.project.ID, item.ID),
-				fetchComments(m.client, m.workspaceSlug, m.project.ID, item.ID),
-			)
+			// footer says a refresh is in flight — see detailLoader). openWorkItem is the
+			// same path the detail screen's parent/sub-task jumps take.
+			return m.openWorkItem(*item)
 		}
 	case "s":
 		m.openStatePicker()
@@ -485,6 +476,11 @@ func (m Model) viewBoard() string {
 	if len(m.states) == 0 {
 		return titleStyle.Render(m.project.Name) + "\n\n" + helpStyle.Render("This project has no states.") + "\n\n" + m.footer("p  switch board    q  quit")
 	}
+
+	// Every card carries a sub-task badge, so count each item's children once here rather
+	// than letting all ~maxRows*visibleCols cards rescan the project's item list (see
+	// subIssueCount). m is a value receiver, so this only lives for the length of the frame.
+	m.subCounts = m.childCounts()
 
 	width, height := m.termSize()
 	hidden := m.hiddenColumns()
@@ -921,12 +917,20 @@ func wrapLine(s string, width int) (first, rest string) {
 	return cut, s[len(cut):]
 }
 
-// cardMetaLine is a card's third line: its priority (if set) and label names, resolved
-// against the board's label list.
+// cardMetaLine is a card's third line: its priority (if set), its parent/sub-task badge and
+// its label names, resolved against the board's label list.
+//
+// The relations badge goes here rather than on a row of its own so that a card still costs
+// exactly cardRows rows — a fourth row would take a quarter of the cards off every column.
+// It sits ahead of the labels because it is structural: when the line has to be truncated,
+// what gets cut is the label list rather than the fact that the card has sub-tasks.
 func (m Model) cardMetaLine(it api.WorkItem) string {
 	var parts []string
 	if it.Priority != "" && it.Priority != "none" {
 		parts = append(parts, priorityLabel(it.Priority))
+	}
+	if rel := m.cardRelations(it); rel != "" {
+		parts = append(parts, rel)
 	}
 	if names := m.labelNames(it.Labels); len(names) > 0 {
 		parts = append(parts, strings.Join(names, ", "))

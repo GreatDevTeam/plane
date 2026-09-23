@@ -50,6 +50,10 @@ func (m Model) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.openCommentEditor("")
 	case "d":
 		return m.openDescriptionEditor()
+	case "g":
+		return m.jumpToParent()
+	case "S":
+		m.openSubIssuePicker()
 	case "e":
 		if len(m.comments) == 0 || m.commentCursor < 0 || m.commentCursor >= len(m.comments) {
 			return m, nil
@@ -285,8 +289,8 @@ func formatTimestamp(s string) string {
 // detailHints are the detail screen's key hints, kept as separate chunks so packHints can
 // wrap them at a word boundary rather than letting the terminal split one mid-hint.
 var detailHints = []string{
-	"s  state", "y  priority", "d  description", "tab  switch pane", "j/k  scroll",
-	"c  add comment", "e  edit comment", "esc  back", "q  quit",
+	"s  state", "y  priority", "d  description", "g  parent", "S  sub-tasks",
+	"tab  switch pane", "j/k  scroll", "c  add comment", "e  edit comment", "esc  back", "q  quit",
 }
 
 func (m Model) viewDetail() string {
@@ -297,13 +301,7 @@ func (m Model) viewDetail() string {
 	_, height := m.termSize()
 	width, descRows, commentsRows := m.detailLayout()
 
-	state := "unknown"
-	if st := m.findState(item.State); st != nil {
-		state = st.Name
-	}
-	header := titleStyle.Render(fmt.Sprintf("#%d %s", item.SequenceID, item.Name))
-	meta := fmt.Sprintf("State:     %s\nPriority:  %s\nAssignees: %s",
-		state, priorityLabel(item.Priority), m.assigneeNames(item.Assignees))
+	header, meta := m.detailHeader(), m.detailMeta(width)
 
 	descHeader, commentsHeader := "Description", fmt.Sprintf("Comments (%d)", len(m.comments))
 	if m.detailFocus == detailPaneDescription {
@@ -329,6 +327,74 @@ func (m Model) viewDetail() string {
 	return clipRows(out, height)
 }
 
+// detailHeader is the detail screen's title row: the work item's number and name.
+func (m Model) detailHeader() string {
+	return titleStyle.Render(fmt.Sprintf("#%d %s", m.detailItem.SequenceID, m.detailItem.Name))
+}
+
+// maxInlineSubTasks is how many sub-tasks the meta block lists in full before it stops and
+// says how many more there are. The list is part of the screen's fixed chrome, so an item
+// with thirty children would otherwise leave nothing for the description and comments panes;
+// the rest are reachable through the S picker.
+const maxInlineSubTasks = 5
+
+// detailMeta is the block of fields under the title: the work item's own state, priority and
+// assignees, then its place in the parent/sub-task hierarchy. Every related item is listed
+// with its state and priority too — that, rather than the bare title, is what makes the list
+// worth reading. Each line is clipped to width so a long related title cannot wrap onto a row
+// detailLayout has not budgeted for.
+func (m Model) detailMeta(width int) string {
+	item := m.detailItem
+	lines := []string{
+		"State:     " + m.stateName(item.State),
+		"Priority:  " + priorityLabel(item.Priority),
+		"Assignees: " + m.assigneeNames(item.Assignees),
+		"Parent:    " + m.parentLine(),
+	}
+	lines = append(lines, m.subTaskLines()...)
+	return clampLines(strings.Join(lines, "\n"), width)
+}
+
+// parentLine is the meta block's "Parent:" value.
+func (m Model) parentLine() string {
+	item := m.detailItem
+	if item.Parent == "" {
+		return "—"
+	}
+	parent := m.parentOf(*item)
+	if parent == nil {
+		// Either the on-demand fetch has not landed yet or it failed — most often because
+		// the parent is archived, which hides it from every list this client can read.
+		return helpStyle.Render("(not available)")
+	}
+	return m.relationSummary(*parent) + "  " + helpStyle.Render("g to open")
+}
+
+// subTaskLines are the meta block's "Sub-tasks:" row and the indented list under it.
+//
+// The list is dropped down to its count row while a picker or an editor is open: those are
+// drawn below the two panes and are the tallest thing on the screen, and on a short terminal
+// their own bottom rows (a picker's "esc cancel", an editor's save hint) are what would be
+// clipped to make room for a list of sub-tasks the picker is already showing.
+func (m Model) subTaskLines() []string {
+	subs := m.subIssues(m.detailItem.ID)
+	if len(subs) == 0 {
+		return []string{"Sub-tasks: —"}
+	}
+	out := []string{fmt.Sprintf("Sub-tasks: %d  %s", len(subs), helpStyle.Render("S to jump"))}
+	if m.pickerOpen != "" || m.editorOn {
+		return out
+	}
+	for i, sub := range subs {
+		if i >= maxInlineSubTasks {
+			out = append(out, helpStyle.Render(fmt.Sprintf("           … %d more", len(subs)-maxInlineSubTasks)))
+			break
+		}
+		out = append(out, "           "+m.relationSummary(sub))
+	}
+	return out
+}
+
 // detailLayout is the detail screen's row-budget math: it works out how many rows each of
 // the two scrollable panes gets so that, together with the fixed chrome around them (the
 // title, the meta block, each pane's own header, and the footer/editor/picker at the
@@ -338,17 +404,10 @@ func (m Model) viewDetail() string {
 // that will actually be drawn).
 func (m Model) detailLayout() (width, descRows, commentsRows int) {
 	width, height := m.termSize()
-	item := m.detailItem
-	if item == nil {
+	if m.detailItem == nil {
 		return width, 0, 0
 	}
-	state := "unknown"
-	if st := m.findState(item.State); st != nil {
-		state = st.Name
-	}
-	header := titleStyle.Render(fmt.Sprintf("#%d %s", item.SequenceID, item.Name))
-	meta := fmt.Sprintf("State:     %s\nPriority:  %s\nAssignees: %s",
-		state, priorityLabel(item.Priority), m.assigneeNames(item.Assignees))
+	header, meta := m.detailHeader(), m.detailMeta(width)
 	bottom := m.detailBottom(width)
 
 	// Everything besides the two panes: the title + blank line, the meta block + blank
@@ -360,19 +419,37 @@ func (m Model) detailLayout() (width, descRows, commentsRows int) {
 		1 /* Comments header */ + 1 /* blank line before the bottom */ +
 		visualHeight(bottom, width)
 
-	descRows, commentsRows = detailPaneRows(height, chrome)
+	descRows, commentsRows = detailPaneRows(height, chrome, m.minPaneRows())
 	return width, descRows, commentsRows
+}
+
+// overlayOpen reports whether a picker or the editor is on screen. Both are modal — the
+// detail screen's own keys do nothing while one is up — so they take priority over the two
+// panes when the terminal is too short for everything (see minPaneRows).
+func (m Model) overlayOpen() bool {
+	return m.pickerOpen != "" || m.editorOn
+}
+
+// minPaneRows is the fewest rows each detail pane is squeezed to. With an overlay open that
+// is one row apiece rather than minPaneRows: the panes are the part the user is not looking
+// at, and holding them at three rows each is what used to push a tall picker's last options
+// (and its "esc cancel" row) off the bottom of an 80x24 terminal.
+func (m Model) minPaneRows() int {
+	if m.overlayOpen() {
+		return 1
+	}
+	return minPaneRows
 }
 
 // detailPaneRows splits what detailLayout has left after its chrome between the description
 // and comments panes. The two always sum to exactly height-chrome once that is at least
-// 2*minPaneRows, which is what makes the panes plus the chrome fit m.height exactly; below
-// that floor the final clipRows in viewDetail is what keeps the frame from overflowing, the
-// same fallback boardCardRows leaves to board.go's own clipRows.
-func detailPaneRows(height, chrome int) (descRows, commentsRows int) {
+// 2*floor, which is what makes the panes plus the chrome fit m.height exactly; below that
+// floor the final clipRows in viewDetail is what keeps the frame from overflowing, the same
+// fallback boardCardRows leaves to board.go's own clipRows.
+func detailPaneRows(height, chrome, floor int) (descRows, commentsRows int) {
 	avail := height - chrome
-	if avail < minPaneRows*2 {
-		avail = minPaneRows * 2
+	if avail < floor*2 {
+		avail = floor * 2
 	}
 	descRows = avail / 2
 	commentsRows = avail - descRows
@@ -395,9 +472,18 @@ func (m Model) detailBottom(width int) string {
 		bottom = focusedInputStyle.Render(columnHeaderStyle.Render(title) + "\n" + m.editor.View() + "\n" +
 			helpStyle.Render("ctrl+s  save    esc  cancel"))
 	} else {
-		hint := packHints(detailHints, width)
+		// A picker is modal: every key in detailHints is inactive while one is open, and the
+		// picker carries its own hint row, so the screen's hints go — which on a short
+		// terminal is also what buys the picker the rows it needs to be drawn whole.
+		hint := ""
+		if m.pickerOpen == "" {
+			hint = packHints(detailHints, width)
+		}
 		if loader := m.detailLoader(); loader != "" {
-			hint += "\n" + loader
+			if hint != "" {
+				hint += "\n"
+			}
+			hint += loader
 		}
 		bottom = m.footer(hint)
 	}

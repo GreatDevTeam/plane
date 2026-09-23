@@ -113,16 +113,22 @@ func sortStates(states []State) {
 
 // WorkItem is a Plane issue.
 type WorkItem struct {
-	ID              string   `json:"id"`
-	Name            string   `json:"name"`
-	DescriptionHTML string   `json:"description_html"`
-	SequenceID      int      `json:"sequence_id"`
-	State           string   `json:"state"`
-	Priority        string   `json:"priority"`
-	Assignees       []string `json:"assignees"`
-	Labels          []string `json:"labels"`
-	CreatedAt       string   `json:"created_at"`
-	UpdatedAt       string   `json:"updated_at"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	DescriptionHTML string `json:"description_html"`
+	SequenceID      int    `json:"sequence_id"`
+	State           string `json:"state"`
+	// Parent is the work item this one is a sub-task of, or "" when it has none — Plane
+	// sends `null` there, which json.Unmarshal leaves as the zero value. There is no
+	// matching "children" field: the API never serializes one (its sub_issues_count
+	// annotation stays server-side) and its list endpoint has no parent=<id> filter, so
+	// callers derive sub-tasks by scanning the project's own work items for this ID.
+	Parent    string   `json:"parent"`
+	Priority  string   `json:"priority"`
+	Assignees []string `json:"assignees"`
+	Labels    []string `json:"labels"`
+	CreatedAt string   `json:"created_at"`
+	UpdatedAt string   `json:"updated_at"`
 }
 
 // Priorities are the valid values of WorkItem.Priority, in display order.
