@@ -156,7 +156,11 @@ Truncate with `ansi.Truncate` (display width), never by slicing bytes: task name
 
 ### Attaching a built binary to a task
 
-When a task asks for a built `plane-cli` binary to be attached for manual testing (e.g. via `docs/plane.sh upload-asset`), always name the archive with a UTC timestamp, e.g. `plane-cli_20260923T115000Z.zip` (`date -u +%Y%m%dT%H%M%SZ`) — a fixed name like `plane-cli.zip` makes it impossible to tell, from the task's attachment list, which build a given zip is without opening it. Strip debug info before zipping (`go build -ldflags="-s -w" ./cmd/plane-cli`) — the workspace's asset upload enforces a hard 5 MiB size cap and rejects unstripped/unzipped executable mime types outright.
+When a task asks for a built `plane-cli` binary to be attached for manual testing (e.g. via `docs/plane.sh upload-asset`), always name the archive with the target platform **and** a UTC timestamp, e.g. `plane-cli_linux-amd64_20260923T115000Z.zip` (`date -u +%Y%m%dT%H%M%SZ`) — neither is recoverable from the task's attachment list without downloading and opening the zip, and `plane-cli` is a bare unsuffixed ELF/Mach-O/PE that looks identical either way. Strip debug info before zipping (`go build -ldflags="-s -w" -o plane-cli ./cmd/plane-cli`) — the workspace's asset upload enforces a hard 5 MiB size cap and rejects unstripped/unzipped executable mime types outright (a stripped, zipped linux/amd64 build is ~2.9 MiB).
+
+Build for the host platform (linux/amd64 here) unless the task names a different one; say which platform you built in the comment so the operator can ask for another target instead of discovering it cannot run.
+
+`upload-asset` prints an `embed_html` `<image-component>` for **any** file, including a zip — do not splice that into a comment, it renders as a broken image. A zip uploaded this way is a real attachment: it shows up under `docs/plane.sh list-attachments <id>`, never under `list-images`.
 
 ## GitHub / PR workflow
 
