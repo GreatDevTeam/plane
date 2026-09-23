@@ -100,6 +100,8 @@ Hand over only the fields that changed: the live server rewrites just the fragme
 
 `LIVE_BASE_URL` must be set **on the API container**, not just on the live one — it was missing from the deployment compose files, which is why the API silently took the destructive fallback in production.
 
+None of this applies to **work item descriptions**. A work item is not collaborative: the web editor loads `issue.description_html` and PATCHes `{description_html}` straight back (`apps/web/core/components/issues/issue-detail/main-content.tsx`), with no Yjs snapshot and no live server in the path. Writing `description_html` through the REST API is the supported way to change one — do not reach for the page machinery above.
+
 ## Running API tests
 
 `apps/api` needs Python 3.12 (the code uses `X | Y` type syntax); the container's default `python3` is 3.9. Postgres/Redis come from the running `plane-test-*` containers:
@@ -140,6 +142,8 @@ lines := strings.Split(m.viewBoard(), "\n")          // rows the frame occupies
 w := 0                                               // widest row, ANSI-aware
 for _, l := range lines { w = max(w, lipgloss.Width(l)) }
 ```
+
+The same setup also lets you _look_ at a frame: a scratch `_test.go` in `internal/tui` that builds a model and `fmt.Println`s `m.viewBoard()` / `m.viewDetail()`, run with `go test ./internal/tui/ -run TestX -v`, prints the real rendered frame (borders, ANSI styling and all) to stdout — useful to check a new column or footer actually reads well, not just that it fits. Delete the scratch file before committing.
 
 `len(lines) > height` or `w > width` means the frame overflows the terminal — which is what every "cannot show the board" report so far has actually been. Assert the fit rather than eyeballing the output; see `TestViewBoardFitsTerminal` in `apps/cli-go/internal/tui/board_test.go`.
 
