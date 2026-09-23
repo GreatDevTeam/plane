@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/makeplane/plane/apps/cli-go/internal/api"
@@ -28,6 +30,29 @@ func TestColumnItemsFiltersByAssigneeAndLabel(t *testing.T) {
 	m.filterLabel = "l1"
 	if got := len(m.columnItems("s1")); got != 1 {
 		t.Fatalf("assignee+label filter: got %d items, want 1", got)
+	}
+}
+
+// TestRenderColumnClipsBigListWithUnknownHeight guards against the board rendering
+// unbounded output when it has a big list of tasks but m.height hasn't been set yet (no
+// WindowSizeMsg has arrived, or the terminal never reports one). Before the
+// defaultTerminalHeight fallback, an unset height skipped row-clipping entirely and
+// produced a frame thousands of lines tall that no terminal could show.
+func TestRenderColumnClipsBigListWithUnknownHeight(t *testing.T) {
+	var items []api.WorkItem
+	for i := 0; i < 3000; i++ {
+		items = append(items, api.WorkItem{ID: fmt.Sprintf("id-%d", i), SequenceID: i, Name: "task", State: "s1"})
+	}
+	m := Model{
+		states:    []api.State{{ID: "s1", Name: "Backlog"}},
+		items:     items,
+		colCursor: []int{0},
+	}
+
+	out := m.renderColumn(0, 40, false)
+	lines := strings.Split(out, "\n")
+	if len(lines) > defaultTerminalHeight {
+		t.Fatalf("renderColumn with unknown height produced %d lines, want <= %d (defaultTerminalHeight)", len(lines), defaultTerminalHeight)
 	}
 }
 

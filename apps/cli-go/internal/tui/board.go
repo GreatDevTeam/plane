@@ -216,6 +216,13 @@ func (m Model) viewBoard() string {
 	return out
 }
 
+// defaultTerminalHeight is the row-clipping fallback used before the first WindowSizeMsg
+// has arrived (or if the terminal never reports one at all). Without it, a board rendered
+// before m.height is known skips clipping entirely: on a project with a big list of tasks
+// this produces a frame thousands of lines tall that no terminal, full screen or otherwise,
+// can actually show.
+const defaultTerminalHeight = 24
+
 // renderColumn renders a single kanban column, clipping its card list to the terminal
 // height (minus room for the title/header/footer) so a long column's own header always
 // stays visible instead of being pushed off-screen.
@@ -233,23 +240,26 @@ func (m Model) renderColumn(ci, colWidth int, fullWidth bool) string {
 	cursor := m.colCursor[ci]
 	visible := items
 	scrolled := false
-	if m.height > 0 {
-		maxRows := m.height - 8
-		if maxRows < 3 {
-			maxRows = 3
+
+	height := m.height
+	if height <= 0 {
+		height = defaultTerminalHeight
+	}
+	maxRows := height - 8
+	if maxRows < 3 {
+		maxRows = 3
+	}
+	if len(items) > maxRows {
+		start := cursor - maxRows/2
+		if start < 0 {
+			start = 0
 		}
-		if len(items) > maxRows {
-			start := cursor - maxRows/2
-			if start < 0 {
-				start = 0
-			}
-			if start+maxRows > len(items) {
-				start = len(items) - maxRows
-			}
-			visible = items[start : start+maxRows]
-			cursor -= start
-			scrolled = true
+		if start+maxRows > len(items) {
+			start = len(items) - maxRows
 		}
+		visible = items[start : start+maxRows]
+		cursor -= start
+		scrolled = true
 	}
 
 	headerText := fmt.Sprintf("%s (%d)", st.Name, len(items))
