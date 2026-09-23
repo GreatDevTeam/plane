@@ -116,6 +116,20 @@ cd apps/api && DATABASE_URL="postgresql://plane:plane@<plane-test-db ip>:5432/pl
 
 There are none. `apps/web` has no test runner configured — its `package.json` scripts are only `dev`/`build`/`preview`/`start`/`clean` plus the `check:*`/`fix:*` gates. A web-only change is verified with `check:lint`, `check:format` and `check:types`; do not go looking for a Jest/Vitest setup to extend.
 
+## Go CLI client (`apps/cli-go`)
+
+A Bubble Tea TUI client, separate Go module (`go.mod` at `apps/cli-go/`). It has no Makefile and is not wired into `pnpm`/Turborepo — run its own toolchain directly, from `apps/cli-go`, **every time you change a `.go` file there**, not just before opening a PR:
+
+```bash
+cd apps/cli-go
+go build ./...   # compiles the whole module
+go vet ./...     # static checks
+go test ./...    # unit tests
+gofmt -l .        # lists any unformatted files (empty output = clean); use `gofmt -w .` to fix
+```
+
+All four must pass/print nothing before committing a Go change.
+
 ## GitHub / PR workflow
 
 - **PR base branch is `master`** — always open PRs against `master`, not `preview` or `dev`.
