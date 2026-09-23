@@ -5,8 +5,26 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
+
+// detailPane identifies which of the detail screen's two independently scrollable panes
+// currently has keyboard focus.
+type detailPane int
+
+const (
+	// detailPaneComments is the default: j/k move the comment cursor, exactly as before the
+	// screen had any scrolling, and the comments pane auto-scrolls to keep it in view.
+	detailPaneComments detailPane = iota
+	// detailPaneDescription: j/k instead scroll the description pane by one line.
+	detailPaneDescription
+)
+
+// minPaneRows is the fewest rows either detail pane is squeezed to on a short terminal —
+// the same floor board.go's boardCardRows keeps for the board's columns.
+const minPaneRows = 3
 
 func (m Model) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.pickerOpen != "" {
@@ -42,13 +60,25 @@ func (m Model) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.openCommentEditor(cm.ID)
+	case "tab":
+		if m.detailFocus == detailPaneComments {
+			m.detailFocus = detailPaneDescription
+		} else {
+			m.detailFocus = detailPaneComments
+		}
 	case "up", "k":
-		if m.commentCursor > 0 {
+		if m.detailFocus == detailPaneDescription {
+			m.scrollDescription(-1)
+		} else if m.commentCursor > 0 {
 			m.commentCursor--
+			m.scrollCommentsToCursor()
 		}
 	case "down", "j":
-		if m.commentCursor < len(m.comments)-1 {
+		if m.detailFocus == detailPaneDescription {
+			m.scrollDescription(1)
+		} else if m.commentCursor < len(m.comments)-1 {
 			m.commentCursor++
+			m.scrollCommentsToCursor()
 		}
 	}
 	return m, nil
@@ -190,6 +220,7 @@ func (m Model) handleComments(msg commentsMsg) (tea.Model, tea.Cmd) {
 	// Comments render oldest first, so the most recently active discussion is the last one —
 	// open the detail screen focused there rather than on the oldest comment.
 	m.commentCursor = len(m.comments) - 1
+	m.scrollCommentsToCursor()
 	return m, nil
 }
 
@@ -214,6 +245,7 @@ func (m Model) handleCommentSaved(msg commentSavedMsg) (tea.Model, tea.Cmd) {
 		m.comments = append(m.comments, *msg.comment)
 		m.commentCursor = len(m.comments) - 1
 	}
+	m.scrollCommentsToCursor()
 	return m, nil
 }
 
@@ -243,8 +275,8 @@ func formatTimestamp(s string) string {
 // detailHints are the detail screen's key hints, kept as separate chunks so packHints can
 // wrap them at a word boundary rather than letting the terminal split one mid-hint.
 var detailHints = []string{
-	"s  state", "y  priority", "d  description", "j/k  comment", "c  add comment",
-	"e  edit comment", "esc  back", "q  quit",
+	"s  state", "y  priority", "d  description", "tab  switch pane", "j/k  scroll",
+	"c  add comment", "e  edit comment", "esc  back", "q  quit",
 }
 
 func (m Model) viewDetail() string {
@@ -252,25 +284,96 @@ func (m Model) viewDetail() string {
 	if item == nil {
 		return "No work item selected.\n\n" + m.footer("esc  back")
 	}
+	_, height := m.termSize()
+	width, descRows, commentsRows := m.detailLayout()
+
 	state := "unknown"
 	if st := m.findState(item.State); st != nil {
 		state = st.Name
 	}
+	header := titleStyle.Render(fmt.Sprintf("#%d %s", item.SequenceID, item.Name))
+	meta := fmt.Sprintf("State:     %s\nPriority:  %s\nAssignees: %s",
+		state, priorityLabel(item.Priority), m.assigneeNames(item.Assignees))
 
-	out := titleStyle.Render(fmt.Sprintf("#%d %s", item.SequenceID, item.Name)) + "\n\n"
-	out += fmt.Sprintf("State:     %s\n", state)
-	out += fmt.Sprintf("Priority:  %s\n", priorityLabel(item.Priority))
-	out += fmt.Sprintf("Assignees: %s\n", m.assigneeNames(item.Assignees))
-	out += "\n"
-
-	desc := formatRichText(item.DescriptionHTML)
-	if desc == "" {
-		desc = helpStyle.Render("(no description)")
+	descHeader, commentsHeader := "Description", fmt.Sprintf("Comments (%d)", len(m.comments))
+	if m.detailFocus == detailPaneDescription {
+		descHeader, commentsHeader = columnHeaderFocusedStyle.Render(descHeader), columnHeaderStyle.Render(commentsHeader)
+	} else {
+		descHeader, commentsHeader = columnHeaderStyle.Render(descHeader), columnHeaderFocusedStyle.Render(commentsHeader)
 	}
-	out += "Description:\n" + desc + "\n\n"
 
-	out += m.viewComments()
+	descVP := m.descViewport
+	descVP.Width, descVP.Height = width, descRows
+	descVP.SetContent(m.descPaneContent(width))
 
+	commentsContent, _, _ := m.commentsContent(width)
+	commentsVP := m.commentsViewport
+	commentsVP.Width, commentsVP.Height = width, commentsRows
+	commentsVP.SetContent(commentsContent)
+
+	out := header + "\n\n" + meta + "\n\n"
+	out += descHeader + "\n" + descVP.View() + "\n\n"
+	out += commentsHeader + "\n" + commentsVP.View() + "\n\n"
+	out += m.detailBottom(width)
+
+	return clipRows(out, height)
+}
+
+// detailLayout is the detail screen's row-budget math: it works out how many rows each of
+// the two scrollable panes gets so that, together with the fixed chrome around them (the
+// title, the meta block, each pane's own header, and the footer/editor/picker at the
+// bottom), the whole screen fits m.height exactly rather than "usually" — the same discipline
+// board.go's boardCardRows follows for the board's columns. Shared by viewDetail (to size
+// what it renders) and the scroll helpers below (so a keypress moves the same pane height
+// that will actually be drawn).
+func (m Model) detailLayout() (width, descRows, commentsRows int) {
+	width, height := m.termSize()
+	item := m.detailItem
+	if item == nil {
+		return width, 0, 0
+	}
+	state := "unknown"
+	if st := m.findState(item.State); st != nil {
+		state = st.Name
+	}
+	header := titleStyle.Render(fmt.Sprintf("#%d %s", item.SequenceID, item.Name))
+	meta := fmt.Sprintf("State:     %s\nPriority:  %s\nAssignees: %s",
+		state, priorityLabel(item.Priority), m.assigneeNames(item.Assignees))
+	bottom := m.detailBottom(width)
+
+	// Everything besides the two panes: the title + blank line, the meta block + blank
+	// line, each pane's own header row, a blank line between the panes and before the
+	// bottom, and the footer/editor/picker itself.
+	chrome := visualHeight(header, width) + 1 +
+		visualHeight(meta, width) + 1 +
+		1 /* Description header */ + 1 /* blank line between panes */ +
+		1 /* Comments header */ + 1 /* blank line before the bottom */ +
+		visualHeight(bottom, width)
+
+	descRows, commentsRows = detailPaneRows(height, chrome)
+	return width, descRows, commentsRows
+}
+
+// detailPaneRows splits what detailLayout has left after its chrome between the description
+// and comments panes. The two always sum to exactly height-chrome once that is at least
+// 2*minPaneRows, which is what makes the panes plus the chrome fit m.height exactly; below
+// that floor the final clipRows in viewDetail is what keeps the frame from overflowing, the
+// same fallback boardCardRows leaves to board.go's own clipRows.
+func detailPaneRows(height, chrome int) (descRows, commentsRows int) {
+	avail := height - chrome
+	if avail < minPaneRows*2 {
+		avail = minPaneRows * 2
+	}
+	descRows = avail / 2
+	commentsRows = avail - descRows
+	return descRows, commentsRows
+}
+
+// detailBottom is everything drawn below the two panes: the comment/description editor in
+// place of the footer while one is open, the ordinary hint/error/status footer otherwise,
+// and the picker overlay after either when a picker is open.
+func (m Model) detailBottom(width int) string {
+	var bottom string
 	if m.editorOn {
 		title := "New comment"
 		switch {
@@ -279,20 +382,127 @@ func (m Model) viewDetail() string {
 		case m.editingCommentID != "":
 			title = "Edit comment"
 		}
-		out += "\n" + focusedInputStyle.Render(columnHeaderStyle.Render(title)+"\n"+m.editor.View()+"\n"+
+		bottom = focusedInputStyle.Render(columnHeaderStyle.Render(title) + "\n" + m.editor.View() + "\n" +
 			helpStyle.Render("ctrl+s  save    esc  cancel"))
 	} else {
-		width, _ := m.termSize()
 		hint := packHints(detailHints, width)
 		if loader := m.detailLoader(); loader != "" {
 			hint += "\n" + loader
 		}
-		out += m.footer(hint)
+		bottom = m.footer(hint)
 	}
 	if m.pickerOpen != "" {
-		out += "\n\n" + m.viewPicker()
+		bottom += "\n\n" + m.viewPicker()
 	}
-	return out
+	return bottom
+}
+
+// descPaneContent is the work item's description, pre-wrapped to width. The viewport only
+// scrolls whole "\n"-separated lines, not the terminal rows a long line wraps onto, so it is
+// wrapped here rather than left to the viewport's own rendering — otherwise a single long
+// line could occupy more on-screen rows than the scroll math accounts for.
+func (m Model) descPaneContent(width int) string {
+	desc := formatRichText(m.detailItem.DescriptionHTML)
+	if desc == "" {
+		return helpStyle.Render("(no description)")
+	}
+	return ansi.Wrap(desc, width, "")
+}
+
+// commentsContent renders the comment thread's body — everything but the "Comments (N)"
+// header, which stays outside the scrollable pane so it never scrolls out of view — wrapped
+// to width for the same reason descPaneContent is. It also reports the line range the
+// focused comment ends up on, so scrollCommentsToCursor can scroll it into view.
+func (m Model) commentsContent(width int) (content string, focusStart, focusEnd int) {
+	if m.commentsLoading {
+		return helpStyle.Render("Loading comments..."), 0, 0
+	}
+	if len(m.comments) == 0 {
+		return helpStyle.Render("No comments yet."), 0, 0
+	}
+	var b strings.Builder
+	line := 0
+	writeLine := func(s string) {
+		wrapped := ansi.Wrap(s, width, "")
+		b.WriteString(wrapped)
+		b.WriteString("\n")
+		line += strings.Count(wrapped, "\n") + 1
+	}
+	for i, cm := range m.comments {
+		start := line
+		header := fmt.Sprintf("%s  %s", m.memberName(cm.Actor), formatTimestamp(cm.CreatedAt))
+		if cm.EditedAt != "" {
+			header += "  (edited)"
+		}
+		style := helpStyle
+		if i == m.commentCursor {
+			header = "> " + header
+			style = commentHeaderFocusedStyle
+		} else {
+			header = "  " + header
+		}
+		writeLine(style.Render(header))
+		body := formatRichText(cm.CommentHTML)
+		for _, l := range strings.Split(body, "\n") {
+			writeLine("    " + l)
+		}
+		if i == m.commentCursor {
+			focusStart, focusEnd = start, line-1
+		}
+	}
+	return strings.TrimSuffix(b.String(), "\n"), focusStart, focusEnd
+}
+
+// ensureVisible scrolls vp by the minimum amount so the [start, end] line range is on
+// screen, rather than resetting its scroll position outright.
+func ensureVisible(vp *viewport.Model, start, end int) {
+	if start < vp.YOffset {
+		vp.SetYOffset(start)
+		return
+	}
+	if end > vp.YOffset+vp.Height-1 {
+		vp.SetYOffset(end - vp.Height + 1)
+	}
+}
+
+// scrollCommentsToCursor keeps the focused comment visible in the comments pane — called
+// whenever commentCursor moves and when the thread first loads (or a comment is posted or
+// edited), so the detail screen opens with the latest comment in view rather than merely
+// cursor-selected off-screen.
+func (m *Model) scrollCommentsToCursor() {
+	if m.detailItem == nil {
+		return
+	}
+	width, _, commentsRows := m.detailLayout()
+	content, focusStart, focusEnd := m.commentsContent(width)
+	m.commentsViewport.Width, m.commentsViewport.Height = width, commentsRows
+	m.commentsViewport.SetContent(content)
+	ensureVisible(&m.commentsViewport, focusStart, focusEnd)
+}
+
+// scrollDescription moves the description pane's own scroll position by n lines — j/k
+// scroll it while it has focus, instead of moving the comment cursor.
+func (m *Model) scrollDescription(n int) {
+	if m.detailItem == nil {
+		return
+	}
+	width, descRows, _ := m.detailLayout()
+	m.descViewport.Width, m.descViewport.Height = width, descRows
+	m.descViewport.SetContent(m.descPaneContent(width))
+	if n > 0 {
+		m.descViewport.ScrollDown(n)
+	} else {
+		m.descViewport.ScrollUp(-n)
+	}
+}
+
+// resetDetailView clears the previous work item's scroll positions and pane focus — called
+// whenever the board opens a (possibly different) card, so a freshly opened item never
+// starts out scrolled to wherever the last one was left.
+func (m *Model) resetDetailView() {
+	m.detailFocus = detailPaneComments
+	m.descViewport = viewport.Model{}
+	m.commentsViewport = viewport.Model{}
 }
 
 // assigneeNames renders a work item's assignees as a comma-separated list of full names.
@@ -322,33 +532,4 @@ func (m Model) detailLoader() string {
 		return ""
 	}
 	return "⟳ refreshing " + strings.Join(what, " and ") + "…"
-}
-
-func (m Model) viewComments() string {
-	out := columnHeaderStyle.Render(fmt.Sprintf("Comments (%d)", len(m.comments))) + "\n"
-	if m.commentsLoading {
-		return out + helpStyle.Render("Loading comments...") + "\n"
-	}
-	if len(m.comments) == 0 {
-		return out + helpStyle.Render("No comments yet.") + "\n"
-	}
-	for i, cm := range m.comments {
-		header := fmt.Sprintf("%s  %s", m.memberName(cm.Actor), formatTimestamp(cm.CreatedAt))
-		if cm.EditedAt != "" {
-			header += "  (edited)"
-		}
-		style := helpStyle
-		if i == m.commentCursor {
-			header = "> " + header
-			style = commentHeaderFocusedStyle
-		} else {
-			header = "  " + header
-		}
-		out += style.Render(header) + "\n"
-		body := formatRichText(cm.CommentHTML)
-		for _, line := range strings.Split(body, "\n") {
-			out += "    " + line + "\n"
-		}
-	}
-	return out
 }

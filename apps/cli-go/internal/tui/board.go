@@ -361,6 +361,7 @@ func (m Model) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.commentCursor = 0
 			m.commentsLoading = true
 			m.detailLoading = true
+			m.resetDetailView()
 			m.screen = screenDetail
 			return m, tea.Batch(
 				fetchWorkItem(m.client, m.workspaceSlug, m.project.ID, item.ID),
