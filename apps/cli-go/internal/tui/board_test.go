@@ -201,15 +201,16 @@ func TestBoardLayoutShowsEveryColumnWhenTheyFit(t *testing.T) {
 	}
 }
 
-// TestRenderColumnRowsAreExactlyOneLineEach is the invariant the row budget is built on: a
-// column of maxRows cards is maxRows+colChromeRows rows tall, no matter how long the titles
-// are. Cards wrapping onto a second line here is what doubled the height of the whole board.
-func TestRenderColumnRowsAreExactlyOneLineEach(t *testing.T) {
+// TestRenderColumnRowsAreExactlyThreeLinesPerCard is the invariant the row budget is built
+// on: a column of maxRows cards is maxRows*cardRows+colChromeRows rows tall, no matter how
+// long the titles are. A card growing past its 2 title lines + 1 meta line here is what would
+// double (or worse) the height of the whole board.
+func TestRenderColumnRowsAreExactlyThreeLinesPerCard(t *testing.T) {
 	for _, colWidth := range []int{minColWidth, 24, 30, maxColWidth, 110} {
 		for _, maxRows := range []int{3, 10, 40} {
 			m := boardFixture(1, 900, 120, 40)
 			got := lipgloss.Height(m.renderColumn(0, colWidth, maxRows))
-			if want := maxRows + colChromeRows; got != want {
+			if want := maxRows*cardRows + colChromeRows; got != want {
 				t.Errorf("renderColumn(colWidth=%d, maxRows=%d) is %d rows tall, want %d",
 					colWidth, maxRows, got, want)
 			}
@@ -217,30 +218,56 @@ func TestRenderColumnRowsAreExactlyOneLineEach(t *testing.T) {
 	}
 }
 
-// TestCardLineFitsInsideCard checks a card's text always fits the card's own content area
+// TestCardLinesFitInsideCard checks a card's text always fits the card's own content area
 // (cardStyle adds cardFrame columns of padding inside the width it is rendered at), including
-// for the multi-byte titles where byte length and display width disagree.
-func TestCardLineFitsInsideCard(t *testing.T) {
+// for the multi-byte titles where byte length and display width disagree, and always renders
+// on exactly cardRows lines.
+func TestCardLinesFitInsideCard(t *testing.T) {
+	m := Model{}
 	for _, cardWidth := range []int{6, 10, 18, 28, 38, 100} {
 		for i, name := range longNames {
 			it := api.WorkItem{SequenceID: 100000 + i, Name: name}
-			line := cardLine(it, cardWidth)
-			if got, want := lipgloss.Width(line), cardWidth-cardFrame; got > want {
-				t.Errorf("cardLine(%q, cardWidth=%d) is %d columns wide, want <= %d", name, cardWidth, got, want)
+			lines := m.cardLines(it, cardWidth)
+			if len(lines) != cardRows {
+				t.Fatalf("cardLines(%q, cardWidth=%d) returned %d lines, want %d", name, cardWidth, len(lines), cardRows)
 			}
-			if rendered := cardStyle.Width(cardWidth).Render(line); lipgloss.Height(rendered) != 1 {
-				t.Errorf("cardLine(%q, cardWidth=%d) renders on %d rows, want 1", name, cardWidth, lipgloss.Height(rendered))
+			block := strings.Join(lines, "\n")
+			for _, line := range lines {
+				if got, want := lipgloss.Width(line), cardWidth-cardFrame; got > want {
+					t.Errorf("cardLines(%q, cardWidth=%d) line %q is %d columns wide, want <= %d", name, cardWidth, line, got, want)
+				}
+			}
+			if rendered := cardStyle.Width(cardWidth).Render(block); lipgloss.Height(rendered) != cardRows {
+				t.Errorf("cardLines(%q, cardWidth=%d) renders on %d rows, want %d", name, cardWidth, lipgloss.Height(rendered), cardRows)
 			}
 		}
 	}
 }
 
-// TestCardLineFlattensMultilineNames keeps a work item whose name contains a newline from
-// breaking its card out of its row and misaligning every column beside it.
-func TestCardLineFlattensMultilineNames(t *testing.T) {
+// TestCardLinesFlattensMultilineNames keeps a work item whose name contains a newline from
+// breaking its card out of its rows and misaligning every column beside it.
+func TestCardLinesFlattensMultilineNames(t *testing.T) {
+	m := Model{}
 	it := api.WorkItem{SequenceID: 42, Name: "first line\nsecond line"}
-	if got := cardLine(it, 40); strings.ContainsAny(got, "\n\r\t") {
-		t.Errorf("cardLine kept a line break: %q", got)
+	for _, line := range m.cardLines(it, 40) {
+		if strings.ContainsAny(line, "\n\r\t") {
+			t.Errorf("cardLines kept a line break: %q", line)
+		}
+	}
+}
+
+// TestCardLinesShowsLabelsAndPriority checks the third line surfaces what the board no longer
+// has a border to spare room for elsewhere: the card's priority and label names.
+func TestCardLinesShowsLabelsAndPriority(t *testing.T) {
+	m := Model{labels: []api.Label{{ID: "l1", Name: "bug"}, {ID: "l2", Name: "backend"}}}
+	it := api.WorkItem{SequenceID: 1, Name: "x", Priority: "urgent", Labels: []string{"l1", "l2"}}
+	lines := m.cardLines(it, 60)
+	meta := lines[2]
+	if !strings.Contains(meta, "urgent") {
+		t.Errorf("meta line %q does not mention the priority", meta)
+	}
+	if !strings.Contains(meta, "bug") || !strings.Contains(meta, "backend") {
+		t.Errorf("meta line %q does not mention both labels", meta)
 	}
 }
 

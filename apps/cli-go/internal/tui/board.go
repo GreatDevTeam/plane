@@ -605,13 +605,13 @@ func boardLayoutFor(width int, hidden []bool, focused int) (colWidth, first, vis
 	return width - colFrame, focused, 1
 }
 
-// boardCardRows is how many card rows one column may render, given the terminal height and
-// the rows the board's chrome already claims. It never returns less than minCardRows: on a
-// terminal too short for even that the board is clipped by the terminal anyway, and returning
-// 0 would hide the selected card entirely.
+// boardCardRows is how many cards one column may render, given the terminal height and the
+// rows the board's chrome already claims (each card costs cardRows rows). It never returns
+// less than minCardRows: on a terminal too short for even that the board is clipped by the
+// terminal anyway, and returning 0 would hide the selected card entirely.
 func boardCardRows(height, chrome int) int {
-	if rows := height - chrome; rows > minCardRows {
-		return rows
+	if cards := (height - chrome) / cardRows; cards > minCardRows {
+		return cards
 	}
 	return minCardRows
 }
@@ -682,20 +682,22 @@ func packHints(hints []string, width int) string {
 }
 
 // Board layout constants. Every one of them is in terminal columns/rows, and they exist
-// because the rendered size of a column or a card is *not* the width it is asked for:
-// lipgloss adds the column border outside columnStyle.Width, and the card padding inside
-// cardStyle.Width. Ignoring the latter is what made every card with a long title wrap onto a
-// second line, which doubled the height of a full-screen board and pushed the bottom of every
-// column off the screen.
+// because the rendered size of a column or a card is *not* the width it is asked for: the
+// card padding is inside cardStyle.Width, so ignoring it is what made every card with a long
+// title wrap onto a second line, which doubled the height of a full-screen board and pushed
+// the bottom of every column off the screen.
 const (
 	// minColWidth is the narrowest a column may be squeezed to before the board shows a
 	// window of columns instead of all of them; maxColWidth is the widest it grows to.
 	minColWidth = 20
 	maxColWidth = 40
 
-	// colFrame is what columnStyle's rounded border costs on top of the column's width, so a
-	// column of colWidth occupies colWidth+colFrame terminal columns.
-	colFrame = 2
+	// colFrame is what a column costs beyond its own Width. columnStyle has no border, so
+	// this is 0 — a column of colWidth occupies exactly colWidth terminal columns. It stays
+	// a named constant (rather than being dropped) because the layout math below still adds
+	// it wherever a border-ful widget would have cost extra, so a future border does not
+	// require re-deriving that arithmetic.
+	colFrame = 0
 
 	// hiddenColWidth is the content width of a collapsed column's placeholder: just wide
 	// enough for one character of its vertically stacked name, so hiding a column hands
@@ -710,12 +712,17 @@ const (
 	// second line as soon as its text is wider than w-cardFrame.
 	cardFrame = 2
 
-	// colChromeRows is what a column costs vertically besides its cards: its top and bottom
-	// border rows plus its own title row.
-	colChromeRows = 3
+	// cardRows is how many terminal rows one card occupies: the title wrapped across up to
+	// two lines, plus one line for its labels and priority.
+	cardRows = 3
 
-	// minCardRows is the smallest card window a column is ever given. A terminal too short
-	// for even this clips the board itself, but showing zero cards would hide the cursor.
+	// colChromeRows is what a column costs vertically besides its cards: just its own header
+	// row, now that columnStyle has no border.
+	colChromeRows = 1
+
+	// minCardRows is the smallest number of cards a column is ever given room for. A
+	// terminal too short for even this clips the board itself, but showing zero cards would
+	// hide the cursor.
 	minCardRows = 3
 )
 
@@ -734,16 +741,12 @@ const defaultTerminalHeight = 24
 const defaultTerminalWidth = 80
 
 // renderColumn renders a single kanban column at the given width, showing at most maxRows
-// cards around the column's cursor. Every card it renders is exactly one row tall — its text
-// is truncated to what fits inside both the column's and the card's padding — so the column is
-// exactly maxRows+colChromeRows rows tall and the caller can budget the board against the
-// terminal height.
+// cards around the column's cursor. Every card it renders is exactly cardRows rows tall — its
+// title wraps onto at most 2 lines and its labels/priority render on a 3rd — so the column is
+// exactly maxRows*cardRows+colChromeRows rows tall and the caller can budget the board against
+// the terminal height.
 func (m Model) renderColumn(ci, colWidth, maxRows int) string {
 	st := m.states[ci]
-	style := columnStyle
-	if ci == m.focusedCol {
-		style = columnFocusedStyle
-	}
 
 	items := m.columnItems(st.ID)
 	cursor := 0
@@ -778,43 +781,49 @@ func (m Model) renderColumn(ci, colWidth, maxRows int) string {
 	if scrolled {
 		headerText += " *"
 	}
-	out := columnHeaderStyle.Render(truncate(headerText, cardWidth)) + "\n"
+	headerStyle := columnHeaderStyle
+	if ci == m.focusedCol {
+		headerStyle = columnHeaderFocusedStyle
+	}
+	out := headerStyle.Render(truncate(headerText, cardWidth)) + "\n"
 	for ii, it := range visible {
-		line := cardLine(it, cardWidth)
+		block := strings.Join(m.cardLines(it, cardWidth), "\n")
 		if ci == m.focusedCol && ii == cursor {
-			out += cardSelectedStyle.Width(cardWidth).Render(line) + "\n"
+			out += cardSelectedStyle.Width(cardWidth).Render(block) + "\n"
 		} else {
-			out += cardStyle.Width(cardWidth).Render(line) + "\n"
+			out += cardStyle.Width(cardWidth).Render(block) + "\n"
 		}
 	}
-	return style.Width(colWidth).Render(strings.TrimRight(out, "\n"))
+	return columnStyle.Width(colWidth).Render(strings.TrimRight(out, "\n"))
 }
 
 // renderCollapsedColumn renders a hidden state as a narrow placeholder: its name and card
 // count stacked one character per row, so the column still says which state it is (and that
 // x brings it back) while costing the board only hiddenColWidth+colFrame terminal columns.
-// Like renderColumn it never grows past maxRows+colChromeRows rows.
+// Like renderColumn it never grows past maxRows*cardRows+colChromeRows rows — the same total
+// height an expanded column of maxRows cards would take, so every column in a row lines up.
 func (m Model) renderCollapsedColumn(ci, maxRows int) string {
 	st := m.states[ci]
-	style := columnStyle
+	headerStyle := columnHeaderStyle
 	if ci == m.focusedCol {
-		style = columnFocusedStyle
+		headerStyle = columnHeaderFocusedStyle
 	}
 	if maxRows < minCardRows {
 		maxRows = minCardRows
 	}
+	budget := maxRows * cardRows
 
 	label := []rune(fmt.Sprintf("%s %d", st.Name, len(m.columnItems(st.ID))))
-	rows := []string{columnHeaderStyle.Render(cell("▸", hiddenColWidth))}
+	rows := []string{headerStyle.Render(cell("▸", hiddenColWidth))}
 	for _, r := range label {
-		if len(rows) >= maxRows {
+		if len(rows)-1 >= budget {
 			// Out of room: mark the label as clipped rather than silently dropping the rest.
 			rows[len(rows)-1] = cell("…", hiddenColWidth)
 			break
 		}
 		rows = append(rows, cell(string(r), hiddenColWidth))
 	}
-	return style.Width(hiddenColWidth).Render(strings.Join(rows, "\n"))
+	return columnStyle.Width(hiddenColWidth).Render(strings.Join(rows, "\n"))
 }
 
 // cell renders s in exactly width terminal columns, truncating or right-padding it so a
@@ -827,15 +836,68 @@ func cell(s string, width int) string {
 	return s
 }
 
-// cardLine is one card's text, sized to render on a single row inside a card of cardWidth.
-func cardLine(it api.WorkItem, cardWidth int) string {
-	prefix := fmt.Sprintf("#%d ", it.SequenceID)
-	avail := cardWidth - cardFrame - lipgloss.Width(prefix)
+// cardLines is one card's text, sized to render on exactly cardRows rows inside a card of
+// cardWidth: the "#<id> <title>" prefix and title wrapped across the first two, clipped with
+// an ellipsis if the title still does not fit, and its labels/priority on the third.
+func (m Model) cardLines(it api.WorkItem, cardWidth int) []string {
+	avail := cardWidth - cardFrame
 	if avail < 1 {
-		// No room for a title at all: keep the identifier, clipped if it does not fit either.
-		return truncate(prefix, cardWidth-cardFrame)
+		avail = 1
 	}
-	return prefix + truncate(oneLine(it.Name), avail)
+	prefix := fmt.Sprintf("#%d ", it.SequenceID)
+	title := oneLine(it.Name)
+
+	line1, rest := wrapLine(prefix+title, avail)
+	line2 := truncate(strings.TrimSpace(rest), avail)
+	line3 := truncate(m.cardMetaLine(it), avail)
+
+	return []string{line1, line2, line3}
+}
+
+// wrapLine splits s at the last space that keeps the first part within width terminal
+// columns (or, if there is none, hard-cuts it at width), returning that first part and
+// whatever of s did not fit. Used to wrap a card's title onto a second line instead of
+// truncating it outright.
+func wrapLine(s string, width int) (first, rest string) {
+	if lipgloss.Width(s) <= width {
+		return s, ""
+	}
+	cut := ansi.Truncate(s, width, "")
+	if idx := strings.LastIndex(cut, " "); idx > 0 {
+		cut = cut[:idx]
+	}
+	return cut, s[len(cut):]
+}
+
+// cardMetaLine is a card's third line: its priority (if set) and label names, resolved
+// against the board's label list.
+func (m Model) cardMetaLine(it api.WorkItem) string {
+	var parts []string
+	if it.Priority != "" && it.Priority != "none" {
+		parts = append(parts, priorityLabel(it.Priority))
+	}
+	if names := m.labelNames(it.Labels); len(names) > 0 {
+		parts = append(parts, strings.Join(names, ", "))
+	}
+	return strings.Join(parts, "  ")
+}
+
+// labelNames resolves label IDs to their names against the board's label list, dropping any
+// ID the board does not (yet) know about rather than showing a raw UUID.
+func (m Model) labelNames(ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(ids))
+	for _, id := range ids {
+		for _, l := range m.labels {
+			if l.ID == id {
+				names = append(names, l.Name)
+				break
+			}
+		}
+	}
+	return names
 }
 
 // oneLine flattens a work item name onto a single line. A name containing a newline or a tab
