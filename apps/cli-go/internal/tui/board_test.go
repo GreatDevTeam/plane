@@ -84,15 +84,17 @@ func boardFixture(columns, items, width, height int) Model {
 		}
 	}
 	return Model{
-		project:         api.Project{Name: "A Project With A Fairly Long Name"},
-		states:          states,
-		items:           work,
-		colCursor:       make([]int, columns),
-		width:           width,
-		height:          height,
-		pickerSearch:    newInput("", 40),
-		colorInput:      newInput("", 10),
-		attachPathInput: newInput("", 60),
+		project:          api.Project{Name: "A Project With A Fairly Long Name"},
+		states:           states,
+		items:            work,
+		colCursor:        make([]int, columns),
+		width:            width,
+		height:           height,
+		pickerSearch:     newInput("", 40),
+		filterSearch:     newInput("", 40),
+		titleSearchInput: newInput("", 40),
+		colorInput:       newInput("", 10),
+		attachPathInput:  newInput("", 60),
 	}
 }
 

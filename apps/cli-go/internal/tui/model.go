@@ -157,6 +157,20 @@ type Model struct {
 	filterState    string // state ID, "" = no filter
 	filterPriority string // priority value, "" = no filter
 
+	// filterSearch is the label filter's type-to-filter query box (openFilterPicker/
+	// updateLabelFilterSearch/filteredFilterLabels in filter.go) — the same pattern
+	// pickerSearch gives the labels-editing picker, but scoped to the "label" filter kind only.
+	filterSearch textinput.Model
+
+	// titleSearchOpen/titleSearchInput/titleSearch drive the board's "/" title search: a plain
+	// client-side substring filter over m.items (see columnItems) — no API call, since the
+	// board already has every loaded card in memory. titleSearch is the applied query (kept
+	// active after enter closes the box); titleSearchInput is the live text box shown while
+	// titleSearchOpen.
+	titleSearchOpen  bool
+	titleSearchInput textinput.Model
+	titleSearch      string
+
 	comments        []api.Comment
 	commentsLoading bool
 	commentCursor   int
@@ -215,6 +229,8 @@ func New(cfg config.Config) Model {
 	m.hiddenStates = make(map[string]bool)
 	m.idInput = newInput("e.g. 123", 12)
 	m.pickerSearch = newInput("type to search...", 40)
+	m.filterSearch = newInput("type to search...", 40)
+	m.titleSearchInput = newInput("search titles...", 40)
 	m.attachPathInput = newInput("/path/to/file", 60)
 	m.colorInput = newInput("ff8800", 10)
 	m.extrasCache = make(map[string]extrasCacheEntry)
@@ -432,6 +448,7 @@ var helpSections = []helpSection{
 		{"A", "change assignee"},
 		{"a", "filter by assignee"},
 		{"L", "filter by label"},
+		{"/", "search by title (loaded cards only)"},
 		{"u", "copy work item url"},
 		{"g", "open by work item id"},
 		{"o", "card order"},
