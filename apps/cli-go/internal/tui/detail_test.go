@@ -32,7 +32,10 @@ func detailFixture() Model {
 			{ID: "u1", FirstName: "Jane", LastName: "Doe", DisplayName: "jane.doe", Email: "jane@x.com"},
 			{ID: "u2", DisplayName: "sam", Email: "sam@x.com"},
 		},
-		editor: newTestEditor(),
+		editor:          newTestEditor(),
+		pickerSearch:    newInput("", 40),
+		attachPathInput: newInput("", 60),
+		colorInput:      newInput("", 10),
 	}
 }
 
@@ -453,21 +456,27 @@ func TestViewDetailFitsTerminalWithOverlays(t *testing.T) {
 }
 
 // TestDetailTabSwitchesPaneFocus checks tab toggles which pane j/k drives: within the
-// comments pane j/k still move commentCursor (the pre-existing behaviour), but once tab
-// moves focus to the description pane the same keys scroll it instead, leaving the comment
-// cursor untouched.
+// comments pane j/k scroll the pane one line at a time, independently of the comment cursor
+// (n/p — see TestDetailNextPrevCommentJumpsFocus — are what move that), and once tab moves
+// focus to the description pane the same keys scroll it instead.
 func TestDetailTabSwitchesPaneFocus(t *testing.T) {
 	m := longDetailFixture(80, 24)
 	if m.detailFocus != detailPaneComments {
 		t.Fatalf("detailFocus = %v, want detailPaneComments by default", m.detailFocus)
 	}
-	m.commentCursor = 0
+	// longDetailFixture opens with the comments pane already scrolled to the bottom (the most
+	// recent comment focused), so k (scroll up) is what has room to move — j is exercised in
+	// the opposite direction below, once tab has moved focus away and back.
 	cursorBefore := m.commentCursor
+	commentsOffsetBefore := m.commentsViewport.YOffset
 
-	next, _ := m.updateDetail(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	next, _ := m.updateDetail(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
 	m = next.(Model)
-	if m.commentCursor == cursorBefore {
-		t.Fatal("j did not move the comment cursor while the comments pane was focused")
+	if m.commentCursor != cursorBefore {
+		t.Fatal("k moved the comment cursor while the comments pane was focused; it should only scroll")
+	}
+	if m.commentsViewport.YOffset >= commentsOffsetBefore {
+		t.Errorf("k did not scroll the comments pane up (offset %d -> %d)", commentsOffsetBefore, m.commentsViewport.YOffset)
 	}
 
 	next, _ = m.updateDetail(tea.KeyMsg{Type: tea.KeyTab})
@@ -491,6 +500,39 @@ func TestDetailTabSwitchesPaneFocus(t *testing.T) {
 	m = next.(Model)
 	if m.detailFocus != detailPaneComments {
 		t.Fatalf("a second tab did not switch focus back to the comments pane (focus=%v)", m.detailFocus)
+	}
+}
+
+// TestDetailNextPrevCommentJumpsFocus checks n/p move commentCursor and scroll the newly
+// focused comment fully into view, the way j/k used to before they became a plain one-line
+// scroll (see TestDetailTabSwitchesPaneFocus).
+func TestDetailNextPrevCommentJumpsFocus(t *testing.T) {
+	m := longDetailFixture(80, 24)
+	m.commentCursor = 0
+
+	next, _ := m.updateDetail(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = next.(Model)
+	if m.commentCursor != 1 {
+		t.Fatalf("n moved commentCursor to %d, want 1", m.commentCursor)
+	}
+
+	next, _ = m.updateDetail(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	m = next.(Model)
+	if m.commentCursor != 0 {
+		t.Fatalf("p moved commentCursor to %d, want 0", m.commentCursor)
+	}
+
+	// p at the first comment, and n at the last, must not run past either end.
+	next, _ = m.updateDetail(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	m = next.(Model)
+	if m.commentCursor != 0 {
+		t.Fatalf("p at the first comment moved commentCursor to %d, want 0", m.commentCursor)
+	}
+	m.commentCursor = len(m.comments) - 1
+	next, _ = m.updateDetail(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = next.(Model)
+	if m.commentCursor != len(m.comments)-1 {
+		t.Fatalf("n at the last comment moved commentCursor to %d, want %d", m.commentCursor, len(m.comments)-1)
 	}
 }
 

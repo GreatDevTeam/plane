@@ -110,10 +110,12 @@ func TestOpenLabelPickerSeedsSelectionFromItem(t *testing.T) {
 	}
 }
 
-// TestUpdatePickerLabelsTogglesAndBuildsMultiLabelPatch checks space toggles entries in the
+// TestUpdatePickerLabelsTogglesAndBuildsMultiLabelPatch checks tab toggles entries in the
 // working set (without PATCHing anything) and enter PATCHes {"labels": [...]} from whatever
 // ended up toggled on, including an empty selection marshaling to [] rather than null (the
-// same convention TestUpdatePickerAssigneeBuildsSingleAssigneePatch checks for assignees).
+// same convention TestUpdatePickerAssigneeBuildsSingleAssigneePatch checks for assignees). Tab
+// rather than space toggles a label because the picker is now a type-to-filter search box
+// (see updateSearchablePicker) and space needs to stay free to type a multi-word query.
 func TestUpdatePickerLabelsTogglesAndBuildsMultiLabelPatch(t *testing.T) {
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -128,10 +130,10 @@ func TestUpdatePickerLabelsTogglesAndBuildsMultiLabelPatch(t *testing.T) {
 	m.openLabelPicker() // nothing selected: item has no labels
 
 	// Toggle l1 on, move to l3 and toggle it on too.
-	next, _ := m.updatePicker(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	next, _ := m.updatePicker(tea.KeyMsg{Type: tea.KeyTab})
 	m = next.(Model)
 	m.pickerIdx = 2
-	next, _ = m.updatePicker(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	next, _ = m.updatePicker(tea.KeyMsg{Type: tea.KeyTab})
 	m = next.(Model)
 	if !m.labelPickerSelected["l1"] || m.labelPickerSelected["l2"] || !m.labelPickerSelected["l3"] {
 		t.Fatalf("after toggling l1 and l3: selected=%v", m.labelPickerSelected)
@@ -158,5 +160,142 @@ func TestUpdatePickerLabelsTogglesAndBuildsMultiLabelPatch(t *testing.T) {
 	}
 	if ids, ok := gotBody["labels"].([]any); !ok || len(ids) != 0 {
 		t.Fatalf("PATCH body labels = %v, want []", gotBody["labels"])
+	}
+}
+
+// TestStatePickerSearchFiltersAndApplies checks typing into the state picker narrows the list
+// (case-insensitively) and enter still applies whatever the cursor lands on within that
+// filtered list, not the unfiltered m.states — the bug a naive filtered-view-only-at-render-time
+// implementation would have.
+func TestStatePickerSearchFiltersAndApplies(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(api.WorkItem{ID: "id-0"})
+	}))
+	defer srv.Close()
+
+	m := boardFixture(1, 1, 120, 40)
+	m.client = api.New(srv.URL, "tok")
+	m.states = []api.State{{ID: "s1", Name: "Todo"}, {ID: "s2", Name: "In Progress"}, {ID: "s3", Name: "Done"}}
+	m.items[0].State = "s1" // keep the fixture's one card in the (now renamed) focused column
+	m.openStatePicker()
+
+	for _, r := range "prog" {
+		next, _ := m.updatePicker(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = next.(Model)
+	}
+	opts := m.filteredStates()
+	if len(opts) != 1 || opts[0].ID != "s2" {
+		t.Fatalf("filteredStates() after typing %q = %v, want only s2 (In Progress)", m.pickerSearch.Value(), opts)
+	}
+	if m.pickerOptionCount() != 1 {
+		t.Fatalf("pickerOptionCount() = %d, want 1 while filtered", m.pickerOptionCount())
+	}
+
+	next, cmd := m.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("enter on the state picker returned no command")
+	}
+	if msg, ok := cmd().(workItemUpdatedMsg); !ok || msg.err != nil {
+		t.Fatalf("updateWorkItem command = %+v", msg)
+	}
+	if gotBody["state"] != "s2" {
+		t.Fatalf("PATCH body state = %v, want s2", gotBody["state"])
+	}
+}
+
+// TestLabelsPickerSearchNarrowsListAndClampsCursor checks the labels picker's search box
+// narrows the list the same way, and that the cursor is clamped back onto the (now shorter)
+// filtered list rather than left pointing past its end.
+func TestLabelsPickerSearchNarrowsListAndClampsCursor(t *testing.T) {
+	m := boardFixture(1, 1, 120, 40)
+	m.labels = []api.Label{{ID: "l1", Name: "bug"}, {ID: "l2", Name: "urgent"}, {ID: "l3", Name: "docs"}}
+	m.openLabelPicker()
+	m.pickerIdx = 2 // "docs", the last entry
+
+	for _, r := range "bu" {
+		next, _ := m.updatePicker(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = next.(Model)
+	}
+	opts := m.filteredLabels()
+	if len(opts) != 1 || opts[0].ID != "l1" {
+		t.Fatalf("filteredLabels() after typing %q = %v, want only l1 (bug)", m.pickerSearch.Value(), opts)
+	}
+	if m.pickerIdx != 0 {
+		t.Errorf("pickerIdx = %d after the list narrowed to 1 entry, want it clamped to 0", m.pickerIdx)
+	}
+}
+
+// TestColorTargetPickerOpensColorPromptWithCurrentColor checks picking a state or a label from
+// the "C" color-settings picker opens the hex-entry prompt pre-filled with its current
+// effective color (the state's own API color when no override is set yet).
+func TestColorTargetPickerOpensColorPromptWithCurrentColor(t *testing.T) {
+	m := boardFixture(1, 1, 120, 40)
+	m.project = api.Project{ID: "proj-1"}
+	m.states = []api.State{{ID: "s1", Name: "Todo", Color: "#16a34a"}}
+	m.labels = []api.Label{{ID: "l1", Name: "bug", Color: "#f59e0b"}}
+	m.openColorTargetPicker()
+	if m.pickerOpen != "color-target" {
+		t.Fatalf("openColorTargetPicker: pickerOpen=%q, want color-target", m.pickerOpen)
+	}
+
+	// pickerIdx 0 is the state.
+	next, _ := m.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if !m.colorPromptOpen || m.colorTargetKind != "state" || m.colorTargetID != "s1" {
+		t.Fatalf("state row: colorPromptOpen=%v kind=%q id=%q, want open/state/s1", m.colorPromptOpen, m.colorTargetKind, m.colorTargetID)
+	}
+	if got := m.colorInput.Value(); got != "16a34a" {
+		t.Errorf("colorInput = %q, want the state's own color 16a34a", got)
+	}
+	m = m.closeColorPrompt()
+
+	// pickerIdx 1 is the label (index len(states)+0).
+	m.openColorTargetPicker()
+	m.pickerIdx = 1
+	next, _ = m.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if !m.colorPromptOpen || m.colorTargetKind != "label" || m.colorTargetID != "l1" {
+		t.Fatalf("label row: colorPromptOpen=%v kind=%q id=%q, want open/label/l1", m.colorPromptOpen, m.colorTargetKind, m.colorTargetID)
+	}
+	if got := m.colorInput.Value(); got != "f59e0b" {
+		t.Errorf("colorInput = %q, want the label's own color f59e0b", got)
+	}
+}
+
+// TestUpdateColorPromptSavesOverrideAndAppliesToEffectiveColor covers the whole round trip:
+// enter on a valid hex persists it via config.SetStateColor, and effectiveStateColor picks it
+// up over the state's own API color on the very next call.
+func TestUpdateColorPromptSavesOverrideAndAppliesToEffectiveColor(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	m := boardFixture(1, 1, 120, 40)
+	m.project = api.Project{ID: "proj-1"}
+	st := api.State{ID: "s1", Name: "Todo", Color: "#16a34a"}
+	m.states = []api.State{st}
+	m.openColorPrompt("state", "s1", "#16a34a")
+	m.colorInput.SetValue("ff8800")
+
+	next, _ := m.updateColorPrompt(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.colorPromptOpen {
+		t.Fatal("the color prompt stayed open after a valid hex")
+	}
+	if got := m.effectiveStateColor(st); got != "#ff8800" {
+		t.Fatalf("effectiveStateColor after saving an override = %q, want #ff8800", got)
+	}
+
+	// An invalid hex is rejected and the prompt stays open.
+	m.openColorPrompt("state", "s1", "#ff8800")
+	m.colorInput.SetValue("not-a-color")
+	next, _ = m.updateColorPrompt(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if !m.colorPromptOpen {
+		t.Error("the color prompt closed after an invalid hex")
+	}
+	if m.err == "" {
+		t.Error("an invalid hex must report an error")
 	}
 }

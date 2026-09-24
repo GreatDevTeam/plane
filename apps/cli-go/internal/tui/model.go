@@ -110,13 +110,45 @@ type Model struct {
 	// (the detail screen renders the cached copy meanwhile).
 	detailLoading bool
 
-	pickerOpen string // "" | "state" | "priority" | "sort" | "subissue" | "assignee" | "labels"
+	// pickerOpen: "" | "state" | "priority" | "sort" | "subissue" | "assignee" | "labels" |
+	// "links" | "attachments" | "color-target"
+	pickerOpen string
 	pickerIdx  int
 
 	// labelPickerSelected holds the working set of toggled-on label IDs while pickerOpen ==
 	// "labels" (openLabelPicker/updatePicker's "labels" case) — unlike every other picker,
 	// this one is multi-choice, so a single pickerIdx cannot also carry the selection.
 	labelPickerSelected map[string]bool
+
+	// pickerSearch is the type-to-filter query box shown while pickerOpen is "state" or
+	// "labels" (see updateSearchablePicker/filteredStates/filteredLabels).
+	pickerSearch textinput.Model
+
+	// linkOptions holds the links extracted from the focused detail pane while
+	// pickerOpen == "links" (see openFocusedLinks).
+	linkOptions []string
+
+	// attachments/attachmentsLoading back the detail screen's "f" attachments picker (see
+	// openAttachmentsPicker in attachments.go). Unlike comments there is no 30s auto-refresh
+	// keeping this current — it is (re-)fetched every time the picker opens.
+	attachments        []api.Attachment
+	attachmentsLoading bool
+
+	// attachPathPromptOpen/attachPathInput/attachUploading drive the "attach a new file"
+	// prompt (the attachments picker's "a" — see openAttachPathPrompt in attachments.go): a
+	// bare local path input, since plane-cli has no file browser of its own.
+	attachPathPromptOpen bool
+	attachPathInput      textinput.Model
+	attachUploading      bool
+
+	// colorPromptOpen/colorInput/colorTargetKind/colorTargetID drive the local color-override
+	// prompt (board's "C", via pickerOpen == "color-target" — see openColorPrompt in
+	// colors.go). This is a display preference only, saved to config.Config; it never changes
+	// a state's or label's actual color in Plane.
+	colorPromptOpen bool
+	colorInput      textinput.Model
+	colorTargetKind string // "state" | "label"
+	colorTargetID   string
 
 	filterOpen     string // "" | "assignee" | "label" | "state" | "priority"
 	filterIdx      int
@@ -181,6 +213,9 @@ func New(cfg config.Config) Model {
 	m.sortMode = normalizeSortMode(cfg.SortMode)
 	m.hiddenStates = make(map[string]bool)
 	m.idInput = newInput("e.g. 123", 12)
+	m.pickerSearch = newInput("type to search...", 40)
+	m.attachPathInput = newInput("/path/to/file", 60)
+	m.colorInput = newInput("ff8800", 10)
 	m.extrasCache = make(map[string]extrasCacheEntry)
 
 	if cfg.ServerURL != "" && cfg.Token != "" {
@@ -274,6 +309,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleWorkItemCreated(msg)
 	case relatedWorkItemMsg:
 		return m.handleRelatedWorkItem(msg)
+	case attachmentsMsg:
+		return m.handleAttachments(msg)
+	case attachmentDownloadedMsg:
+		return m.handleAttachmentDownloaded(msg)
+	case attachmentUploadedMsg:
+		return m.handleAttachmentUploaded(msg)
 	}
 
 	switch m.screen {
@@ -395,6 +436,7 @@ var helpSections = []helpSection{
 		{"o", "card order"},
 		{"n", "new work item"},
 		{"x", "hide/show this column"},
+		{"C", "recolor a state/label (local only)"},
 		{"p", "switch board (project)"},
 		{"r", "refresh"},
 		{"q", "quit"},
@@ -407,7 +449,11 @@ var helpSections = []helpSection{
 		{"g", "go to parent work item"},
 		{"S", "jump to a sub-task"},
 		{"u", "copy work item url"},
-		{"j/k or up/down", "select comment"},
+		{"tab", "switch between description/comments"},
+		{"j/k or up/down", "scroll focused pane one line"},
+		{"n/p", "jump to next/prev comment"},
+		{"o", "open link(s) in browser"},
+		{"f", "attachments (list/download/attach)"},
 		{"c", "add comment"},
 		{"e", "edit selected comment (own only)"},
 		{"r", "refresh"},
@@ -420,6 +466,13 @@ var helpSections = []helpSection{
 	{"Picker", [][2]string{
 		{"j/k", "move"},
 		{"enter", "apply"},
+		{"esc", "cancel"},
+	}},
+	{"State/labels picker", [][2]string{
+		{"(type)", "filter the list"},
+		{"up/down", "move"},
+		{"tab", "toggle label (labels only)"},
+		{"enter", "apply/save"},
 		{"esc", "cancel"},
 	}},
 }

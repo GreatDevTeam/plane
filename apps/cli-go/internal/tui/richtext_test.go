@@ -48,3 +48,37 @@ func TestPlainToHTMLEmpty(t *testing.T) {
 		t.Errorf("plainToHTML(\"\") = %q, want %q", got, "<p></p>")
 	}
 }
+
+// TestExtractLinksHrefAndPlainText covers both shapes a link shows up in Plane's editor HTML:
+// an <a href="...">'s target, and a bare "http(s)://..." typed as plain text — in the order
+// they first appear, with duplicates (an href whose visible text is the same URL) collapsed to
+// one entry.
+func TestExtractLinksHrefAndPlainText(t *testing.T) {
+	html := `<p>See <a href="https://example.com/a">this</a> and also ` +
+		`https://example.com/b (in parens) and again <a href="https://example.com/a">dup</a>.</p>`
+	got := extractLinks(html)
+	want := []string{"https://example.com/a", "https://example.com/b"}
+	if len(got) != len(want) {
+		t.Fatalf("extractLinks(%q) = %v, want %v", html, got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("extractLinks(%q)[%d] = %q, want %q", html, i, got[i], want[i])
+		}
+	}
+}
+
+func TestExtractLinksNoneFound(t *testing.T) {
+	if got := extractLinks("<p>Nothing to see here.</p>"); len(got) != 0 {
+		t.Errorf("extractLinks with no links = %v, want empty", got)
+	}
+}
+
+// TestExtractLinksTrimsTrailingPunctuation checks a URL immediately followed by a sentence's
+// closing punctuation (or an enclosing paren) does not drag that punctuation into the link.
+func TestExtractLinksTrimsTrailingPunctuation(t *testing.T) {
+	got := extractLinks("<p>Docs at https://example.com/docs.</p>")
+	if len(got) != 1 || got[0] != "https://example.com/docs" {
+		t.Fatalf("extractLinks = %v, want [https://example.com/docs]", got)
+	}
+}

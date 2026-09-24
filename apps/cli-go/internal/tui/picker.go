@@ -2,8 +2,10 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/makeplane/plane/apps/cli-go/internal/api"
 	"github.com/makeplane/plane/apps/cli-go/internal/config"
 )
@@ -24,12 +26,53 @@ func (m *Model) openStatePicker() {
 	}
 	m.pickerOpen = "state"
 	m.pickerIdx = 0
+	m.resetPickerSearch()
 	for i, st := range m.states {
 		if st.ID == item.State {
 			m.pickerIdx = i
 			break
 		}
 	}
+}
+
+// resetPickerSearch clears and focuses the type-to-filter query box (see
+// updateSearchablePicker/filteredStates/filteredLabels) — called whenever the state or labels
+// picker opens, so it never starts out still filtered by whatever was typed the last time.
+func (m *Model) resetPickerSearch() {
+	m.pickerSearch.Reset()
+	m.pickerSearch.Focus()
+}
+
+// filteredStates is m.states narrowed by the state picker's search query, case-insensitively
+// matching the name. An empty query (the common case: arrow to the option, don't type anything)
+// matches everything, so the picker looks and behaves exactly as it did before it could filter.
+func (m Model) filteredStates() []api.State {
+	q := strings.ToLower(strings.TrimSpace(m.pickerSearch.Value()))
+	if q == "" {
+		return m.states
+	}
+	out := make([]api.State, 0, len(m.states))
+	for _, st := range m.states {
+		if strings.Contains(strings.ToLower(st.Name), q) {
+			out = append(out, st)
+		}
+	}
+	return out
+}
+
+// filteredLabels is filteredStates for the labels picker.
+func (m Model) filteredLabels() []api.Label {
+	q := strings.ToLower(strings.TrimSpace(m.pickerSearch.Value()))
+	if q == "" {
+		return m.labels
+	}
+	out := make([]api.Label, 0, len(m.labels))
+	for _, l := range m.labels {
+		if strings.Contains(strings.ToLower(l.Name), q) {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 func (m *Model) openPriorityPicker() {
@@ -81,6 +124,7 @@ func (m *Model) openAssigneePicker() {
 func (m *Model) openNewItemStatePicker() {
 	m.pickerOpen = "state"
 	m.pickerIdx = 0
+	m.resetPickerSearch()
 	for i, st := range m.states {
 		if st.ID == m.newItemStateID {
 			m.pickerIdx = i
@@ -129,6 +173,7 @@ func (m *Model) openLabelPicker() {
 	}
 	m.pickerOpen = "labels"
 	m.pickerIdx = 0
+	m.resetPickerSearch()
 	m.labelPickerSelected = make(map[string]bool, len(item.Labels))
 	for _, id := range item.Labels {
 		m.labelPickerSelected[id] = true
@@ -151,7 +196,7 @@ func (m *Model) openSortPicker() {
 func (m Model) pickerOptionCount() int {
 	switch m.pickerOpen {
 	case "state":
-		return len(m.states)
+		return len(m.filteredStates())
 	case "sort":
 		return len(sortModes)
 	case "subissue":
@@ -159,7 +204,13 @@ func (m Model) pickerOptionCount() int {
 	case "assignee", "new-item-assignee":
 		return len(m.members) + 1 // +1 for "Unassigned"
 	case "labels":
-		return len(m.labels)
+		return len(m.filteredLabels())
+	case "links":
+		return len(m.linkOptions)
+	case "attachments":
+		return len(m.attachments)
+	case "color-target":
+		return len(m.states) + len(m.labels)
 	}
 	return len(api.Priorities)
 }
@@ -168,6 +219,12 @@ func (m Model) updatePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
+	}
+	// The state and labels pickers are type-to-filter search boxes (see updateSearchablePicker):
+	// j/k/space/x are ordinary characters to type there, not shortcuts, so they need their own
+	// key handling entirely separate from every other (plain list) picker below.
+	if m.pickerOpen == "state" || m.pickerOpen == "labels" {
+		return m.updateSearchablePicker(key)
 	}
 	switch key.String() {
 	case "esc", "q":
@@ -180,94 +237,192 @@ func (m Model) updatePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pickerIdx < m.pickerOptionCount()-1 {
 			m.pickerIdx++
 		}
-	case " ", "x":
-		if m.pickerOpen == "labels" && m.pickerIdx >= 0 && m.pickerIdx < len(m.labels) {
-			id := m.labels[m.pickerIdx].ID
-			m.labelPickerSelected[id] = !m.labelPickerSelected[id]
+	case "a":
+		// Attach a new file — only meaningful while the attachments picker is open; "a" is
+		// otherwise unused across the plain-list pickers this switch handles.
+		if m.pickerOpen == "attachments" {
+			m.pickerOpen = ""
+			return m.openAttachPathPrompt()
 		}
 	case "enter":
-		if m.pickerOpen == "sort" {
-			// Ordering is a view setting, not a change to any work item: apply it locally
-			// (and remember it for the next run) instead of PATCHing anything.
-			if m.pickerIdx >= 0 && m.pickerIdx < len(sortModes) {
-				m.sortMode = sortModes[m.pickerIdx].key
-				m.cfg.SortMode = m.sortMode
-				if err := config.Save(m.cfg); err != nil {
-					m.setError(err)
-				}
-				m.clampBoardCursors()
-			}
-			m.pickerOpen = ""
-			return m, nil
-		}
-		if m.pickerOpen == "subissue" {
-			// Not a change to any work item either: this picker navigates, so enter opens
-			// the chosen sub-task the same way the board's enter opens a card.
-			opts := m.subIssueOptions()
-			if m.pickerIdx < 0 || m.pickerIdx >= len(opts) {
-				m.pickerOpen = ""
-				return m, nil
-			}
-			return m.openWorkItem(opts[m.pickerIdx])
-		}
-		if m.creatingItem {
-			// The item being composed does not exist yet, so there is nothing to PATCH: the
-			// choice just lands in m.newItem* for the review step (viewNewItemReview) to show.
-			switch m.pickerOpen {
-			case "state":
-				if m.pickerIdx >= 0 && m.pickerIdx < len(m.states) {
-					m.newItemStateID = m.states[m.pickerIdx].ID
-				}
-			case "priority":
-				if m.pickerIdx >= 0 && m.pickerIdx < len(api.Priorities) {
-					m.newItemPriority = api.Priorities[m.pickerIdx]
-				}
-			case "new-item-assignee":
-				if m.pickerIdx == 0 {
-					m.newItemAssignee = ""
-				} else if idx := m.pickerIdx - 1; idx >= 0 && idx < len(m.members) {
-					m.newItemAssignee = m.members[idx].ID
-				}
-			}
-			m.pickerOpen = ""
-			return m, nil
-		}
-		item := m.activeItem()
-		if item == nil {
-			m.pickerOpen = ""
-			return m, nil
-		}
-		var patch map[string]any
-		switch m.pickerOpen {
-		case "state":
-			patch = map[string]any{"state": m.states[m.pickerIdx].ID}
-		case "assignee":
-			// ids starts non-nil (rather than a nil slice) so clearing the assignee PATCHes
-			// "assignees": [] — a nil slice marshals to JSON null, which is not the same
-			// instruction to the API as an empty list.
-			ids := []string{}
-			if idx := m.pickerIdx - 1; idx >= 0 && idx < len(m.members) {
-				ids = []string{m.members[idx].ID}
-			}
-			patch = map[string]any{"assignees": ids}
-		case "labels":
-			// ids starts non-nil for the same reason the assignee PATCH above does: a nil
-			// slice marshals to JSON null, and clearing every label needs to PATCH "labels":
-			// [] instead.
-			ids := []string{}
-			for _, l := range m.labels {
-				if m.labelPickerSelected[l.ID] {
-					ids = append(ids, l.ID)
-				}
-			}
-			patch = map[string]any{"labels": ids}
-		default:
-			patch = map[string]any{"priority": api.Priorities[m.pickerIdx]}
-		}
-		m.status = "Updating..."
-		return m, updateWorkItem(m.client, m.workspaceSlug, m.project.ID, item.ID, patch)
+		return m.applyPickerEnter()
 	}
 	return m, nil
+}
+
+// updateSearchablePicker drives the state/labels pickers' type-to-filter query box
+// (m.pickerSearch): the up/down arrows move within the filtered list (see
+// filteredStates/filteredLabels), tab toggles the highlighted label (labels only — space is
+// deliberately left free to type a query that itself contains one, e.g. "In Progress"), enter
+// applies/saves and esc cancels, exactly as the plain pickers' j/k/enter/esc do. Every other
+// keystroke edits the query itself.
+func (m Model) updateSearchablePicker(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "esc":
+		m.pickerOpen = ""
+		m.pickerSearch.Blur()
+		return m, nil
+	case "up":
+		if m.pickerIdx > 0 {
+			m.pickerIdx--
+		}
+		return m, nil
+	case "down":
+		if m.pickerIdx < m.pickerOptionCount()-1 {
+			m.pickerIdx++
+		}
+		return m, nil
+	case "tab":
+		if m.pickerOpen == "labels" {
+			opts := m.filteredLabels()
+			if m.pickerIdx >= 0 && m.pickerIdx < len(opts) {
+				id := opts[m.pickerIdx].ID
+				m.labelPickerSelected[id] = !m.labelPickerSelected[id]
+			}
+		}
+		return m, nil
+	case "enter":
+		return m.applyPickerEnter()
+	}
+	before := m.pickerSearch.Value()
+	var cmd tea.Cmd
+	m.pickerSearch, cmd = m.pickerSearch.Update(key)
+	if m.pickerSearch.Value() != before {
+		// The query just narrowed (or widened) the list: clamp the cursor back onto it rather
+		// than leaving it pointing past the end, or at an unrelated row, of the new list.
+		if n := m.pickerOptionCount(); m.pickerIdx >= n {
+			m.pickerIdx = n - 1
+		}
+		if m.pickerIdx < 0 {
+			m.pickerIdx = 0
+		}
+	}
+	return m, cmd
+}
+
+// applyPickerEnter is every picker's enter key, shared by the plain list pickers (updatePicker)
+// and the searchable ones (updateSearchablePicker) so both apply a selection exactly the same
+// way regardless of how the user got there.
+func (m Model) applyPickerEnter() (tea.Model, tea.Cmd) {
+	m.pickerSearch.Blur()
+	if m.pickerOpen == "sort" {
+		// Ordering is a view setting, not a change to any work item: apply it locally
+		// (and remember it for the next run) instead of PATCHing anything.
+		if m.pickerIdx >= 0 && m.pickerIdx < len(sortModes) {
+			m.sortMode = sortModes[m.pickerIdx].key
+			m.cfg.SortMode = m.sortMode
+			if err := config.Save(m.cfg); err != nil {
+				m.setError(err)
+			}
+			m.clampBoardCursors()
+		}
+		m.pickerOpen = ""
+		return m, nil
+	}
+	if m.pickerOpen == "subissue" {
+		// Not a change to any work item either: this picker navigates, so enter opens
+		// the chosen sub-task the same way the board's enter opens a card.
+		opts := m.subIssueOptions()
+		if m.pickerIdx < 0 || m.pickerIdx >= len(opts) {
+			m.pickerOpen = ""
+			return m, nil
+		}
+		return m.openWorkItem(opts[m.pickerIdx])
+	}
+	if m.pickerOpen == "links" {
+		if m.pickerIdx < 0 || m.pickerIdx >= len(m.linkOptions) {
+			m.pickerOpen = ""
+			return m, nil
+		}
+		url := m.linkOptions[m.pickerIdx]
+		m.pickerOpen = ""
+		return m.openLinkInBrowser(url)
+	}
+	if m.pickerOpen == "attachments" {
+		if m.pickerIdx < 0 || m.pickerIdx >= len(m.attachments) {
+			m.pickerOpen = ""
+			return m, nil
+		}
+		att := m.attachments[m.pickerIdx]
+		m.pickerOpen = ""
+		return m.downloadAttachmentCmd(att)
+	}
+	if m.pickerOpen == "color-target" {
+		st, l, ok := m.colorTargetAt(m.pickerIdx)
+		m.pickerOpen = ""
+		if !ok {
+			return m, nil
+		}
+		if st != nil {
+			m.openColorPrompt("state", st.ID, m.effectiveStateColor(*st))
+		} else {
+			m.openColorPrompt("label", l.ID, m.effectiveLabelColor(*l))
+		}
+		return m, nil
+	}
+	if m.creatingItem {
+		// The item being composed does not exist yet, so there is nothing to PATCH: the
+		// choice just lands in m.newItem* for the review step (viewNewItemReview) to show.
+		switch m.pickerOpen {
+		case "state":
+			opts := m.filteredStates()
+			if m.pickerIdx >= 0 && m.pickerIdx < len(opts) {
+				m.newItemStateID = opts[m.pickerIdx].ID
+			}
+		case "priority":
+			if m.pickerIdx >= 0 && m.pickerIdx < len(api.Priorities) {
+				m.newItemPriority = api.Priorities[m.pickerIdx]
+			}
+		case "new-item-assignee":
+			if m.pickerIdx == 0 {
+				m.newItemAssignee = ""
+			} else if idx := m.pickerIdx - 1; idx >= 0 && idx < len(m.members) {
+				m.newItemAssignee = m.members[idx].ID
+			}
+		}
+		m.pickerOpen = ""
+		return m, nil
+	}
+	item := m.activeItem()
+	if item == nil {
+		m.pickerOpen = ""
+		return m, nil
+	}
+	var patch map[string]any
+	switch m.pickerOpen {
+	case "state":
+		opts := m.filteredStates()
+		if m.pickerIdx < 0 || m.pickerIdx >= len(opts) {
+			m.pickerOpen = ""
+			return m, nil
+		}
+		patch = map[string]any{"state": opts[m.pickerIdx].ID}
+	case "assignee":
+		// ids starts non-nil (rather than a nil slice) so clearing the assignee PATCHes
+		// "assignees": [] — a nil slice marshals to JSON null, which is not the same
+		// instruction to the API as an empty list.
+		ids := []string{}
+		if idx := m.pickerIdx - 1; idx >= 0 && idx < len(m.members) {
+			ids = []string{m.members[idx].ID}
+		}
+		patch = map[string]any{"assignees": ids}
+	case "labels":
+		// ids starts non-nil for the same reason the assignee PATCH above does: a nil
+		// slice marshals to JSON null, and clearing every label needs to PATCH "labels":
+		// [] instead. The full label list (not the filtered one), since labelPickerSelected
+		// tracks the working set across query changes rather than the filtered rows.
+		ids := []string{}
+		for _, l := range m.labels {
+			if m.labelPickerSelected[l.ID] {
+				ids = append(ids, l.ID)
+			}
+		}
+		patch = map[string]any{"labels": ids}
+	default:
+		patch = map[string]any{"priority": api.Priorities[m.pickerIdx]}
+	}
+	m.status = "Updating..."
+	return m, updateWorkItem(m.client, m.workspaceSlug, m.project.ID, item.ID, patch)
 }
 
 func (m Model) viewPicker() string {
@@ -285,6 +440,12 @@ func (m Model) viewPicker() string {
 		title = "New item assignee"
 	case "labels":
 		title = "Change labels"
+	case "links":
+		title = "Open link"
+	case "attachments":
+		title = "Attachments"
+	case "color-target":
+		title = "Recolor a state or label"
 	}
 	if m.creatingItem {
 		switch m.pickerOpen {
@@ -298,9 +459,11 @@ func (m Model) viewPicker() string {
 	hint := "j/k  move    enter  apply    esc  cancel"
 	switch {
 	case m.pickerOpen == "state":
-		for i, st := range m.states {
+		out += helpStyle.Render("Search: ") + m.pickerSearch.View() + "\n"
+		for i, st := range m.filteredStates() {
 			out += pickerLine(st.Name, i == m.pickerIdx)
 		}
+		hint = "type  search    up/down  move    enter  apply    esc  cancel"
 	case m.pickerOpen == "sort":
 		for i, sm := range sortModes {
 			out += pickerLine(sm.label, i == m.pickerIdx)
@@ -311,14 +474,45 @@ func (m Model) viewPicker() string {
 			out += pickerLine(mem.Name(), m.pickerIdx == i+1)
 		}
 	case m.pickerOpen == "labels":
-		for i, l := range m.labels {
+		out += helpStyle.Render("Search: ") + m.pickerSearch.View() + "\n"
+		for i, l := range m.filteredLabels() {
 			box := "[ ] "
 			if m.labelPickerSelected[l.ID] {
 				box = "[x] "
 			}
 			out += pickerLine(box+l.Name, i == m.pickerIdx)
 		}
-		hint = "j/k  move    space  toggle    enter  save    esc  cancel"
+		hint = "type  search    up/down  move    tab  toggle    enter  save    esc  cancel"
+	case m.pickerOpen == "links":
+		for i, u := range m.linkOptions {
+			out += pickerLine(truncate(u, 70), i == m.pickerIdx)
+		}
+		hint = "j/k  move    enter  open    esc  cancel"
+	case m.pickerOpen == "attachments":
+		switch {
+		case m.attachmentsLoading:
+			out += helpStyle.Render("Loading attachments...") + "\n"
+		case len(m.attachments) == 0:
+			out += helpStyle.Render("(no attachments)") + "\n"
+		default:
+			for i, att := range m.attachments {
+				line := att.Name() + "  " + helpStyle.Render(humanSize(att.Size()))
+				out += pickerLine(line, i == m.pickerIdx)
+			}
+		}
+		if m.attachUploading {
+			out += helpStyle.Render("Uploading...") + "\n"
+		}
+		hint = "j/k  move    enter  download    a  attach new    esc  cancel"
+	case m.pickerOpen == "color-target":
+		for i, st := range m.states {
+			out += m.colorTargetLine("State: "+st.Name, m.effectiveStateColor(st), true, i == m.pickerIdx)
+		}
+		for i, l := range m.labels {
+			idx := len(m.states) + i
+			out += m.colorTargetLine("Label: "+l.Name, m.effectiveLabelColor(l), false, idx == m.pickerIdx)
+		}
+		hint = "j/k  move    enter  choose color    esc  cancel"
 	case m.pickerOpen == "subissue":
 		opts := m.subIssueOptions()
 		// Windowed, unlike the lists above: the number of sub-tasks is project data with no
@@ -346,6 +540,23 @@ func pickerLine(label string, selected bool) string {
 		return cardSelectedStyle.Render("> "+label) + "\n"
 	}
 	return cardStyle.Render("  "+label) + "\n"
+}
+
+// colorTargetLine is pickerLine for the color-target picker: an unselected row is tinted in its
+// own effective color (see effectiveStateColor/effectiveLabelColor) so the list doubles as a
+// preview of what is about to be recolored, exactly like a board column header or a card's
+// labels. The selected row falls back to plain pickerLine instead: cardSelectedStyle's own
+// background/foreground must not be interrupted by a nested style's reset, the same reason
+// cardLines avoids colored labels on a selected card.
+func (m Model) colorTargetLine(label, hex string, pastel, selected bool) string {
+	if selected {
+		return pickerLine(label, true)
+	}
+	color := labelColor(hex)
+	if pastel {
+		color = pastelStateColor(hex)
+	}
+	return cardStyle.Render("  "+lipgloss.NewStyle().Foreground(color).Render(label)) + "\n"
 }
 
 func (m Model) handleWorkItemUpdated(msg workItemUpdatedMsg) (tea.Model, tea.Cmd) {

@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -214,6 +217,145 @@ func (c *Client) UpdateWorkItem(ctx context.Context, workspaceSlug, projectID, w
 		return nil, err
 	}
 	return &wi, nil
+}
+
+// ListAttachments returns every attachment uploaded to a work item.
+func (c *Client) ListAttachments(ctx context.Context, workspaceSlug, projectID, workItemID string) ([]Attachment, error) {
+	var out []Attachment
+	path := fmt.Sprintf("/api/v1/workspaces/%s/projects/%s/work-items/%s/attachments/", workspaceSlug, projectID, workItemID)
+	if err := c.do(ctx, http.MethodGet, path, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// attachmentUploadData is the presigned S3 POST CreateAttachment hands back: UploadAttachmentFile
+// posts the file straight to url, with fields sent as form fields alongside it.
+type attachmentUploadData struct {
+	URL    string            `json:"url"`
+	Fields map[string]string `json:"fields"`
+}
+
+type createAttachmentResponse struct {
+	UploadData attachmentUploadData `json:"upload_data"`
+	AssetID    string               `json:"asset_id"`
+}
+
+// CreateAttachment is the first of three steps to attach a local file to a work item: it
+// registers the attachment and returns a presigned S3 upload (url + form fields) plus the
+// asset ID that identifies it from here on. It does not transfer the file itself — follow with
+// UploadAttachmentFile, then ConfirmAttachmentUploaded.
+func (c *Client) CreateAttachment(ctx context.Context, workspaceSlug, projectID, workItemID, name, mimeType string, size int64) (assetID, uploadURL string, uploadFields map[string]string, err error) {
+	var resp createAttachmentResponse
+	path := fmt.Sprintf("/api/v1/workspaces/%s/projects/%s/work-items/%s/attachments/", workspaceSlug, projectID, workItemID)
+	body := map[string]any{"name": name, "type": mimeType, "size": size}
+	if err := c.do(ctx, http.MethodPost, path, nil, body, &resp); err != nil {
+		return "", "", nil, err
+	}
+	return resp.AssetID, resp.UploadData.URL, resp.UploadData.Fields, nil
+}
+
+// UploadAttachmentFile is the second step (see CreateAttachment): it posts a local file's
+// bytes to the presigned S3 URL/fields CreateAttachment returned. This bypasses Client.do — it
+// is a different host, authenticated by the presigned fields rather than the API token, and
+// multipart/form-data rather than JSON.
+func (c *Client) UploadAttachmentFile(ctx context.Context, uploadURL string, fields map[string]string, filePath, mimeType string) error {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	for k, v := range fields {
+		if err := w.WriteField(k, v); err != nil {
+			return err
+		}
+	}
+	part, err := w.CreateFormFile("file", filepath.Base(filePath))
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(part, f); err != nil {
+		return err
+	}
+	_ = mimeType // the presigned policy's Content-Type field (in fields) governs, not this header
+	if err := w.Close(); err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, uploadURL, &buf)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return fmt.Errorf("upload to storage failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("upload to storage: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
+// ConfirmAttachmentUploaded is the third and final step (see CreateAttachment): without it the
+// attachment stays invisible to ListAttachments (its is_uploaded flag stays false).
+func (c *Client) ConfirmAttachmentUploaded(ctx context.Context, workspaceSlug, projectID, workItemID, assetID string) error {
+	path := fmt.Sprintf("/api/v1/workspaces/%s/projects/%s/work-items/%s/attachments/%s/", workspaceSlug, projectID, workItemID, assetID)
+	return c.do(ctx, http.MethodPatch, path, nil, map[string]any{"is_uploaded": true}, nil)
+}
+
+// DownloadAttachment fetches an attachment's file content. The attachment endpoint itself
+// responds with a redirect to a presigned download URL rather than the bytes, so this follows
+// that redirect manually instead of relying on Client.HTTP's default redirect policy: the
+// presigned URL is a different host, and forwarding the API token onto it is both unnecessary
+// and, depending on how the storage backend treats unexpected headers, can invalidate the
+// signature.
+func (c *Client) DownloadAttachment(ctx context.Context, workspaceSlug, projectID, workItemID, assetID string) ([]byte, error) {
+	path := fmt.Sprintf("%s/api/v1/workspaces/%s/projects/%s/work-items/%s/attachments/%s/", c.BaseURL, workspaceSlug, projectID, workItemID, assetID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Api-Key", c.Token)
+
+	noRedirect := *c.HTTP
+	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := noRedirect.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GET %s failed: %w", path, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 300 || resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("GET %s: %s: %s", path, resp.Status, strings.TrimSpace(string(body)))
+		}
+		return body, nil
+	}
+
+	loc := resp.Header.Get("Location")
+	if loc == "" {
+		return nil, fmt.Errorf("download attachment: redirect with no Location header")
+	}
+	downloadReq, err := http.NewRequestWithContext(ctx, http.MethodGet, loc, nil)
+	if err != nil {
+		return nil, err
+	}
+	downloadResp, err := c.HTTP.Do(downloadReq)
+	if err != nil {
+		return nil, fmt.Errorf("download attachment: %w", err)
+	}
+	defer downloadResp.Body.Close()
+	if downloadResp.StatusCode < 200 || downloadResp.StatusCode >= 300 {
+		return nil, fmt.Errorf("download attachment: %s", downloadResp.Status)
+	}
+	return io.ReadAll(downloadResp.Body)
 }
 
 // listAllPerPage is the page size every listAllQuery request asks for. It has to stay fixed

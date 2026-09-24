@@ -357,12 +357,16 @@ func TestShouldSkipRefresh(t *testing.T) {
 		t.Fatal("an idle board must refresh")
 	}
 	cases := map[string]func(*Model){
-		"initial load":           func(m *Model) { m.loading = true },
-		"already refreshing":     func(m *Model) { m.refreshing = true },
-		"paging in items":        func(m *Model) { m.itemsLoadingMore = true },
-		"picker open":            func(m *Model) { m.pickerOpen = "state" },
-		"filter open":            func(m *Model) { m.filterOpen = "label" },
-		"id prompt open":         func(m *Model) { m.idPromptOpen = true },
+		"initial load":       func(m *Model) { m.loading = true },
+		"already refreshing": func(m *Model) { m.refreshing = true },
+		"paging in items":    func(m *Model) { m.itemsLoadingMore = true },
+		"picker open":        func(m *Model) { m.pickerOpen = "state" },
+		"filter open":        func(m *Model) { m.filterOpen = "label" },
+		"id prompt open":     func(m *Model) { m.idPromptOpen = true },
+		"color prompt open":  func(m *Model) { m.colorPromptOpen = true },
+		"attach path prompt open": func(m *Model) {
+			m.attachPathPromptOpen = true
+		},
 		"on the projects screen": func(m *Model) { m.screen = screenProjects },
 	}
 	for name, setup := range cases {

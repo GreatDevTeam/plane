@@ -16,8 +16,9 @@ import (
 type detailPane int
 
 const (
-	// detailPaneComments is the default: j/k move the comment cursor, exactly as before the
-	// screen had any scrolling, and the comments pane auto-scrolls to keep it in view.
+	// detailPaneComments is the default: j/k scroll the comments pane one line at a time,
+	// independently of which comment is focused; n/p jump the focus itself to the next/previous
+	// comment and scroll it fully into view.
 	detailPaneComments detailPane = iota
 	// detailPaneDescription: j/k instead scroll the description pane by one line.
 	detailPaneDescription
@@ -28,6 +29,9 @@ const (
 const minPaneRows = 3
 
 func (m Model) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.attachPathPromptOpen {
+		return m.updateAttachPathPrompt(msg)
+	}
 	if m.pickerOpen != "" {
 		return m.updatePicker(msg)
 	}
@@ -82,17 +86,29 @@ func (m Model) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		if m.detailFocus == detailPaneDescription {
 			m.scrollDescription(-1)
-		} else if m.commentCursor > 0 {
-			m.commentCursor--
-			m.scrollCommentsToCursor()
+		} else {
+			m.scrollComments(-1)
 		}
 	case "down", "j":
 		if m.detailFocus == detailPaneDescription {
 			m.scrollDescription(1)
-		} else if m.commentCursor < len(m.comments)-1 {
+		} else {
+			m.scrollComments(1)
+		}
+	case "n":
+		if m.detailFocus == detailPaneComments && m.commentCursor < len(m.comments)-1 {
 			m.commentCursor++
 			m.scrollCommentsToCursor()
 		}
+	case "p":
+		if m.detailFocus == detailPaneComments && m.commentCursor > 0 {
+			m.commentCursor--
+			m.scrollCommentsToCursor()
+		}
+	case "o":
+		return m.openFocusedLinks()
+	case "f":
+		return m.openAttachmentsPicker()
 	}
 	return m, nil
 }
@@ -362,8 +378,9 @@ func formatTimestamp(s string) string {
 // wrap them at a word boundary rather than letting the terminal split one mid-hint.
 var detailHints = [][2]string{
 	{"s", "state"}, {"y", "priority"}, {"A", "assignee"}, {"T", "labels"}, {"d", "description"}, {"g", "parent"},
-	{"S", "sub-tasks"}, {"u", "copy url"}, {"tab", "switch pane"}, {"j/k", "scroll"}, {"c", "add comment"},
-	{"e", "edit comment"}, {"r", "refresh"}, {"esc", "back"}, {"q", "quit"},
+	{"S", "sub-tasks"}, {"u", "copy url"}, {"tab", "switch pane"}, {"j/k", "scroll"}, {"n/p", "next/prev comment"},
+	{"o", "open link"}, {"f", "attachments"}, {"c", "add comment"}, {"e", "edit comment"}, {"r", "refresh"},
+	{"esc", "back"}, {"q", "quit"},
 }
 
 func (m Model) viewDetail() string {
@@ -511,7 +528,7 @@ func (m Model) detailLayout() (width, descRows, commentsRows int) {
 // detail screen's own keys do nothing while one is up — so they take priority over the two
 // panes when the terminal is too short for everything (see minPaneRows).
 func (m Model) overlayOpen() bool {
-	return m.pickerOpen != "" || m.editorOn
+	return m.pickerOpen != "" || m.editorOn || m.attachPathPromptOpen
 }
 
 // minPaneRows is the fewest rows each detail pane is squeezed to. With an overlay open that
@@ -556,11 +573,11 @@ func (m Model) detailBottom(width int) string {
 		bottom = focusedInputStyle.Render(columnHeaderStyle.Render(title) + "\n" + m.editor.View() + "\n" +
 			helpStyle.Render("ctrl+s  save    esc  cancel"))
 	} else {
-		// A picker is modal: every key in detailHints is inactive while one is open, and the
-		// picker carries its own hint row, so the screen's hints go — which on a short
-		// terminal is also what buys the picker the rows it needs to be drawn whole.
+		// A picker (or the attach-file prompt) is modal: every key in detailHints is inactive
+		// while one is open, and it carries its own hint row, so the screen's hints go — which
+		// on a short terminal is also what buys it the rows it needs to be drawn whole.
 		hint := ""
-		if m.pickerOpen == "" {
+		if m.pickerOpen == "" && !m.attachPathPromptOpen {
 			hint = packHints(detailHints, width)
 		}
 		if loader := m.detailLoader(); loader != "" {
@@ -573,6 +590,9 @@ func (m Model) detailBottom(width int) string {
 	}
 	if m.pickerOpen != "" {
 		bottom += "\n\n" + m.viewPicker()
+	}
+	if m.attachPathPromptOpen {
+		bottom += "\n\n" + m.viewAttachPathPrompt()
 	}
 	return bottom
 }
@@ -677,6 +697,25 @@ func (m *Model) scrollDescription(n int) {
 		m.descViewport.ScrollDown(n)
 	} else {
 		m.descViewport.ScrollUp(-n)
+	}
+}
+
+// scrollComments moves the comments pane's own scroll position by n lines, independently of
+// which comment is focused — j/k while the comments pane has focus, so a comment longer than
+// the pane can be read a line at a time. n/p (see updateDetail) are what move commentCursor and
+// jump straight to the next/previous comment instead.
+func (m *Model) scrollComments(n int) {
+	if m.detailItem == nil {
+		return
+	}
+	width, _, commentsRows := m.detailLayout()
+	content, _, _ := m.commentsContent(width)
+	m.commentsViewport.Width, m.commentsViewport.Height = width, commentsRows
+	m.commentsViewport.SetContent(content)
+	if n > 0 {
+		m.commentsViewport.ScrollDown(n)
+	} else {
+		m.commentsViewport.ScrollUp(-n)
 	}
 }
 

@@ -141,6 +141,9 @@ func (m Model) shouldSkipRefresh() bool {
 	if m.editorOn || m.pickerOpen != "" || m.filterOpen != "" || m.idPromptOpen {
 		return true
 	}
+	if m.colorPromptOpen || m.attachPathPromptOpen {
+		return true
+	}
 	return false
 }
 
@@ -374,6 +377,9 @@ func (m Model) findState(id string) *api.State {
 }
 
 func (m Model) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.colorPromptOpen {
+		return m.updateColorPrompt(msg)
+	}
 	if m.pickerOpen != "" {
 		return m.updatePicker(msg)
 	}
@@ -426,6 +432,8 @@ func (m Model) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, refreshBoard(m.client, m.workspaceSlug, m.project.ID)
 	case "x":
 		return m.toggleHiddenColumn()
+	case "C":
+		m.openColorTargetPicker()
 	case "o":
 		m.openSortPicker()
 	case "n":
@@ -746,6 +754,9 @@ func (m Model) viewBoard() string {
 	if m.idPromptOpen {
 		overlay += "\n\n" + m.viewIDPrompt()
 	}
+	if m.colorPromptOpen {
+		overlay += "\n\n" + m.viewColorPrompt()
+	}
 
 	// Everything on screen that is not a card row: the header and its blank line, the blank
 	// line above the footer, the footer itself, any overlay, and each column's own top
@@ -930,8 +941,8 @@ var boardHints = [][2]string{
 	{"h/l", "column"}, {"j/k", "card"}, {"enter", "open"}, {"s", "state"}, {"y", "priority"},
 	{"A", "assignee"}, {"T", "labels"}, {"a", "filter assignee"}, {"L", "filter label"},
 	{"S", "filter state"}, {"Y", "filter priority"}, {"u", "copy url"},
-	{"g", "open by id"}, {"o", "order"}, {"n", "new item"}, {"x", "hide col"}, {"r", "refresh"},
-	{"p", "boards"}, {"q", "quit"},
+	{"g", "open by id"}, {"o", "order"}, {"n", "new item"}, {"x", "hide col"}, {"C", "colors"},
+	{"r", "refresh"}, {"p", "boards"}, {"q", "quit"},
 }
 
 // packHints joins hint key/description pairs into as few lines as fit within width, styling
@@ -1072,7 +1083,7 @@ func (m Model) renderColumn(ci, colWidth, maxRows int) string {
 	// The header is tinted with the state's own (pastelized) color so a column reads as
 	// which state it is at a glance; the focused column additionally gets an underline,
 	// rather than losing its color to swap to the plain focus style.
-	headerStyle := columnHeaderStyle.Foreground(pastelStateColor(st.Color))
+	headerStyle := columnHeaderStyle.Foreground(pastelStateColor(m.effectiveStateColor(st)))
 	if ci == m.focusedCol {
 		headerStyle = headerStyle.Underline(true)
 	}
@@ -1228,7 +1239,7 @@ func (m Model) labelNames(ids []string, selected bool) []string {
 				if selected {
 					names = append(names, l.Name)
 				} else {
-					names = append(names, labelText(l.Name, l.Color))
+					names = append(names, labelText(l.Name, m.effectiveLabelColor(l)))
 				}
 				break
 			}

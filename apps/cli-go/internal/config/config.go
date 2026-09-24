@@ -23,6 +23,43 @@ type Config struct {
 	// SortMode is the board's card ordering (see tui.SortModes); "" means the order the
 	// API returned the items in.
 	SortMode string `json:"sort_mode,omitempty"`
+
+	// StateColors/LabelColors override the swatch color a state/label is rendered in, per
+	// project, keyed by project ID -> state/label ID -> "#rrggbb". Local display preference
+	// only — it never changes the color stored on the state/label in Plane itself.
+	StateColors map[string]map[string]string `json:"state_colors,omitempty"`
+	LabelColors map[string]map[string]string `json:"label_colors,omitempty"`
+}
+
+// StateColorFor returns the local override color for a state, or "" when none is set.
+func (c Config) StateColorFor(projectID, stateID string) string {
+	return c.StateColors[projectID][stateID]
+}
+
+// LabelColorFor returns the local override color for a label, or "" when none is set.
+func (c Config) LabelColorFor(projectID, labelID string) string {
+	return c.LabelColors[projectID][labelID]
+}
+
+// SetStateColor records a local override color for a state (hex, e.g. "#ff8800").
+func (c *Config) SetStateColor(projectID, stateID, hex string) {
+	setNestedColor(&c.StateColors, projectID, stateID, hex)
+}
+
+// SetLabelColor records a local override color for a label (hex, e.g. "#ff8800").
+func (c *Config) SetLabelColor(projectID, labelID, hex string) {
+	setNestedColor(&c.LabelColors, projectID, labelID, hex)
+}
+
+// setNestedColor sets m[projectID][id] = hex, allocating either map as needed.
+func setNestedColor(m *map[string]map[string]string, projectID, id, hex string) {
+	if *m == nil {
+		*m = make(map[string]map[string]string)
+	}
+	if (*m)[projectID] == nil {
+		(*m)[projectID] = make(map[string]string)
+	}
+	(*m)[projectID][id] = hex
 }
 
 // HiddenStatesFor returns the collapsed state IDs of one project as a set.
