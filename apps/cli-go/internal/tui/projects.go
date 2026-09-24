@@ -28,10 +28,13 @@ func (m Model) updateProjects(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = true
 		m.status = "Loading board..."
 		m.screen = screenBoard
-		return m, tea.Batch(
-			fetchBoard(m.client, m.workspaceSlug, m.project.ID),
-			fetchBoardExtras(m.client, m.workspaceSlug, m.project.ID),
-		)
+		cmds := []tea.Cmd{fetchBoard(m.client, m.workspaceSlug, m.project.ID)}
+		// A project already visited this session keeps its cached labels/members (see
+		// extrasCache) until they go stale, rather than re-fetching on every reopen.
+		if m.extrasStale(m.project.ID) {
+			cmds = append(cmds, fetchBoardExtras(m.client, m.workspaceSlug, m.project.ID))
+		}
+		return m, tea.Batch(cmds...)
 	}
 	return m, nil
 }

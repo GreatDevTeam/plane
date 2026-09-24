@@ -1353,7 +1353,7 @@ class IssueCommentListCreateAPIEndpoint(BaseAPIView):
                     )
                 )
             )
-            .order_by(self.kwargs.get("order_by", "-created_at"))
+            .order_by(self.request.GET.get("order_by", "-created_at"))
             .distinct()
         )
 

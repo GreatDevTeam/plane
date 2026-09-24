@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/makeplane/plane/apps/cli-go/internal/api"
+	"github.com/muesli/termenv"
 )
 
 func TestColumnItemsFiltersByAssigneeAndLabel(t *testing.T) {
@@ -395,7 +397,7 @@ func TestCardLinesFitInsideCard(t *testing.T) {
 	for _, cardWidth := range []int{6, 10, 18, 28, 38, 100} {
 		for i, name := range longNames {
 			it := api.WorkItem{SequenceID: 100000 + i, Name: name}
-			lines := m.cardLines(it, cardWidth)
+			lines := m.cardLines(it, cardWidth, false)
 			if len(lines) != cardRows {
 				t.Fatalf("cardLines(%q, cardWidth=%d) returned %d lines, want %d", name, cardWidth, len(lines), cardRows)
 			}
@@ -417,7 +419,7 @@ func TestCardLinesFitInsideCard(t *testing.T) {
 func TestCardLinesFlattensMultilineNames(t *testing.T) {
 	m := Model{}
 	it := api.WorkItem{SequenceID: 42, Name: "first line\nsecond line"}
-	for _, line := range m.cardLines(it, 40) {
+	for _, line := range m.cardLines(it, 40, false) {
 		if strings.ContainsAny(line, "\n\r\t") {
 			t.Errorf("cardLines kept a line break: %q", line)
 		}
@@ -429,13 +431,46 @@ func TestCardLinesFlattensMultilineNames(t *testing.T) {
 func TestCardLinesShowsLabelsAndPriority(t *testing.T) {
 	m := Model{labels: []api.Label{{ID: "l1", Name: "bug"}, {ID: "l2", Name: "backend"}}}
 	it := api.WorkItem{SequenceID: 1, Name: "x", Priority: "urgent", Labels: []string{"l1", "l2"}}
-	lines := m.cardLines(it, 60)
+	lines := m.cardLines(it, 60, false)
 	meta := lines[2]
 	if !strings.Contains(meta, "urgent") {
 		t.Errorf("meta line %q does not mention the priority", meta)
 	}
 	if !strings.Contains(meta, "bug") || !strings.Contains(meta, "backend") {
 		t.Errorf("meta line %q does not mention both labels", meta)
+	}
+}
+
+// TestCardLinesSelectedCardCarriesNoNestedStyling guards the highlight bug: cardNumberStyle,
+// priorityLabel and labelText each call lipgloss.Style.Render, which always ends with a reset
+// escape sequence that is not scoped to that call's own substring — nested inside a selected
+// card (wrapped in cardSelectedStyle by renderColumn), that reset silently cancelled the outer
+// background/foreground for the rest of the line. selected=true must render every line with no
+// embedded ANSI codes at all, so cardSelectedStyle's own wrap is the only styling applied and
+// the highlight carries the whole card uninterrupted.
+func TestCardLinesSelectedCardCarriesNoNestedStyling(t *testing.T) {
+	// go test runs with no TTY, so lipgloss's auto-detected color profile disables ANSI output
+	// entirely — force one on so this test actually exercises the styling it is checking for.
+	prev := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(prev)
+
+	m := Model{labels: []api.Label{{ID: "l1", Name: "bug", Color: "#f59e0b"}}}
+	it := api.WorkItem{SequenceID: 123, Name: "some title", Priority: "urgent", Labels: []string{"l1"}}
+	for _, line := range m.cardLines(it, 60, true) {
+		if strings.ContainsRune(line, '\x1b') {
+			t.Errorf("selected cardLines line %q contains an embedded ANSI escape, which would break the outer highlight", line)
+		}
+	}
+	// The unselected card is unaffected: it still carries the per-segment colors.
+	var sawEscape bool
+	for _, line := range m.cardLines(it, 60, false) {
+		if strings.ContainsRune(line, '\x1b') {
+			sawEscape = true
+		}
+	}
+	if !sawEscape {
+		t.Error("unselected cardLines lost its per-segment styling (priority/labels)")
 	}
 }
 
@@ -604,5 +639,82 @@ func TestIDPromptReportsNotFoundAndEscCancels(t *testing.T) {
 	}
 	if m.screen == screenDetail {
 		t.Error("esc must not open anything")
+	}
+}
+
+// TestApplyBoardExtrasCachesPerProjectAndIgnoresStaleAnswers covers the assignee-picker bug:
+// members (and labels) used to be wiped to nil on every board load and re-fetched from
+// scratch, so a slow request, a transient error (fetchBoardExtras discards ListMembers'
+// error), or simply the request still being in flight left the picker empty. applyBoardExtras
+// must instead remember the last answer per project (extrasCache) and only apply an incoming
+// one to the model when it is still for the project on screen.
+func TestApplyBoardExtrasCachesPerProjectAndIgnoresStaleAnswers(t *testing.T) {
+	m := boardFixture(1, 1, 120, 40)
+	m.project.ID = "proj-a"
+	members := []api.Member{{ID: "u1", DisplayName: "jane"}}
+
+	m.applyBoardExtras(boardExtrasMsg{projectID: "proj-a", members: members})
+	if len(m.members) != 1 || m.members[0].ID != "u1" {
+		t.Fatalf("members = %+v, want the fetched answer applied", m.members)
+	}
+	if entry, ok := m.extrasCache["proj-a"]; !ok || len(entry.members) != 1 {
+		t.Errorf("extrasCache[proj-a] = %+v, want the answer cached", entry)
+	}
+
+	// The user switches to another project before a second, slower answer for proj-a lands.
+	m.project.ID = "proj-b"
+	m.members = nil
+	m.applyBoardExtras(boardExtrasMsg{projectID: "proj-a", members: []api.Member{{ID: "u2"}}})
+	if m.members != nil {
+		t.Errorf("a stale answer for a project the user left overwrote members on screen: %+v", m.members)
+	}
+	// It still updates the cache, so proj-a shows the newer copy next time it is opened.
+	if entry := m.extrasCache["proj-a"]; len(entry.members) != 1 || entry.members[0].ID != "u2" {
+		t.Errorf("extrasCache[proj-a] did not pick up the newer answer: %+v", entry)
+	}
+}
+
+// TestExtrasStale covers the 5-minute refresh floor: missing or old enough to need a refetch,
+// fresh enough not to.
+func TestExtrasStale(t *testing.T) {
+	m := boardFixture(1, 1, 120, 40)
+	m.project.ID = "proj-a"
+	if !m.extrasStale("proj-a") {
+		t.Error("a project with no cache entry at all must be reported stale")
+	}
+
+	m.applyBoardExtras(boardExtrasMsg{projectID: "proj-a", members: []api.Member{{ID: "u1"}}})
+	if m.extrasStale("proj-a") {
+		t.Error("a just-fetched cache entry must not be reported stale")
+	}
+
+	entry := m.extrasCache["proj-a"]
+	entry.fetchedAt = time.Now().Add(-extrasCacheTTL - time.Second)
+	m.extrasCache["proj-a"] = entry
+	if !m.extrasStale("proj-a") {
+		t.Error("a cache entry older than extrasCacheTTL must be reported stale")
+	}
+}
+
+// TestHandleBoardDataUsesCachedExtrasImmediately covers reopening a project already visited
+// this session: the assignee/label pickers must show its last-known members/labels straight
+// away rather than going empty until a fresh fetch lands.
+func TestHandleBoardDataUsesCachedExtrasImmediately(t *testing.T) {
+	m := boardFixture(1, 1, 120, 40)
+	m.project = api.Project{ID: "proj-a"}
+	m.applyBoardExtras(boardExtrasMsg{
+		projectID: "proj-a",
+		members:   []api.Member{{ID: "u1", DisplayName: "jane"}},
+		labels:    []api.Label{{ID: "l1", Name: "bug"}},
+	})
+	m.members, m.labels = nil, nil // simulate the reset a prior board load left behind
+
+	next, _ := m.handleBoardData(boardDataMsg{states: []api.State{{ID: "s1"}}})
+	m = next.(Model)
+	if len(m.members) != 1 || m.members[0].ID != "u1" {
+		t.Errorf("members = %+v, want the cached entry applied on reopen", m.members)
+	}
+	if len(m.labels) != 1 || m.labels[0].ID != "l1" {
+		t.Errorf("labels = %+v, want the cached entry applied on reopen", m.labels)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -26,10 +27,16 @@ func (m Model) handleBoardData(msg boardDataMsg) (tea.Model, tea.Cmd) {
 	m.items = msg.items
 	m.itemsNextCursor = msg.nextCursor
 	// A new board's labels/members are fetched separately (fetchBoardExtras, batched
-	// alongside fetchBoard by updateProjects) so they never delay this render; the previous
-	// project's copies are dropped here rather than left on screen until the new ones land.
-	m.labels = nil
-	m.members = nil
+	// alongside fetchBoard by updateProjects) so they never delay this render. A project
+	// visited earlier this session shows its cached copy straight away instead of going blank
+	// until a fresh one lands — see extrasCache and the assignee-picker bug that motivated it.
+	if entry, ok := m.extrasCache[m.project.ID]; ok {
+		m.labels = entry.labels
+		m.members = entry.members
+	} else {
+		m.labels = nil
+		m.members = nil
+	}
 	m.focusedCol = 0
 	m.colCursor = make([]int, len(m.states))
 	m.filterAssignee = ""
@@ -58,9 +65,38 @@ func (m Model) handleBoardData(msg boardDataMsg) (tea.Model, tea.Cmd) {
 // independently of boardDataMsg, so a slow labels/members request never blocks the board
 // itself from rendering (see fetchBoard).
 func (m Model) handleBoardExtras(msg boardExtrasMsg) (tea.Model, tea.Cmd) {
-	m.labels = msg.labels
-	m.members = msg.members
+	m.applyBoardExtras(msg)
 	return m, nil
+}
+
+// applyBoardExtras records a fetched labels/members answer in the per-project cache — so
+// switching back to this project later shows them immediately (see extrasCache) — and, only if
+// the user is still looking at that same project, applies it to the board on screen. Guarding
+// on msg.projectID matters because fetchBoardExtras can be in flight when the user switches
+// projects again: without it, a slow answer for the project they left would land on top of the
+// one they are now looking at.
+func (m *Model) applyBoardExtras(msg boardExtrasMsg) {
+	cache := make(map[string]extrasCacheEntry, len(m.extrasCache)+1)
+	for k, v := range m.extrasCache {
+		cache[k] = v
+	}
+	cache[msg.projectID] = extrasCacheEntry{labels: msg.labels, members: msg.members, fetchedAt: time.Now()}
+	m.extrasCache = cache
+	if msg.projectID == m.project.ID {
+		m.labels = msg.labels
+		m.members = msg.members
+	}
+}
+
+// extrasStale reports whether a project's cached labels/members are missing or older than
+// extrasCacheTTL, the cadence fetchBoardExtras is refreshed at outside of an explicit board
+// open (see handleBoardTick).
+func (m Model) extrasStale(projectID string) bool {
+	entry, ok := m.extrasCache[projectID]
+	if !ok {
+		return true
+	}
+	return time.Since(entry.fetchedAt) >= extrasCacheTTL
 }
 
 // handleBoardTick fires every boardRefreshInterval. It re-arms itself unconditionally, so
@@ -75,6 +111,13 @@ func (m Model) handleBoardTick(boardTickMsg) (tea.Model, tea.Cmd) {
 	}
 	m.refreshing = true
 	cmds := []tea.Cmd{refreshBoard(m.client, m.workspaceSlug, m.project.ID), boardTick()}
+	// Members (unlike labels, which refreshBoard already re-fetches every tick) have no other
+	// refresh path, so a permission error or a dropped response on the board's initial load
+	// used to leave the assignee picker empty for the rest of the session. Retrying here bounds
+	// that to extrasCacheTTL instead of never, without hitting the endpoint every 30s.
+	if m.extrasStale(m.project.ID) {
+		cmds = append(cmds, fetchBoardExtras(m.client, m.workspaceSlug, m.project.ID))
+	}
 	if m.screen == screenDetail && m.detailItem != nil {
 		m.commentsLoading = true
 		cmds = append(cmds, fetchComments(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID))
@@ -1035,8 +1078,9 @@ func (m Model) renderColumn(ci, colWidth, maxRows int) string {
 	}
 	out := headerStyle.Render(truncate(headerText, cardWidth)) + "\n"
 	for ii, it := range visible {
-		block := strings.Join(m.cardLines(it, cardWidth), "\n")
-		if ci == m.focusedCol && ii == cursor {
+		selected := ci == m.focusedCol && ii == cursor
+		block := strings.Join(m.cardLines(it, cardWidth, selected), "\n")
+		if selected {
 			out += cardSelectedStyle.Width(cardWidth).Render(block) + "\n"
 		} else {
 			out += cardStyle.Width(cardWidth).Render(block) + "\n"
@@ -1074,8 +1118,8 @@ func (m Model) renderCollapsedColumn(ci, maxRows int) string {
 		}
 		rows = append(rows, cell(string(r), hiddenColWidth))
 	}
-	// hiddenColumnStyle's light grey background (colorHiddenBg) is what marks this column as
-	// collapsed, rather than just its reduced width — see the task that asked for it.
+	// hiddenColumnStyle's own filled-in background (colorHiddenBg) is what marks this column
+	// as collapsed, rather than just its reduced width — see the task that asked for it.
 	return hiddenColumnStyle.Width(hiddenColWidth).Render(strings.Join(rows, "\n"))
 }
 
@@ -1092,7 +1136,17 @@ func cell(s string, width int) string {
 // cardLines is one card's text, sized to render on exactly cardRows rows inside a card of
 // cardWidth: the "#<id> <title>" prefix and title wrapped across the first two, clipped with
 // an ellipsis if the title still does not fit, and its labels/priority on the third.
-func (m Model) cardLines(it api.WorkItem, cardWidth int) []string {
+//
+// selected is true for the card under the cursor, which renderColumn goes on to wrap in
+// cardSelectedStyle's background. A lipgloss Style.Render call always ends its output with a
+// reset escape sequence, and that reset is not scoped to the styled substring — it turns off
+// every attribute for whatever comes after it on the same terminal line. cardNumberStyle here
+// and priorityLabel/labelText in cardMetaLine each make such a call, so nesting them inside a
+// selected card silently cancelled the outer highlight partway through line1 and line3 (the
+// card number and title read normally, one background color; the labels a different, unhighlighted
+// one). selected skips that inner coloring so the outer style's background/foreground carries
+// the whole line uninterrupted — the per-segment colors are what selection is trading away.
+func (m Model) cardLines(it api.WorkItem, cardWidth int, selected bool) []string {
 	avail := cardWidth - cardFrame
 	if avail < 1 {
 		avail = 1
@@ -1106,13 +1160,15 @@ func (m Model) cardLines(it api.WorkItem, cardWidth int) []string {
 	// is less than the whole prefix, so the split has to measure the real cut rather than
 	// assuming line1 starts with plainPrefix in full.
 	line1, rest := wrapLine(plainPrefix+title, avail)
-	prefixLen := len(plainPrefix)
-	if prefixLen > len(line1) {
-		prefixLen = len(line1)
+	if !selected {
+		prefixLen := len(plainPrefix)
+		if prefixLen > len(line1) {
+			prefixLen = len(line1)
+		}
+		line1 = cardNumberStyle.Render(line1[:prefixLen]) + line1[prefixLen:]
 	}
-	line1 = cardNumberStyle.Render(line1[:prefixLen]) + line1[prefixLen:]
 	line2 := truncate(strings.TrimSpace(rest), avail)
-	line3 := truncate(m.cardMetaLine(it), avail)
+	line3 := truncate(m.cardMetaLine(it, selected), avail)
 
 	return []string{line1, line2, line3}
 }
@@ -1139,24 +1195,29 @@ func wrapLine(s string, width int) (first, rest string) {
 // exactly cardRows rows — a fourth row would take a quarter of the cards off every column.
 // It sits ahead of the labels because it is structural: when the line has to be truncated,
 // what gets cut is the label list rather than the fact that the card has sub-tasks.
-func (m Model) cardMetaLine(it api.WorkItem) string {
+func (m Model) cardMetaLine(it api.WorkItem, selected bool) string {
 	var parts []string
 	if it.Priority != "" && it.Priority != "none" {
-		parts = append(parts, priorityLabel(it.Priority))
+		if selected {
+			parts = append(parts, priorityText(it.Priority))
+		} else {
+			parts = append(parts, priorityLabel(it.Priority))
+		}
 	}
 	if rel := m.cardRelations(it); rel != "" {
 		parts = append(parts, rel)
 	}
-	if names := m.labelNames(it.Labels); len(names) > 0 {
+	if names := m.labelNames(it.Labels, selected); len(names) > 0 {
 		parts = append(parts, strings.Join(names, ", "))
 	}
 	return strings.Join(parts, "  ")
 }
 
-// labelNames resolves label IDs to their names, each rendered in that label's own color (see
-// labelText) against the board's label list, dropping any ID the board does not (yet) know
-// about rather than showing a raw UUID.
-func (m Model) labelNames(ids []string) []string {
+// labelNames resolves label IDs to their names against the board's label list, dropping any ID
+// the board does not (yet) know about rather than showing a raw UUID. Each name is rendered in
+// that label's own color (see labelText) unless selected — see cardLines on why a selected
+// card's own background/foreground must not be interrupted by a nested style's reset.
+func (m Model) labelNames(ids []string, selected bool) []string {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -1164,7 +1225,11 @@ func (m Model) labelNames(ids []string) []string {
 	for _, id := range ids {
 		for _, l := range m.labels {
 			if l.ID == id {
-				names = append(names, labelText(l.Name, l.Color))
+				if selected {
+					names = append(names, l.Name)
+				} else {
+					names = append(names, labelText(l.Name, l.Color))
+				}
 				break
 			}
 		}

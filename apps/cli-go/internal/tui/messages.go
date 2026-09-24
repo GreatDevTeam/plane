@@ -96,10 +96,13 @@ func fetchBoard(client *api.Client, workspaceSlug, projectID string) tea.Cmd {
 }
 
 // boardExtrasMsg carries a board's labels and members — fetched apart from fetchBoard so they
-// never sit on the critical path of showing the board itself (see boardDataMsg).
+// never sit on the critical path of showing the board itself (see boardDataMsg). projectID is
+// which project this is for, so a slow answer that lands after the user has already switched
+// projects again is not mistaken for the one now on screen (see applyBoardExtras).
 type boardExtrasMsg struct {
-	labels  []api.Label
-	members []api.Member
+	projectID string
+	labels    []api.Label
+	members   []api.Member
 }
 
 // fetchBoardExtras fetches a board's labels and members. Best-effort: a project without
@@ -111,9 +114,23 @@ func fetchBoardExtras(client *api.Client, workspaceSlug, projectID string) tea.C
 		defer cancel()
 		labels, _ := client.ListLabels(ctx, workspaceSlug, projectID)
 		members, _ := client.ListMembers(ctx, workspaceSlug, projectID)
-		return boardExtrasMsg{labels: labels, members: members}
+		return boardExtrasMsg{projectID: projectID, labels: labels, members: members}
 	}
 }
+
+// extrasCacheEntry is one project's last-known labels/members plus when they were fetched —
+// see Model.extrasCache.
+type extrasCacheEntry struct {
+	labels    []api.Label
+	members   []api.Member
+	fetchedAt time.Time
+}
+
+// extrasCacheTTL is how stale a project's cached labels/members are allowed to get before a
+// board reopen or the 30s auto-refresh fetches a fresh copy — the assignee/label pickers still
+// show the cached copy immediately either way (see applyBoardExtras), this only bounds how
+// often the request itself goes out.
+const extrasCacheTTL = 5 * time.Minute
 
 type workItemUpdatedMsg struct {
 	item *api.WorkItem

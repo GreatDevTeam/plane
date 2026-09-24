@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/makeplane/plane/apps/cli-go/internal/api"
 )
 
 // detailPane identifies which of the detail screen's two independently scrollable panes
@@ -255,18 +256,58 @@ func (m Model) handleWorkItemLoaded(msg workItemLoadedMsg) (tea.Model, tea.Cmd) 
 }
 
 func (m Model) handleComments(msg commentsMsg) (tea.Model, tea.Cmd) {
+	// The 30s auto-refresh (handleBoardTick) re-fetches comments the same way opening the
+	// detail screen does, so this also runs every 30s while it is open. wasInitialLoad tells
+	// the two apart: openWorkItem clears m.comments to nil before firing the fetch, a
+	// background refresh does not.
+	wasInitialLoad := m.comments == nil
 	m.commentsLoading = false
 	if msg.err != nil {
 		m.setError(msg.err)
 		return m, nil
 	}
 	m.setError(nil)
+	if !wasInitialLoad && commentsEqual(m.comments, msg.items) {
+		// Nothing changed (no new/edited/deleted comment): leave the thread, the cursor and
+		// the scroll position exactly as they are rather than replacing them wholesale every
+		// 30s, which is what made the pane blink.
+		return m, nil
+	}
+	focusID := ""
+	if !wasInitialLoad && m.commentCursor >= 0 && m.commentCursor < len(m.comments) {
+		focusID = m.comments[m.commentCursor].ID
+	}
 	m.comments = msg.items
 	// Comments render oldest first, so the most recently active discussion is the last one —
-	// open the detail screen focused there rather than on the oldest comment.
+	// open the detail screen focused there rather than on the oldest comment. A background
+	// refresh instead keeps pointing at the same comment (by ID) the user was already on, when
+	// it is still there.
 	m.commentCursor = len(m.comments) - 1
+	if focusID != "" {
+		for i, cm := range m.comments {
+			if cm.ID == focusID {
+				m.commentCursor = i
+				break
+			}
+		}
+	}
 	m.scrollCommentsToCursor()
 	return m, nil
+}
+
+// commentsEqual reports whether two comment threads are identical — same comments, in the same
+// order, with the same text and edited-at timestamp. api.Comment is a plain string-only struct,
+// so its values compare with ==.
+func commentsEqual(a, b []api.Comment) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (m Model) handleCommentSaved(msg commentSavedMsg) (tea.Model, tea.Cmd) {
@@ -391,7 +432,7 @@ func (m Model) detailMeta(width int) string {
 // labelsLine is the meta block's "Labels:" value — the same label names a board card shows
 // on its meta line (see labelNames in board.go), comma-joined, or an em dash for none.
 func (m Model) labelsLine(ids []string) string {
-	names := m.labelNames(ids)
+	names := m.labelNames(ids, false)
 	if len(names) == 0 {
 		return "—"
 	}
@@ -553,7 +594,11 @@ func (m Model) descPaneContent(width int) string {
 // to width for the same reason descPaneContent is. It also reports the line range the
 // focused comment ends up on, so scrollCommentsToCursor can scroll it into view.
 func (m Model) commentsContent(width int) (content string, focusStart, focusEnd int) {
-	if m.commentsLoading {
+	// Only the initial fetch (no comments yet) shows the loading placeholder. The 30s
+	// auto-refresh also sets commentsLoading while it re-fetches, but the thread already on
+	// screen must stay put until handleComments actually has something different to show —
+	// otherwise this blanked the pane on every tick, blinking it even when nothing changed.
+	if m.commentsLoading && len(m.comments) == 0 {
 		return helpStyle.Render("Loading comments..."), 0, 0
 	}
 	if len(m.comments) == 0 {
