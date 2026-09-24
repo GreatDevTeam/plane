@@ -182,6 +182,13 @@ func (c *Client) UpdateComment(ctx context.Context, workspaceSlug, projectID, wo
 	return &cm, nil
 }
 
+// ListActivities returns a work item's activity/history log (field changes and its creation),
+// oldest first. Comments are a separate endpoint/model and never appear in this list.
+func (c *Client) ListActivities(ctx context.Context, workspaceSlug, projectID, workItemID string) ([]Activity, error) {
+	path := fmt.Sprintf("/api/v1/workspaces/%s/projects/%s/work-items/%s/activities/", workspaceSlug, projectID, workItemID)
+	return listAllQuery[Activity](ctx, c, path, url.Values{"order_by": {"created_at"}})
+}
+
 // ListLabels returns every label defined on the given project.
 func (c *Client) ListLabels(ctx context.Context, workspaceSlug, projectID string) ([]Label, error) {
 	return listAll[Label](ctx, c, fmt.Sprintf("/api/v1/workspaces/%s/projects/%s/labels/", workspaceSlug, projectID))

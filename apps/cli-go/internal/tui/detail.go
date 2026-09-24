@@ -127,6 +127,7 @@ func (m Model) refreshDetail() (tea.Model, tea.Cmd) {
 	return m, tea.Batch(
 		refreshBoard(m.client, m.workspaceSlug, m.project.ID),
 		fetchComments(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID),
+		fetchActivities(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID),
 		fetchAttachments(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID),
 	)
 }
@@ -219,12 +220,12 @@ func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "alt+enter":
-			if m.editorMode != "description" {
+			if m.editorMode != "description" && m.editorMode != "new-item-description" {
 				m.editor.InsertRune('\n')
 				return m, nil
 			}
 		case "enter":
-			if m.editorMode == "description" {
+			if m.editorMode == "description" || m.editorMode == "new-item-description" {
 				break
 			}
 			if m.editorMode == "new-item" {
@@ -249,6 +250,14 @@ func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, createComment(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID, html)
 		case "ctrl+s":
+			if m.editorMode == "new-item-description" {
+				// The item does not exist yet, so there is nothing to PATCH: the text just
+				// lands in m.newItemDescription for the review step (viewNewItemReview) to
+				// show, and updateNewItemReview's "enter" to send with the actual POST.
+				m.newItemDescription = plainToHTML(m.editor.Value())
+				m.closeEditor()
+				return m, nil
+			}
 			if m.editorMode != "description" || m.detailItem == nil {
 				return m, nil
 			}
@@ -277,13 +286,24 @@ func (m Model) handleWorkItemLoaded(msg workItemLoadedMsg) (tea.Model, tea.Cmd) 
 	m.setError(nil)
 	for i := range m.items {
 		if m.items[i].ID == msg.item.ID {
+			// This GET was fired the instant the card was opened (see openWorkItem) and can
+			// still be in flight when the user immediately changes state/priority/assignee/
+			// labels from the picker: that PATCH's own response (handleWorkItemUpdated) can
+			// land first and is authoritative, since it reflects a change this GET was issued
+			// before. Applying this GET's answer over it would silently revert the change —
+			// on the board and, if still open, the detail screen — until the next refresh.
+			// UpdatedAt is an RFC3339 timestamp, so a plain string compare orders it correctly
+			// (the same convention board.go's "updated-desc" sort already relies on).
+			if m.items[i].UpdatedAt > msg.item.UpdatedAt {
+				break
+			}
 			m.items[i] = *msg.item
 			break
 		}
 	}
 	// Only adopt it if the user is still looking at the same work item: by the time a slow
 	// request lands they may have gone back and opened a different card.
-	if m.detailItem != nil && m.detailItem.ID == msg.item.ID {
+	if m.detailItem != nil && m.detailItem.ID == msg.item.ID && m.detailItem.UpdatedAt <= msg.item.UpdatedAt {
 		m.detailItem = msg.item
 	}
 	return m, nil
@@ -411,7 +431,11 @@ func (m Model) viewDetail() string {
 
 	header, meta := m.detailHeader(), m.detailMeta(width)
 
-	descHeader, commentsHeader := "Description", fmt.Sprintf("Comments (%d)", len(m.comments))
+	descHeader := "Description"
+	commentsHeader := fmt.Sprintf("Comments (%d)", len(m.comments))
+	if len(m.activities) > 0 {
+		commentsHeader = fmt.Sprintf("Comments (%d) & Activity (%d)", len(m.comments), len(m.activities))
+	}
 	if m.detailFocus == detailPaneDescription {
 		descHeader, commentsHeader = columnHeaderFocusedStyle.Render(descHeader), columnHeaderStyle.Render(commentsHeader)
 	} else {
@@ -657,19 +681,23 @@ func (m Model) descPaneContent(width int) string {
 	return ansi.Wrap(desc, width, "")
 }
 
-// commentsContent renders the comment thread's body — everything but the "Comments (N)"
-// header, which stays outside the scrollable pane so it never scrolls out of view — wrapped
-// to width for the same reason descPaneContent is. It also reports the line range the
-// focused comment ends up on, so scrollCommentsToCursor can scroll it into view.
+// commentsContent renders the comment-and-activity thread's body — everything but the
+// "Comments (N)" header, which stays outside the scrollable pane so it never scrolls out of
+// view — wrapped to width for the same reason descPaneContent is. It also reports the line
+// range the focused comment ends up on, so scrollCommentsToCursor can scroll it into view.
+// Activity entries (state/priority/assignee/label changes, creation — see activities.go) are
+// interleaved with comments in timestamp order, both already oldest-first from the API, but are
+// read-only: commentCursor only ever indexes m.comments, so an activity is never focused,
+// editable, or counted toward the cursor's bounds.
 func (m Model) commentsContent(width int) (content string, focusStart, focusEnd int) {
-	// Only the initial fetch (no comments yet) shows the loading placeholder. The 30s
-	// auto-refresh also sets commentsLoading while it re-fetches, but the thread already on
-	// screen must stay put until handleComments actually has something different to show —
-	// otherwise this blanked the pane on every tick, blinking it even when nothing changed.
-	if m.commentsLoading && len(m.comments) == 0 {
+	// Only the initial fetch (nothing yet) shows the loading placeholder. The 30s auto-refresh
+	// also sets commentsLoading while it re-fetches, but the thread already on screen must stay
+	// put until handleComments actually has something different to show — otherwise this
+	// blanked the pane on every tick, blinking it even when nothing changed.
+	if m.commentsLoading && len(m.comments) == 0 && len(m.activities) == 0 {
 		return helpStyle.Render("Loading comments..."), 0, 0
 	}
-	if len(m.comments) == 0 {
+	if len(m.comments) == 0 && len(m.activities) == 0 {
 		return helpStyle.Render("No comments yet."), 0, 0
 	}
 	var b strings.Builder
@@ -680,27 +708,38 @@ func (m Model) commentsContent(width int) (content string, focusStart, focusEnd 
 		b.WriteString("\n")
 		line += strings.Count(wrapped, "\n") + 1
 	}
-	for i, cm := range m.comments {
-		start := line
-		header := fmt.Sprintf("%s  %s", m.memberName(cm.Actor), formatTimestamp(cm.CreatedAt))
-		if cm.EditedAt != "" {
-			header += "  (edited)"
+	ci, ai := 0, 0
+	for ci < len(m.comments) || ai < len(m.activities) {
+		if ai >= len(m.activities) || (ci < len(m.comments) && m.comments[ci].CreatedAt <= m.activities[ai].CreatedAt) {
+			i, cm := ci, m.comments[ci]
+			start := line
+			header := fmt.Sprintf("%s  %s", m.memberName(cm.Actor), formatTimestamp(cm.CreatedAt))
+			if cm.EditedAt != "" {
+				header += "  (edited)"
+			}
+			style := helpStyle
+			if i == m.commentCursor {
+				header = "> " + header
+				style = commentHeaderFocusedStyle
+			} else {
+				header = "  " + header
+			}
+			writeLine(style.Render(header))
+			body := formatRichText(cm.CommentHTML)
+			for _, l := range strings.Split(body, "\n") {
+				writeLine("    " + l)
+			}
+			if i == m.commentCursor {
+				focusStart, focusEnd = start, line-1
+			}
+			ci++
+			continue
 		}
-		style := helpStyle
-		if i == m.commentCursor {
-			header = "> " + header
-			style = commentHeaderFocusedStyle
-		} else {
-			header = "  " + header
-		}
-		writeLine(style.Render(header))
-		body := formatRichText(cm.CommentHTML)
-		for _, l := range strings.Split(body, "\n") {
-			writeLine("    " + l)
-		}
-		if i == m.commentCursor {
-			focusStart, focusEnd = start, line-1
-		}
+		a := m.activities[ai]
+		header := fmt.Sprintf("  %s  %s", m.memberName(a.Actor), formatTimestamp(a.CreatedAt))
+		writeLine(helpStyle.Render(header))
+		writeLine("    " + helpStyle.Render(activitySummary(a)))
+		ai++
 	}
 	return strings.TrimSuffix(b.String(), "\n"), focusStart, focusEnd
 }

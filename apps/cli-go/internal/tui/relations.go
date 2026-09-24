@@ -143,6 +143,7 @@ func (m Model) openWorkItem(it api.WorkItem) (tea.Model, tea.Cmd) {
 	m.comments = nil
 	m.commentCursor = 0
 	m.commentsLoading = true
+	m.activities = nil
 	m.detailLoading = true
 	m.attachments = nil
 	m.attachmentsLoading = true
@@ -152,6 +153,7 @@ func (m Model) openWorkItem(it api.WorkItem) (tea.Model, tea.Cmd) {
 	cmds := []tea.Cmd{
 		fetchWorkItem(m.client, m.workspaceSlug, m.project.ID, it.ID),
 		fetchComments(m.client, m.workspaceSlug, m.project.ID, it.ID),
+		fetchActivities(m.client, m.workspaceSlug, m.project.ID, it.ID),
 		fetchAttachments(m.client, m.workspaceSlug, m.project.ID, it.ID),
 	}
 	if cmd := m.fetchMissingParent(it); cmd != nil {

@@ -434,6 +434,7 @@ func (m Model) applyPickerEnter() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		patch = map[string]any{"state": opts[m.pickerIdx].ID}
+		m.status = "Changing state..."
 	case "assignee":
 		// ids starts non-nil (rather than a nil slice) so clearing the assignee PATCHes
 		// "assignees": [] — a nil slice marshals to JSON null, which is not the same
@@ -444,6 +445,17 @@ func (m Model) applyPickerEnter() (tea.Model, tea.Cmd) {
 			ids = []string{rows[m.pickerIdx]}
 		}
 		patch = map[string]any{"assignees": ids}
+		// Naming who it's being assigned to (rather than a generic "Updating...") is the
+		// status message's one chance to tell this apart, in the moment, from the board's own
+		// "a" key: that one only filters the board and never shows a status at all — pressing
+		// the wrong one and seeing "Assigning to Bob..." here says immediately that this PATCHed
+		// the card instead of filtering it, rather than leaving that to be inferred from the
+		// board looking unfiltered afterwards.
+		name := "Unassigned"
+		if len(ids) > 0 {
+			name = m.memberName(ids[0])
+		}
+		m.status = "Assigning to " + name + "..."
 	case "labels":
 		// ids starts non-nil for the same reason the assignee PATCH above does: a nil
 		// slice marshals to JSON null, and clearing every label needs to PATCH "labels":
@@ -456,10 +468,11 @@ func (m Model) applyPickerEnter() (tea.Model, tea.Cmd) {
 			}
 		}
 		patch = map[string]any{"labels": ids}
+		m.status = "Updating labels..."
 	default:
 		patch = map[string]any{"priority": api.Priorities[m.pickerIdx]}
+		m.status = "Changing priority..."
 	}
-	m.status = "Updating..."
 	return m, updateWorkItem(m.client, m.workspaceSlug, m.project.ID, item.ID, patch)
 }
 

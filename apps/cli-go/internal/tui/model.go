@@ -175,6 +175,11 @@ type Model struct {
 	commentsLoading bool
 	commentCursor   int
 
+	// activities is the work item's activity/history log (state/priority/assignee/label
+	// changes, its creation, ...), fetched alongside comments and merged into the same pane
+	// by commentsContent — see activities.go. Read-only: commentCursor never indexes into it.
+	activities []api.Activity
+
 	// descViewport and commentsViewport are the detail screen's two independently
 	// scrollable panes (see detailPaneRows/detailLayout in detail.go). detailFocus says
 	// which one j/k currently drives: within detailPaneComments that still moves
@@ -192,12 +197,13 @@ type Model struct {
 	// (editorMode == "new-item"), then creatingItem drives a review step — reusing the
 	// state/priority pickers plus a dedicated assignee one — where the user can change where
 	// it lands before the POST actually fires. See openNewItemEditor/updateNewItemReview.
-	creatingItem    bool
-	newItemName     string
-	newItemStateID  string
-	newItemPriority string
-	newItemAssignee string   // member ID, "" = unassigned
-	newItemLabels   []string // label IDs to create the item with
+	creatingItem       bool
+	newItemName        string
+	newItemDescription string // HTML, set via the review step's "d" editor; "" = none
+	newItemStateID     string
+	newItemPriority    string
+	newItemAssignee    string   // member ID, "" = unassigned
+	newItemLabels      []string // label IDs to create the item with
 
 	// idPromptOpen/idInput drive the board's "open by work item id" prompt (g): a bare
 	// numeric input, looked up against the board's own m.items (see updateIDPrompt).
@@ -320,6 +326,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleWorkItemUpdated(msg)
 	case commentsMsg:
 		return m.handleComments(msg)
+	case activitiesMsg:
+		return m.handleActivities(msg)
 	case commentSavedMsg:
 		return m.handleCommentSaved(msg)
 	case workItemCreatedMsg:
