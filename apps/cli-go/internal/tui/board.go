@@ -43,6 +43,7 @@ func (m Model) handleBoardData(msg boardDataMsg) (tea.Model, tea.Cmd) {
 	m.filterLabel = ""
 	m.filterState = ""
 	m.filterPriority = ""
+	m.titleSearch = ""
 	m.hiddenStates = m.cfg.HiddenStatesFor(m.project.ID)
 	m.screen = screenBoard
 
@@ -138,7 +139,7 @@ func (m Model) shouldSkipRefresh() bool {
 	if m.loading || m.refreshing || m.itemsLoadingMore {
 		return true
 	}
-	if m.editorOn || m.pickerOpen != "" || m.filterOpen != "" || m.idPromptOpen {
+	if m.editorOn || m.pickerOpen != "" || m.filterOpen != "" || m.idPromptOpen || m.titleSearchOpen {
 		return true
 	}
 	if m.colorPromptOpen || m.attachPathPromptOpen {
@@ -250,8 +251,11 @@ func (m Model) handleBoardItemsPage(msg boardItemsPageMsg) (tea.Model, tea.Cmd) 
 }
 
 // columnItems returns the work items in the given state that also pass the active
-// assignee/label/state/priority filters (see filter.go), ordered by the board's sort mode.
+// assignee/label/state/priority filters (see filter.go) and the title search (m.titleSearch,
+// see updateTitleSearch) — a plain case-insensitive substring match against the already-loaded
+// m.items, no API call — ordered by the board's sort mode.
 func (m Model) columnItems(stateID string) []api.WorkItem {
+	q := strings.ToLower(strings.TrimSpace(m.titleSearch))
 	var out []api.WorkItem
 	for _, it := range m.items {
 		if it.State != stateID {
@@ -267,6 +271,9 @@ func (m Model) columnItems(stateID string) []api.WorkItem {
 			continue
 		}
 		if m.filterPriority != "" && it.Priority != m.filterPriority {
+			continue
+		}
+		if q != "" && !strings.Contains(strings.ToLower(it.Name), q) {
 			continue
 		}
 		out = append(out, it)
@@ -395,6 +402,9 @@ func (m Model) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.idPromptOpen {
 		return m.updateIDPrompt(msg)
 	}
+	if m.titleSearchOpen {
+		return m.updateTitleSearch(msg)
+	}
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
@@ -466,6 +476,8 @@ func (m Model) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openFilterPicker("state")
 	case "Y":
 		m.openFilterPicker("priority")
+	case "/":
+		m.openTitleSearch()
 	case "u":
 		return m.copyItemURL(m.selectedItem())
 	case "g":
@@ -594,7 +606,11 @@ func (m Model) updateNewItemReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleWorkItemCreated applies the result of creating a work item from the board: on success
 // the new item is appended to m.items and the focused column's cursor moved onto it, the same
-// way handleCommentSaved updates local state after a create.
+// way handleCommentSaved updates local state after a create. The cursor is set to the new
+// item's actual position in columnItems' output rather than assumed to be last — columnItems
+// sorts (m.sortMode) and filters (assignee/label/state/priority filters, title search), any of
+// which can put the new item anywhere in the column, or filter it out of view entirely, in
+// which case the cursor is left at the top of the column instead of pointing past its end.
 func (m Model) handleWorkItemCreated(msg workItemCreatedMsg) (tea.Model, tea.Cmd) {
 	m.status = ""
 	m.closeEditor()
@@ -611,7 +627,14 @@ func (m Model) handleWorkItemCreated(msg workItemCreatedMsg) (tea.Model, tea.Cmd
 		}
 		m.focusedCol = i
 		if i < len(m.colCursor) {
-			m.colCursor[i] = len(m.columnItems(st.ID)) - 1
+			idx := 0
+			for j, it := range m.columnItems(st.ID) {
+				if it.ID == msg.item.ID {
+					idx = j
+					break
+				}
+			}
+			m.colCursor[i] = idx
 		}
 		break
 	}
@@ -705,6 +728,53 @@ func (m Model) viewIDPrompt() string {
 	return focusedInputStyle.Render(body)
 }
 
+// openTitleSearch opens the board's "/" title search box, pre-filled with whatever query is
+// already applied (so re-opening it to tweak a search does not lose it).
+func (m *Model) openTitleSearch() {
+	m.titleSearchInput.SetValue(m.titleSearch)
+	m.titleSearchInput.CursorEnd()
+	m.titleSearchInput.Focus()
+	m.titleSearchOpen = true
+}
+
+// updateTitleSearch drives the board's title search box: typing narrows every column, live, to
+// cards whose title contains the query (case-insensitive — see columnItems); enter keeps the
+// query applied and returns to board navigation, esc clears it and does the same. Like every
+// board filter this makes no API call of its own — it only narrows m.items, which the board
+// already has loaded ("simple, no api calls, only on loaded tasks").
+func (m Model) updateTitleSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
+		case "esc":
+			m.titleSearch = ""
+			m.titleSearchInput.Reset()
+			m.titleSearchInput.Blur()
+			m.titleSearchOpen = false
+			m.clampBoardCursors()
+			return m, nil
+		case "enter":
+			m.titleSearchInput.Blur()
+			m.titleSearchOpen = false
+			m.clampBoardCursors()
+			return m, nil
+		}
+	}
+	var cmd tea.Cmd
+	m.titleSearchInput, cmd = m.titleSearchInput.Update(msg)
+	m.titleSearch = m.titleSearchInput.Value()
+	// The query just narrowed (or widened) every column: pull each card cursor back inside its
+	// column the same way clampBoardCursors already does after a background refresh.
+	m.clampBoardCursors()
+	return m, cmd
+}
+
+// viewTitleSearch renders the board's title search box.
+func (m Model) viewTitleSearch() string {
+	body := columnHeaderStyle.Render("Search titles") + "\n" + m.titleSearchInput.View() + "\n" +
+		helpStyle.Render("type  filter cards    enter  keep    esc  clear")
+	return focusedInputStyle.Render(body)
+}
+
 func (m Model) viewBoard() string {
 	if m.loading {
 		return boardTitleStyle.Render(m.project.Name) + "\n\nLoading board...\n\n" + m.footer("")
@@ -725,6 +795,9 @@ func (m Model) viewBoard() string {
 	header := boardTitleStyle.Render(m.project.Name)
 	if f := m.activeFilterSummary(); f != "" {
 		header += "  " + helpStyle.Render(f)
+	}
+	if m.titleSearch != "" {
+		header += "  " + helpStyle.Render(fmt.Sprintf("search: %q", m.titleSearch))
 	}
 	if m.sortMode != "" && m.sortMode != sortDefault {
 		header += "  " + helpStyle.Render("sorted by "+sortModeLabel(m.sortMode))
@@ -761,6 +834,9 @@ func (m Model) viewBoard() string {
 	}
 	if m.idPromptOpen {
 		overlay += "\n\n" + m.viewIDPrompt()
+	}
+	if m.titleSearchOpen {
+		overlay += "\n\n" + m.viewTitleSearch()
 	}
 	if m.colorPromptOpen {
 		overlay += "\n\n" + m.viewColorPrompt()
@@ -948,7 +1024,7 @@ func clampLines(s string, width int) string {
 var boardHints = [][2]string{
 	{"h/l", "column"}, {"j/k", "card"}, {"enter", "open"}, {"s", "state"}, {"y", "priority"},
 	{"A", "assignee"}, {"T", "labels"}, {"a", "filter assignee"}, {"L", "filter label"},
-	{"S", "filter state"}, {"Y", "filter priority"}, {"u", "copy url"},
+	{"S", "filter state"}, {"Y", "filter priority"}, {"/", "search title"}, {"u", "copy url"},
 	{"g", "open by id"}, {"o", "order"}, {"n", "new item"}, {"x", "hide col"}, {"C", "colors"},
 	{"r", "refresh"}, {"p", "boards"}, {"q", "quit"},
 }
