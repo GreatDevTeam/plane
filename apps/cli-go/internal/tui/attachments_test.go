@@ -3,6 +3,7 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -24,6 +25,56 @@ func TestHumanSize(t *testing.T) {
 		if got := humanSize(c.n); got != c.want {
 			t.Errorf("humanSize(%d) = %q, want %q", c.n, got, c.want)
 		}
+	}
+}
+
+// TestOpenWorkItemPreloadsAttachments checks opening a work item (the board's enter, or a
+// parent/sub-task jump) also resets and re-fetches its attachments, not just its comments — so
+// the detail meta block's "Attachments:" line (attachmentLines) has something to show without
+// the user needing to press "f" first.
+func TestOpenWorkItemPreloadsAttachments(t *testing.T) {
+	m := relationsFixture(1)
+	m.client = api.New("http://example.invalid", "tok")
+	m.attachments = []api.Attachment{{ID: "stale"}}
+	m.attachmentsLoading = false
+
+	next, cmd := m.openWorkItem(m.items[0])
+	m = next.(Model)
+	if m.attachments != nil {
+		t.Errorf("attachments = %v, want reset to nil for the newly opened item", m.attachments)
+	}
+	if !m.attachmentsLoading {
+		t.Error("attachmentsLoading = false, want true while the fresh copy is in flight")
+	}
+	if cmd == nil {
+		t.Fatal("openWorkItem returned no command")
+	}
+}
+
+// TestAttachmentLinesReflectsState checks the detail meta block's "Attachments:" row: a loading
+// placeholder while the fetch is in flight, an em dash for none, and the list (name + size)
+// once some have landed — subTaskLines' equivalent for attachments.
+func TestAttachmentLinesReflectsState(t *testing.T) {
+	m := detailFixture()
+
+	m.attachmentsLoading = true
+	if got := m.attachmentLines(); len(got) != 1 || !strings.Contains(got[0], "loading") {
+		t.Fatalf("attachmentLines while loading = %v, want a single loading placeholder", got)
+	}
+
+	m.attachmentsLoading = false
+	m.attachments = nil
+	if got := m.attachmentLines(); len(got) != 1 || !strings.Contains(got[0], "—") {
+		t.Fatalf("attachmentLines with none = %v, want a single em-dash row", got)
+	}
+
+	att := api.Attachment{ID: "a1"}
+	att.Attributes.Name = "spec.pdf"
+	att.Attributes.Size = 2048
+	m.attachments = []api.Attachment{att}
+	got := m.attachmentLines()
+	if len(got) != 2 || !strings.Contains(got[0], "Attachments: 1") || !strings.Contains(got[1], "spec.pdf") {
+		t.Fatalf("attachmentLines with one attachment = %v, want a count row plus spec.pdf", got)
 	}
 }
 

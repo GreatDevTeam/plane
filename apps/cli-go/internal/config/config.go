@@ -29,6 +29,12 @@ type Config struct {
 	// only — it never changes the color stored on the state/label in Plane itself.
 	StateColors map[string]map[string]string `json:"state_colors,omitempty"`
 	LabelColors map[string]map[string]string `json:"label_colors,omitempty"`
+
+	// PriorityColors overrides a priority's swatch color, keyed directly by priority value
+	// ("urgent", "high", ...) -> "#rrggbb" — global rather than per-project like
+	// StateColors/LabelColors, since a work item's priority is a fixed enum (api.Priorities)
+	// shared by every project rather than project-specific data.
+	PriorityColors map[string]string `json:"priority_colors,omitempty"`
 }
 
 // StateColorFor returns the local override color for a state, or "" when none is set.
@@ -49,6 +55,19 @@ func (c *Config) SetStateColor(projectID, stateID, hex string) {
 // SetLabelColor records a local override color for a label (hex, e.g. "#ff8800").
 func (c *Config) SetLabelColor(projectID, labelID, hex string) {
 	setNestedColor(&c.LabelColors, projectID, labelID, hex)
+}
+
+// PriorityColorFor returns the local override color for a priority, or "" when none is set.
+func (c Config) PriorityColorFor(priority string) string {
+	return c.PriorityColors[priority]
+}
+
+// SetPriorityColor records a local override color for a priority (hex, e.g. "#ff8800").
+func (c *Config) SetPriorityColor(priority, hex string) {
+	if c.PriorityColors == nil {
+		c.PriorityColors = make(map[string]string)
+	}
+	c.PriorityColors[priority] = hex
 }
 
 // setNestedColor sets m[projectID][id] = hex, allocating either map as needed.

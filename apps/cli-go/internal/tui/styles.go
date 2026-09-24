@@ -82,14 +82,34 @@ var (
 	// draws the eye rather than competing equally with its own work item number.
 	cardNumberStyle = lipgloss.NewStyle().Foreground(colorMuted)
 
-	priorityStyles = map[string]lipgloss.Style{
-		"urgent": lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true),
-		"high":   lipgloss.NewStyle().Foreground(lipgloss.Color("208")),
-		"medium": lipgloss.NewStyle().Foreground(lipgloss.Color("220")),
-		"low":    lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
-		"none":   lipgloss.NewStyle().Foreground(colorMuted),
+	// priorityColorHex is each priority's built-in swatch color — the same colors
+	// priorityLabel rendered before a local override could replace them (196/208/220/39 in
+	// xterm-256, translated to their rgb hex so effectivePriorityColor has one color scale to
+	// deal with, override or not).
+	priorityColorHex = map[string]string{
+		"urgent": "#ff0000",
+		"high":   "#ff8700",
+		"medium": "#ffd700",
+		"low":    "#00afff",
+		"none":   "#767676",
 	}
 )
+
+// effectivePriorityColor is a priority's swatch color: the local override set on the color
+// settings screen (see openColorPrompt) if one exists, otherwise its built-in color — the same
+// fallback pattern effectiveStateColor/effectiveLabelColor follow.
+func (m Model) effectivePriorityColor(p string) string {
+	if p == "" {
+		p = "none"
+	}
+	if hex := m.cfg.PriorityColorFor(p); hex != "" {
+		return hex
+	}
+	if hex, ok := priorityColorHex[p]; ok {
+		return hex
+	}
+	return priorityColorHex["none"]
+}
 
 // effectiveStateColor is a state's swatch color: the local override set on the color settings
 // screen (see openColorPrompt) if one exists for this project, otherwise the state's own color
@@ -160,15 +180,19 @@ func labelText(name, hex string) string {
 	return lipgloss.NewStyle().Foreground(labelColor(hex)).Render(name)
 }
 
-func priorityLabel(p string) string {
-	if p == "" {
-		p = "none"
+// priorityLabel renders a priority's name in its own color (effectivePriorityColor), bold for
+// "urgent" the same way the built-in styles used to single it out before a local override could
+// replace them.
+func (m Model) priorityLabel(p string) string {
+	name := p
+	if name == "" {
+		name = "none"
 	}
-	style, ok := priorityStyles[p]
-	if !ok {
-		style = priorityStyles["none"]
+	style := lipgloss.NewStyle().Foreground(labelColor(m.effectivePriorityColor(name)))
+	if name == "urgent" {
+		style = style.Bold(true)
 	}
-	return style.Render(p)
+	return style.Render(name)
 }
 
 // priorityText is priorityLabel without the color — used on a selected board card, where the

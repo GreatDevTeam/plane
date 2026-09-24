@@ -107,7 +107,7 @@ func (m Model) stateName(id string) string {
 // item number and title, then its state and priority — showing those is the whole point of
 // listing a related item rather than just linking its title.
 func (m Model) relationSummary(it api.WorkItem) string {
-	return fmt.Sprintf("#%d %s  [%s · %s]", it.SequenceID, oneLine(it.Name), m.stateName(it.State), priorityLabel(it.Priority))
+	return fmt.Sprintf("#%d %s  [%s · %s]", it.SequenceID, oneLine(it.Name), m.stateName(it.State), m.priorityLabel(it.Priority))
 }
 
 // cardRelations is the compact parent/sub-task badge a board card carries on its meta line:
@@ -144,12 +144,15 @@ func (m Model) openWorkItem(it api.WorkItem) (tea.Model, tea.Cmd) {
 	m.commentCursor = 0
 	m.commentsLoading = true
 	m.detailLoading = true
+	m.attachments = nil
+	m.attachmentsLoading = true
 	m.pickerOpen = ""
 	m.resetDetailView()
 	m.screen = screenDetail
 	cmds := []tea.Cmd{
 		fetchWorkItem(m.client, m.workspaceSlug, m.project.ID, it.ID),
 		fetchComments(m.client, m.workspaceSlug, m.project.ID, it.ID),
+		fetchAttachments(m.client, m.workspaceSlug, m.project.ID, it.ID),
 	}
 	if cmd := m.fetchMissingParent(it); cmd != nil {
 		cmds = append(cmds, cmd)

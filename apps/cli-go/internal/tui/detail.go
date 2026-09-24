@@ -122,10 +122,12 @@ func (m Model) refreshDetail() (tea.Model, tea.Cmd) {
 	}
 	m.refreshing = true
 	m.commentsLoading = true
+	m.attachmentsLoading = true
 	m.status = "Refreshing..."
 	return m, tea.Batch(
 		refreshBoard(m.client, m.workspaceSlug, m.project.ID),
 		fetchComments(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID),
+		fetchAttachments(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID),
 	)
 }
 
@@ -199,8 +201,13 @@ func (m *Model) closeEditor() {
 	m.editor.Reset()
 }
 
-// updateEditor drives the shared textarea for a comment, a description, and a new work
-// item's title.
+// updateEditor drives the shared textarea for a comment, a description, and a new work item's
+// title. Comment and new-item submit on plain enter, with alt+enter to insert a newline instead
+// — bubbletea (no Kitty keyboard protocol support) cannot tell a real shift+enter from plain
+// enter on a standard terminal, so alt+enter (reliably reported, via ESC+CR) is the portable
+// stand-in. The description editor is unchanged: enter still inserts a newline there (falls
+// through to the textarea below) and ctrl+s still saves it — a multi-line body benefits from
+// plain enter being "just a newline" the way a short comment/title does not.
 func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
@@ -211,7 +218,15 @@ func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.resetNewItem()
 			}
 			return m, nil
-		case "ctrl+s":
+		case "alt+enter":
+			if m.editorMode != "description" {
+				m.editor.InsertRune('\n')
+				return m, nil
+			}
+		case "enter":
+			if m.editorMode == "description" {
+				break
+			}
 			if m.editorMode == "new-item" {
 				name := strings.TrimSpace(m.editor.Value())
 				if name == "" {
@@ -224,22 +239,25 @@ func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.detailItem == nil {
 				return m, nil
 			}
-			html := plainToHTML(m.editor.Value())
-			if m.editorMode == "description" {
-				// Clearing a description is a legitimate edit, unlike posting an empty
-				// comment, so this one is saved exactly as typed.
-				m.status = "Saving description..."
-				return m, updateWorkItem(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID,
-					map[string]any{"description_html": html})
-			}
 			if strings.TrimSpace(m.editor.Value()) == "" {
 				return m, nil
 			}
+			html := plainToHTML(m.editor.Value())
 			m.status = "Saving comment..."
 			if m.editingCommentID != "" {
 				return m, editComment(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID, m.editingCommentID, html)
 			}
 			return m, createComment(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID, html)
+		case "ctrl+s":
+			if m.editorMode != "description" || m.detailItem == nil {
+				return m, nil
+			}
+			// Clearing a description is a legitimate edit, unlike posting an empty comment,
+			// so this one is saved exactly as typed.
+			html := plainToHTML(m.editor.Value())
+			m.status = "Saving description..."
+			return m, updateWorkItem(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID,
+				map[string]any{"description_html": html})
 		}
 	}
 	var cmd tea.Cmd
@@ -437,12 +455,13 @@ func (m Model) detailMeta(width int) string {
 	item := m.detailItem
 	lines := []string{
 		"State:     " + m.stateName(item.State),
-		"Priority:  " + priorityLabel(item.Priority),
+		"Priority:  " + m.priorityLabel(item.Priority),
 		"Assignees: " + m.assigneeNames(item.Assignees),
 		"Labels:    " + m.labelsLine(item.Labels),
 		"Parent:    " + m.parentLine(),
 	}
 	lines = append(lines, m.subTaskLines()...)
+	lines = append(lines, m.attachmentLines()...)
 	return clampLines(strings.Join(lines, "\n"), width)
 }
 
@@ -492,6 +511,31 @@ func (m Model) subTaskLines() []string {
 			break
 		}
 		out = append(out, "           "+m.relationSummary(sub))
+	}
+	return out
+}
+
+// attachmentLines are the meta block's "Attachments:" row and the indented list under it —
+// subTaskLines' equivalent for attachments, preloaded whenever the item is opened or refreshed
+// (openWorkItem, refreshDetail) rather than only when the "f" picker opens, so the count/list
+// show up here without the user needing to open that picker first.
+func (m Model) attachmentLines() []string {
+	if m.attachmentsLoading {
+		return []string{"Attachments: " + helpStyle.Render("loading...")}
+	}
+	if len(m.attachments) == 0 {
+		return []string{"Attachments: —"}
+	}
+	out := []string{fmt.Sprintf("Attachments: %d  %s", len(m.attachments), helpStyle.Render("f to manage"))}
+	if m.pickerOpen != "" || m.editorOn {
+		return out
+	}
+	for i, att := range m.attachments {
+		if i >= maxInlineSubTasks {
+			out = append(out, helpStyle.Render(fmt.Sprintf("             … %d more", len(m.attachments)-maxInlineSubTasks)))
+			break
+		}
+		out = append(out, "             "+att.Name()+"  "+helpStyle.Render(humanSize(att.Size())))
 	}
 	return out
 }
@@ -570,8 +614,12 @@ func (m Model) detailBottom(width int) string {
 		case m.editingCommentID != "":
 			title = "Edit comment"
 		}
+		hint := "enter  save    alt+enter  new line    esc  cancel"
+		if m.editorMode == "description" {
+			hint = "ctrl+s  save    esc  cancel"
+		}
 		bottom = focusedInputStyle.Render(columnHeaderStyle.Render(title) + "\n" + m.editor.View() + "\n" +
-			helpStyle.Render("ctrl+s  save    esc  cancel"))
+			helpStyle.Render(hint))
 	} else {
 		// A picker (or the attach-file prompt) is modal: every key in detailHints is inactive
 		// while one is open, and it carries its own hint row, so the screen's hints go — which

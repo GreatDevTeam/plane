@@ -359,8 +359,42 @@ func TestDescriptionEditorCanClearADescription(t *testing.T) {
 	next, _ = m.openCommentEditor("")
 	m = next.(Model)
 	m.editor.SetValue("   ")
-	if _, cmd := m.updateEditor(tea.KeyMsg{Type: tea.KeyCtrlS}); cmd != nil {
+	if _, cmd := m.updateEditor(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
 		t.Error("an empty comment was posted")
+	}
+}
+
+// TestCommentEditorEnterSubmitsAltEnterInsertsNewline covers the comment/new-item editor's
+// submit key: plain enter saves (unlike the description editor, which keeps enter as a plain
+// newline and ctrl+s to save — see TestDescriptionEditor), and alt+enter inserts a literal
+// newline instead of submitting, the portable substitute for shift+enter this bubbletea version
+// cannot detect on a standard terminal (see updateEditor's doc comment).
+func TestCommentEditorEnterSubmitsAltEnterInsertsNewline(t *testing.T) {
+	m := detailFixture()
+	m.client = api.New("http://example.invalid", "token")
+	m.project = api.Project{ID: "proj-1"}
+
+	next, _ := m.openCommentEditor("")
+	m = next.(Model)
+	m.editor.SetValue("first line")
+
+	next, _ = m.updateEditor(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	m = next.(Model)
+	if !m.editorOn {
+		t.Fatal("alt+enter closed the editor instead of inserting a newline")
+	}
+	if got := m.editor.Value(); got != "first line\n" {
+		t.Fatalf("editor value after alt+enter = %q, want a trailing newline appended", got)
+	}
+
+	m.editor.SetValue("second line")
+	next, cmd := m.updateEditor(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("enter did not submit the comment")
+	}
+	if !strings.Contains(m.status, "Saving comment") {
+		t.Errorf("status = %q, want it to mention saving the comment", m.status)
 	}
 }
 
