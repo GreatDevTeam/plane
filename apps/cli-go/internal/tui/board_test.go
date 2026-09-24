@@ -97,7 +97,7 @@ func boardFixture(columns, items, width, height int) Model {
 }
 
 // TestOpenNewItemEditorAndCreate covers the whole "n" create-from-board flow: opening the
-// editor targets the focused column's state, ctrl+s on the title moves to the review step
+// editor targets the focused column's state, enter on the title moves to the review step
 // (state/priority/assignee, still changeable there), and enter on that step fires the create
 // and, once it comes back, appends the item to m.items and moves that column's cursor onto
 // it — the same local-state update handleCommentSaved does after posting a comment.
@@ -116,10 +116,10 @@ func TestOpenNewItemEditorAndCreate(t *testing.T) {
 	}
 
 	m.editor.SetValue("A new card")
-	next, _ = m.updateBoard(tea.KeyMsg{Type: tea.KeyCtrlS})
+	next, _ = m.updateBoard(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
 	if m.editorOn {
-		t.Fatal("ctrl+s on the title left the editor open instead of moving to the review step")
+		t.Fatal("enter on the title left the editor open instead of moving to the review step")
 	}
 	if !m.creatingItem || m.newItemName != "A new card" {
 		t.Fatalf("creatingItem=%v newItemName=%q, want the review step with the typed title", m.creatingItem, m.newItemName)
@@ -155,7 +155,7 @@ func TestOpenNewItemEditorAndCreate(t *testing.T) {
 	}
 }
 
-// TestNewItemReviewPickersChangeStatePriorityAssignee covers the review step's s/y/a pickers:
+// TestNewItemReviewPickersChangeStatePriorityAssignee covers the review step's s/y/a/T pickers:
 // each should land its choice in m.newItem*, not PATCH anything (there is no work item yet),
 // and the create should then send exactly what was picked.
 func TestNewItemReviewPickersChangeStatePriorityAssignee(t *testing.T) {
@@ -167,7 +167,7 @@ func TestNewItemReviewPickersChangeStatePriorityAssignee(t *testing.T) {
 	next, _ := m.updateBoard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	m = next.(Model)
 	m.editor.SetValue("Reviewed card")
-	next, _ = m.updateBoard(tea.KeyMsg{Type: tea.KeyCtrlS})
+	next, _ = m.updateBoard(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
 	if !m.creatingItem {
 		t.Fatal("expected the review step after confirming the title")
@@ -213,6 +213,21 @@ func TestNewItemReviewPickersChangeStatePriorityAssignee(t *testing.T) {
 	m = next.(Model)
 	if m.newItemAssignee != "u2" {
 		t.Fatalf("newItemAssignee = %q, want u2", m.newItemAssignee)
+	}
+
+	// T -> toggle the first label on with space, then save with enter.
+	m.labels = []api.Label{{ID: "l1", Name: "bug"}, {ID: "l2", Name: "docs"}}
+	next, _ = m.updateBoard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'T'}})
+	m = next.(Model)
+	if m.pickerOpen != "labels" {
+		t.Fatalf("pickerOpen = %q, want labels", m.pickerOpen)
+	}
+	next, _ = m.updatePicker(tea.KeyMsg{Type: tea.KeySpace})
+	m = next.(Model)
+	next, _ = m.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if len(m.newItemLabels) != 1 || m.newItemLabels[0] != "l1" {
+		t.Fatalf("newItemLabels = %v, want [l1]", m.newItemLabels)
 	}
 
 	// No API calls should have happened yet — nothing to update, the item does not exist.

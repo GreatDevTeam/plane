@@ -537,6 +537,7 @@ func (m Model) openNewItemEditor() (tea.Model, tea.Cmd) {
 	m.newItemStateID = m.states[m.focusedCol].ID
 	m.newItemPriority = "none"
 	m.newItemAssignee = ""
+	m.newItemLabels = nil
 	return m, nil
 }
 
@@ -549,13 +550,14 @@ func (m *Model) resetNewItem() {
 	m.newItemStateID = ""
 	m.newItemPriority = ""
 	m.newItemAssignee = ""
+	m.newItemLabels = nil
 }
 
 // updateNewItemReview drives the board's new-work-item review step: once a title has been
-// typed (openNewItemEditor's editor, confirmed with ctrl+s — see updateEditor), the user lands
-// here and can still change the state/priority/assignee it will be created with, the same s/y
-// keys the board and detail screens already use, plus a on this screen for the assignee. enter
-// fires the actual POST; esc cancels the whole thing.
+// typed (openNewItemEditor's editor, confirmed with enter — see updateEditor), the user lands
+// here and can still change the state/priority/assignee/labels it will be created with, the
+// same s/y/T keys the board and detail screens already use, plus a on this screen for the
+// assignee. enter fires the actual POST; esc cancels the whole thing.
 func (m Model) updateNewItemReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
@@ -570,6 +572,8 @@ func (m Model) updateNewItemReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openNewItemPriorityPicker()
 	case "a":
 		m.openNewItemAssigneePicker()
+	case "T":
+		m.openNewItemLabelPicker()
 	case "enter":
 		fields := map[string]any{
 			"name":     m.newItemName,
@@ -578,6 +582,9 @@ func (m Model) updateNewItemReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.newItemAssignee != "" {
 			fields["assignees"] = []string{m.newItemAssignee}
+		}
+		if len(m.newItemLabels) > 0 {
+			fields["labels"] = m.newItemLabels
 		}
 		m.status = "Creating work item..."
 		return m, createWorkItem(m.client, m.workspaceSlug, m.project.ID, fields)
@@ -615,7 +622,7 @@ func (m Model) handleWorkItemCreated(msg workItemCreatedMsg) (tea.Model, tea.Cmd
 // detailBottom uses for the comment/description editor.
 func (m Model) viewNewItemEditor() string {
 	return focusedInputStyle.Render(columnHeaderStyle.Render("New work item") + "\n" + m.editor.View() + "\n" +
-		helpStyle.Render("ctrl+s  next    esc  cancel"))
+		helpStyle.Render("enter  next    alt+enter  new line    esc  cancel"))
 }
 
 // viewNewItemReview renders the review step that follows the title editor: the item's name
@@ -625,11 +632,12 @@ func (m Model) viewNewItemReview() string {
 	lines := []string{
 		"Name:      " + m.newItemName,
 		"State:     " + m.stateName(m.newItemStateID),
-		"Priority:  " + priorityLabel(m.newItemPriority),
+		"Priority:  " + m.priorityLabel(m.newItemPriority),
 		"Assignee:  " + m.newItemAssigneeName(),
+		"Labels:    " + m.labelsLine(m.newItemLabels),
 	}
 	body := columnHeaderStyle.Render("New work item") + "\n" + strings.Join(lines, "\n") + "\n" +
-		helpStyle.Render("s  state    y  priority    a  assignee    enter  create    esc  cancel")
+		helpStyle.Render("s  state    y  priority    a  assignee    T  labels    enter  create    esc  cancel")
 	return focusedInputStyle.Render(body)
 }
 
@@ -1212,7 +1220,7 @@ func (m Model) cardMetaLine(it api.WorkItem, selected bool) string {
 		if selected {
 			parts = append(parts, priorityText(it.Priority))
 		} else {
-			parts = append(parts, priorityLabel(it.Priority))
+			parts = append(parts, m.priorityLabel(it.Priority))
 		}
 	}
 	if rel := m.cardRelations(it); rel != "" {

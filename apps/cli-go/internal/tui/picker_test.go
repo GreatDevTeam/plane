@@ -93,6 +93,47 @@ func TestUpdatePickerAssigneeBuildsSingleAssigneePatch(t *testing.T) {
 	}
 }
 
+// TestAssigneePickerIsSearchable checks the assignee picker is a type-to-filter search box like
+// the state/labels pickers (updateSearchablePicker): typing narrows m.assigneePickerRows() to
+// matching members (plus "Unassigned" while it still matches the query), and enter applies
+// whatever row ends up under the cursor after the filter, not the original unfiltered index.
+func TestAssigneePickerIsSearchable(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(api.WorkItem{ID: "id-0"})
+	}))
+	defer srv.Close()
+
+	m := boardFixture(1, 1, 120, 40)
+	m.client = api.New(srv.URL, "tok")
+	m.members = []api.Member{{ID: "u1", DisplayName: "Alice"}, {ID: "u2", DisplayName: "Bob"}}
+	m.openAssigneePicker()
+
+	// Typing "bo" narrows the list to just Bob (Unassigned no longer matches either).
+	next, _ := m.updatePicker(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	m = next.(Model)
+	next, _ = m.updatePicker(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	m = next.(Model)
+	if rows := m.assigneePickerRows(); len(rows) != 1 || rows[0] != "u2" {
+		t.Fatalf("assigneePickerRows after typing \"bo\" = %v, want just u2", rows)
+	}
+	if m.pickerIdx != 0 {
+		t.Fatalf("pickerIdx = %d after the list narrowed to 1 entry, want it clamped to 0", m.pickerIdx)
+	}
+
+	_, cmd := m.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on the filtered assignee picker returned no command")
+	}
+	if msg, ok := cmd().(workItemUpdatedMsg); !ok || msg.err != nil {
+		t.Fatalf("updateWorkItem command = %+v", msg)
+	}
+	if ids, ok := gotBody["assignees"].([]any); !ok || len(ids) != 1 || ids[0] != "u2" {
+		t.Fatalf("PATCH body assignees = %v, want [\"u2\"]", gotBody["assignees"])
+	}
+}
+
 // TestOpenLabelPickerSeedsSelectionFromItem checks the "T" (change labels) picker opens with
 // the active item's current labels pre-toggled, the multi-select equivalent of
 // TestOpenAssigneePickerSelectsCurrentAssignee.
@@ -110,12 +151,10 @@ func TestOpenLabelPickerSeedsSelectionFromItem(t *testing.T) {
 	}
 }
 
-// TestUpdatePickerLabelsTogglesAndBuildsMultiLabelPatch checks tab toggles entries in the
+// TestUpdatePickerLabelsTogglesAndBuildsMultiLabelPatch checks space toggles entries in the
 // working set (without PATCHing anything) and enter PATCHes {"labels": [...]} from whatever
 // ended up toggled on, including an empty selection marshaling to [] rather than null (the
-// same convention TestUpdatePickerAssigneeBuildsSingleAssigneePatch checks for assignees). Tab
-// rather than space toggles a label because the picker is now a type-to-filter search box
-// (see updateSearchablePicker) and space needs to stay free to type a multi-word query.
+// same convention TestUpdatePickerAssigneeBuildsSingleAssigneePatch checks for assignees).
 func TestUpdatePickerLabelsTogglesAndBuildsMultiLabelPatch(t *testing.T) {
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -130,10 +169,10 @@ func TestUpdatePickerLabelsTogglesAndBuildsMultiLabelPatch(t *testing.T) {
 	m.openLabelPicker() // nothing selected: item has no labels
 
 	// Toggle l1 on, move to l3 and toggle it on too.
-	next, _ := m.updatePicker(tea.KeyMsg{Type: tea.KeyTab})
+	next, _ := m.updatePicker(tea.KeyMsg{Type: tea.KeySpace})
 	m = next.(Model)
 	m.pickerIdx = 2
-	next, _ = m.updatePicker(tea.KeyMsg{Type: tea.KeyTab})
+	next, _ = m.updatePicker(tea.KeyMsg{Type: tea.KeySpace})
 	m = next.(Model)
 	if !m.labelPickerSelected["l1"] || m.labelPickerSelected["l2"] || !m.labelPickerSelected["l3"] {
 		t.Fatalf("after toggling l1 and l3: selected=%v", m.labelPickerSelected)
@@ -263,6 +302,16 @@ func TestColorTargetPickerOpensColorPromptWithCurrentColor(t *testing.T) {
 	if got := m.colorInput.Value(); got != "f59e0b" {
 		t.Errorf("colorInput = %q, want the label's own color f59e0b", got)
 	}
+	m = m.closeColorPrompt()
+
+	// pickerIdx 2 is the first priority row (index len(states)+len(labels)+0), "urgent".
+	m.openColorTargetPicker()
+	m.pickerIdx = 2
+	next, _ = m.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if !m.colorPromptOpen || m.colorTargetKind != "priority" || m.colorTargetID != "urgent" {
+		t.Fatalf("priority row: colorPromptOpen=%v kind=%q id=%q, want open/priority/urgent", m.colorPromptOpen, m.colorTargetKind, m.colorTargetID)
+	}
 }
 
 // TestUpdateColorPromptSavesOverrideAndAppliesToEffectiveColor covers the whole round trip:
@@ -297,5 +346,30 @@ func TestUpdateColorPromptSavesOverrideAndAppliesToEffectiveColor(t *testing.T) 
 	}
 	if m.err == "" {
 		t.Error("an invalid hex must report an error")
+	}
+}
+
+// TestUpdateColorPromptSavesPriorityOverride is
+// TestUpdateColorPromptSavesOverrideAndAppliesToEffectiveColor for a priority: enter on a valid
+// hex persists it via config.SetPriorityColor, global rather than keyed by project like the
+// state/label overrides, and effectivePriorityColor picks it up on the very next call.
+func TestUpdateColorPromptSavesPriorityOverride(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	m := boardFixture(1, 1, 120, 40)
+	m.project = api.Project{ID: "proj-1"}
+	m.openColorPrompt("priority", "urgent", "#ff0000")
+	m.colorInput.SetValue("00ff00")
+
+	next, _ := m.updateColorPrompt(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.colorPromptOpen {
+		t.Fatal("the color prompt stayed open after a valid hex")
+	}
+	if got := m.effectivePriorityColor("urgent"); got != "#00ff00" {
+		t.Fatalf("effectivePriorityColor after saving an override = %q, want #00ff00", got)
+	}
+	if got := m.effectivePriorityColor("high"); got == "#00ff00" {
+		t.Error("a different priority must not see urgent's override")
 	}
 }

@@ -147,7 +147,7 @@ type Model struct {
 	// a state's or label's actual color in Plane.
 	colorPromptOpen bool
 	colorInput      textinput.Model
-	colorTargetKind string // "state" | "label"
+	colorTargetKind string // "state" | "label" | "priority"
 	colorTargetID   string
 
 	filterOpen     string // "" | "assignee" | "label" | "state" | "priority"
@@ -182,7 +182,8 @@ type Model struct {
 	newItemName     string
 	newItemStateID  string
 	newItemPriority string
-	newItemAssignee string // member ID, "" = unassigned
+	newItemAssignee string   // member ID, "" = unassigned
+	newItemLabels   []string // label IDs to create the item with
 
 	// idPromptOpen/idInput drive the board's "open by work item id" prompt (g): a bare
 	// numeric input, looked up against the board's own m.items (see updateIDPrompt).
@@ -436,7 +437,7 @@ var helpSections = []helpSection{
 		{"o", "card order"},
 		{"n", "new work item"},
 		{"x", "hide/show this column"},
-		{"C", "recolor a state/label (local only)"},
+		{"C", "recolor a state/label/priority (local only)"},
 		{"p", "switch board (project)"},
 		{"r", "refresh"},
 		{"q", "quit"},
@@ -459,7 +460,12 @@ var helpSections = []helpSection{
 		{"r", "refresh"},
 		{"esc/backspace", "back"},
 	}},
-	{"Editor (comment / description / new item)", [][2]string{
+	{"Editor (comment / new item title)", [][2]string{
+		{"enter", "save"},
+		{"alt+enter", "insert newline"},
+		{"esc", "cancel"},
+	}},
+	{"Editor (description)", [][2]string{
 		{"ctrl+s", "save"},
 		{"esc", "cancel"},
 	}},
@@ -468,10 +474,10 @@ var helpSections = []helpSection{
 		{"enter", "apply"},
 		{"esc", "cancel"},
 	}},
-	{"State/labels picker", [][2]string{
+	{"Searchable picker (state/labels/assignee)", [][2]string{
 		{"(type)", "filter the list"},
 		{"up/down", "move"},
-		{"tab", "toggle label (labels only)"},
+		{"space", "toggle label (labels only)"},
 		{"enter", "apply/save"},
 		{"esc", "cancel"},
 	}},

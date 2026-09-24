@@ -75,6 +75,24 @@ func (m Model) filteredLabels() []api.Label {
 	return out
 }
 
+// assigneePickerRows is the ordered list of member IDs the assignee/new-item-assignee picker
+// shows for the current search query, filteredStates/filteredLabels' equivalent for a picker
+// that also has the synthetic leading "Unassigned" row: "" stands for that row, included only
+// when it matches the query too, so typing narrows it away like any other option.
+func (m Model) assigneePickerRows() []string {
+	q := strings.ToLower(strings.TrimSpace(m.pickerSearch.Value()))
+	out := make([]string, 0, len(m.members)+1)
+	if q == "" || strings.Contains("unassigned", q) {
+		out = append(out, "")
+	}
+	for _, mem := range m.members {
+		if q == "" || strings.Contains(strings.ToLower(mem.Name()), q) {
+			out = append(out, mem.ID)
+		}
+	}
+	return out
+}
+
 func (m *Model) openPriorityPicker() {
 	item := m.activeItem()
 	if item == nil {
@@ -103,13 +121,14 @@ func (m *Model) openAssigneePicker() {
 	}
 	m.pickerOpen = "assignee"
 	m.pickerIdx = 0
+	m.resetPickerSearch()
 	if len(item.Assignees) == 0 {
 		return
 	}
 	first := item.Assignees[0]
-	for i, mem := range m.members {
-		if mem.ID == first {
-			m.pickerIdx = i + 1 // +1 for the leading "Unassigned" entry
+	for i, id := range m.assigneePickerRows() {
+		if id == first {
+			m.pickerIdx = i
 			break
 		}
 	}
@@ -149,12 +168,13 @@ func (m *Model) openNewItemPriorityPicker() {
 func (m *Model) openNewItemAssigneePicker() {
 	m.pickerOpen = "new-item-assignee"
 	m.pickerIdx = 0
+	m.resetPickerSearch()
 	if m.newItemAssignee == "" {
 		return
 	}
-	for i, mem := range m.members {
-		if mem.ID == m.newItemAssignee {
-			m.pickerIdx = i + 1 // +1 for the leading "Unassigned" entry
+	for i, id := range m.assigneePickerRows() {
+		if id == m.newItemAssignee {
+			m.pickerIdx = i
 			break
 		}
 	}
@@ -176,6 +196,18 @@ func (m *Model) openLabelPicker() {
 	m.resetPickerSearch()
 	m.labelPickerSelected = make(map[string]bool, len(item.Labels))
 	for _, id := range item.Labels {
+		m.labelPickerSelected[id] = true
+	}
+}
+
+// openNewItemLabelPicker is openLabelPicker for the new-work-item review step: the working set
+// starts from m.newItemLabels since there is no work item yet to read labels off of.
+func (m *Model) openNewItemLabelPicker() {
+	m.pickerOpen = "labels"
+	m.pickerIdx = 0
+	m.resetPickerSearch()
+	m.labelPickerSelected = make(map[string]bool, len(m.newItemLabels))
+	for _, id := range m.newItemLabels {
 		m.labelPickerSelected[id] = true
 	}
 }
@@ -202,7 +234,7 @@ func (m Model) pickerOptionCount() int {
 	case "subissue":
 		return len(m.subIssueOptions())
 	case "assignee", "new-item-assignee":
-		return len(m.members) + 1 // +1 for "Unassigned"
+		return len(m.assigneePickerRows())
 	case "labels":
 		return len(m.filteredLabels())
 	case "links":
@@ -210,7 +242,7 @@ func (m Model) pickerOptionCount() int {
 	case "attachments":
 		return len(m.attachments)
 	case "color-target":
-		return len(m.states) + len(m.labels)
+		return len(m.colorTargetRows())
 	}
 	return len(api.Priorities)
 }
@@ -220,10 +252,12 @@ func (m Model) updatePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	// The state and labels pickers are type-to-filter search boxes (see updateSearchablePicker):
-	// j/k/space/x are ordinary characters to type there, not shortcuts, so they need their own
-	// key handling entirely separate from every other (plain list) picker below.
-	if m.pickerOpen == "state" || m.pickerOpen == "labels" {
+	// The state, labels and assignee pickers are type-to-filter search boxes (see
+	// updateSearchablePicker): j/k/x are ordinary characters to type there, not shortcuts, so
+	// they need their own key handling entirely separate from every other (plain list) picker
+	// below.
+	switch m.pickerOpen {
+	case "state", "labels", "assignee", "new-item-assignee":
 		return m.updateSearchablePicker(key)
 	}
 	switch key.String() {
@@ -250,12 +284,12 @@ func (m Model) updatePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateSearchablePicker drives the state/labels pickers' type-to-filter query box
+// updateSearchablePicker drives the state/labels/assignee pickers' type-to-filter query box
 // (m.pickerSearch): the up/down arrows move within the filtered list (see
-// filteredStates/filteredLabels), tab toggles the highlighted label (labels only — space is
-// deliberately left free to type a query that itself contains one, e.g. "In Progress"), enter
-// applies/saves and esc cancels, exactly as the plain pickers' j/k/enter/esc do. Every other
-// keystroke edits the query itself.
+// filteredStates/filteredLabels/assigneePickerRows), space toggles the highlighted label (labels
+// only), enter applies/saves and esc cancels, exactly as the plain pickers' j/k/enter/esc do.
+// Every other keystroke edits the query itself — including space on every picker but labels, so
+// state/assignee search can still match a multi-word name.
 func (m Model) updateSearchablePicker(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "esc":
@@ -272,15 +306,15 @@ func (m Model) updateSearchablePicker(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.pickerIdx++
 		}
 		return m, nil
-	case "tab":
+	case " ":
 		if m.pickerOpen == "labels" {
 			opts := m.filteredLabels()
 			if m.pickerIdx >= 0 && m.pickerIdx < len(opts) {
 				id := opts[m.pickerIdx].ID
 				m.labelPickerSelected[id] = !m.labelPickerSelected[id]
 			}
+			return m, nil
 		}
-		return m, nil
 	case "enter":
 		return m.applyPickerEnter()
 	}
@@ -348,16 +382,12 @@ func (m Model) applyPickerEnter() (tea.Model, tea.Cmd) {
 		return m.downloadAttachmentCmd(att)
 	}
 	if m.pickerOpen == "color-target" {
-		st, l, ok := m.colorTargetAt(m.pickerIdx)
+		row, ok := m.colorTargetAt(m.pickerIdx)
 		m.pickerOpen = ""
 		if !ok {
 			return m, nil
 		}
-		if st != nil {
-			m.openColorPrompt("state", st.ID, m.effectiveStateColor(*st))
-		} else {
-			m.openColorPrompt("label", l.ID, m.effectiveLabelColor(*l))
-		}
+		m.openColorPrompt(row.kind, row.id, row.hex)
 		return m, nil
 	}
 	if m.creatingItem {
@@ -374,11 +404,18 @@ func (m Model) applyPickerEnter() (tea.Model, tea.Cmd) {
 				m.newItemPriority = api.Priorities[m.pickerIdx]
 			}
 		case "new-item-assignee":
-			if m.pickerIdx == 0 {
-				m.newItemAssignee = ""
-			} else if idx := m.pickerIdx - 1; idx >= 0 && idx < len(m.members) {
-				m.newItemAssignee = m.members[idx].ID
+			rows := m.assigneePickerRows()
+			if m.pickerIdx >= 0 && m.pickerIdx < len(rows) {
+				m.newItemAssignee = rows[m.pickerIdx]
 			}
+		case "labels":
+			ids := []string{}
+			for _, l := range m.labels {
+				if m.labelPickerSelected[l.ID] {
+					ids = append(ids, l.ID)
+				}
+			}
+			m.newItemLabels = ids
 		}
 		m.pickerOpen = ""
 		return m, nil
@@ -402,8 +439,9 @@ func (m Model) applyPickerEnter() (tea.Model, tea.Cmd) {
 		// "assignees": [] — a nil slice marshals to JSON null, which is not the same
 		// instruction to the API as an empty list.
 		ids := []string{}
-		if idx := m.pickerIdx - 1; idx >= 0 && idx < len(m.members) {
-			ids = []string{m.members[idx].ID}
+		rows := m.assigneePickerRows()
+		if m.pickerIdx >= 0 && m.pickerIdx < len(rows) && rows[m.pickerIdx] != "" {
+			ids = []string{rows[m.pickerIdx]}
 		}
 		patch = map[string]any{"assignees": ids}
 	case "labels":
@@ -445,7 +483,7 @@ func (m Model) viewPicker() string {
 	case "attachments":
 		title = "Attachments"
 	case "color-target":
-		title = "Recolor a state or label"
+		title = "Recolor a state, label or priority"
 	}
 	if m.creatingItem {
 		switch m.pickerOpen {
@@ -453,6 +491,8 @@ func (m Model) viewPicker() string {
 			title = "New item state"
 		case "priority":
 			title = "New item priority"
+		case "labels":
+			title = "New item labels"
 		}
 	}
 	out := columnHeaderStyle.Render(title) + "\n"
@@ -469,10 +509,15 @@ func (m Model) viewPicker() string {
 			out += pickerLine(sm.label, i == m.pickerIdx)
 		}
 	case m.pickerOpen == "assignee", m.pickerOpen == "new-item-assignee":
-		out += pickerLine("Unassigned", m.pickerIdx == 0)
-		for i, mem := range m.members {
-			out += pickerLine(mem.Name(), m.pickerIdx == i+1)
+		out += helpStyle.Render("Search: ") + m.pickerSearch.View() + "\n"
+		for i, id := range m.assigneePickerRows() {
+			name := "Unassigned"
+			if id != "" {
+				name = m.memberName(id)
+			}
+			out += pickerLine(name, i == m.pickerIdx)
 		}
+		hint = "type  search    up/down  move    enter  apply    esc  cancel"
 	case m.pickerOpen == "labels":
 		out += helpStyle.Render("Search: ") + m.pickerSearch.View() + "\n"
 		for i, l := range m.filteredLabels() {
@@ -482,7 +527,7 @@ func (m Model) viewPicker() string {
 			}
 			out += pickerLine(box+l.Name, i == m.pickerIdx)
 		}
-		hint = "type  search    up/down  move    tab  toggle    enter  save    esc  cancel"
+		hint = "type  search    up/down  move    space  toggle    enter  save    esc  cancel"
 	case m.pickerOpen == "links":
 		for i, u := range m.linkOptions {
 			out += pickerLine(truncate(u, 70), i == m.pickerIdx)
@@ -505,12 +550,8 @@ func (m Model) viewPicker() string {
 		}
 		hint = "j/k  move    enter  download    a  attach new    esc  cancel"
 	case m.pickerOpen == "color-target":
-		for i, st := range m.states {
-			out += m.colorTargetLine("State: "+st.Name, m.effectiveStateColor(st), true, i == m.pickerIdx)
-		}
-		for i, l := range m.labels {
-			idx := len(m.states) + i
-			out += m.colorTargetLine("Label: "+l.Name, m.effectiveLabelColor(l), false, idx == m.pickerIdx)
+		for i, row := range m.colorTargetRows() {
+			out += m.colorTargetLine(row.label, row.hex, row.pastel, i == m.pickerIdx)
 		}
 		hint = "j/k  move    enter  choose color    esc  cancel"
 	case m.pickerOpen == "subissue":

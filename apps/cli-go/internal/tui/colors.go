@@ -10,30 +10,47 @@ import (
 )
 
 // openColorTargetPicker opens the board's local color-settings screen ("C"): a picker over
-// every state in this project, then every label, so the user can give any of them their own
-// display color without touching what is actually stored in Plane.
+// every state in this project, then every label, then every priority, so the user can give any
+// of them their own display color without touching what is actually stored in Plane.
 func (m *Model) openColorTargetPicker() {
 	m.pickerOpen = "color-target"
 	m.pickerIdx = 0
 }
 
-// colorTargetAt resolves a color-target picker row back to the state or label it stands for.
-// Every state comes first, then every label — the same order pickerOptionCount's "color-target"
-// case sums their lengths in, and viewPicker renders them in.
-func (m Model) colorTargetAt(idx int) (st *api.State, l *api.Label, ok bool) {
-	if idx < 0 {
-		return nil, nil, false
+// colorTargetRow is one row of the color-target picker: a state, a label, or a priority, each
+// resolved to its own effective color so the row can both preview and be recolored.
+type colorTargetRow struct {
+	kind   string // "state" | "label" | "priority" — matches openColorPrompt's kind/colorTargetKind
+	id     string // state/label ID, or the priority value itself
+	label  string // display line, e.g. "State: In Progress"
+	hex    string // effective color (local override if set, otherwise the built-in one)
+	pastel bool   // whether the swatch preview should pastel-blend (states only, see colorTargetLine)
+}
+
+// colorTargetRows lists every row the color-target picker shows: every state, then every label,
+// then every priority — the same order pickerOptionCount's "color-target" case counts and
+// viewPicker renders them in.
+func (m Model) colorTargetRows() []colorTargetRow {
+	rows := make([]colorTargetRow, 0, len(m.states)+len(m.labels)+len(api.Priorities))
+	for _, st := range m.states {
+		rows = append(rows, colorTargetRow{"state", st.ID, "State: " + st.Name, m.effectiveStateColor(st), true})
 	}
-	if idx < len(m.states) {
-		s := m.states[idx]
-		return &s, nil, true
+	for _, l := range m.labels {
+		rows = append(rows, colorTargetRow{"label", l.ID, "Label: " + l.Name, m.effectiveLabelColor(l), false})
 	}
-	idx -= len(m.states)
-	if idx < len(m.labels) {
-		lb := m.labels[idx]
-		return nil, &lb, true
+	for _, p := range api.Priorities {
+		rows = append(rows, colorTargetRow{"priority", p, "Priority: " + p, m.effectivePriorityColor(p), false})
 	}
-	return nil, nil, false
+	return rows
+}
+
+// colorTargetAt resolves a color-target picker row index back to the row it stands for.
+func (m Model) colorTargetAt(idx int) (colorTargetRow, bool) {
+	rows := m.colorTargetRows()
+	if idx < 0 || idx >= len(rows) {
+		return colorTargetRow{}, false
+	}
+	return rows[idx], true
 }
 
 // openColorPrompt opens the hex-entry box for one state's or label's local color override,
@@ -73,10 +90,13 @@ func (m Model) updateColorPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.setError(fmt.Errorf("enter a 6-digit hex color, e.g. ff8800"))
 				return m, nil
 			}
-			if m.colorTargetKind == "state" {
+			switch m.colorTargetKind {
+			case "state":
 				m.cfg.SetStateColor(m.project.ID, m.colorTargetID, hex)
-			} else {
+			case "label":
 				m.cfg.SetLabelColor(m.project.ID, m.colorTargetID, hex)
+			case "priority":
+				m.cfg.SetPriorityColor(m.colorTargetID, hex)
 			}
 			if err := config.Save(m.cfg); err != nil {
 				m.setError(err)

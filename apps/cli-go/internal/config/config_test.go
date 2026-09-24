@@ -38,3 +38,27 @@ func TestLabelColorForAndSetLabelColor(t *testing.T) {
 		t.Fatalf("StateColorFor must not see a label override: got %q", got)
 	}
 }
+
+// TestPriorityColorForAndSetPriorityColor is TestStateColorForAndSetStateColor for priorities,
+// except the override is global rather than per-project: a priority value ("urgent", ...) is
+// the same fixed enum in every project, unlike a state/label ID.
+func TestPriorityColorForAndSetPriorityColor(t *testing.T) {
+	var c Config
+	if got := c.PriorityColorFor("urgent"); got != "" {
+		t.Fatalf("PriorityColorFor with nothing set = %q, want empty", got)
+	}
+
+	c.SetPriorityColor("urgent", "#ff0000")
+	if got := c.PriorityColorFor("urgent"); got != "#ff0000" {
+		t.Fatalf("PriorityColorFor after Set = %q, want #ff0000", got)
+	}
+	// A different priority must not see this one's override.
+	if got := c.PriorityColorFor("high"); got != "" {
+		t.Fatalf("PriorityColorFor for a different priority = %q, want empty", got)
+	}
+
+	c.SetPriorityColor("urgent", "#00ff00")
+	if got := c.PriorityColorFor("urgent"); got != "#00ff00" {
+		t.Fatalf("PriorityColorFor after overwriting = %q, want #00ff00", got)
+	}
+}
