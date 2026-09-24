@@ -12,6 +12,8 @@ var (
 	reItalic   = regexp.MustCompile(`(?is)<(em|i)[^>]*>(.*?)</(em|i)>`)
 	reCode     = regexp.MustCompile(`(?is)<code[^>]*>(.*?)</code>`)
 	reListItem = regexp.MustCompile(`(?i)<li[^>]*>`)
+	reHref     = regexp.MustCompile(`(?i)href="([^"]+)"`)
+	rePlainURL = regexp.MustCompile(`https?://[^\s<>"']+`)
 	// </li> is deliberately excluded: <li> already opens the item on its own line via
 	// reListItem, so also emitting a newline on close would leave a blank line between items.
 	reBlockClose = regexp.MustCompile(`(?i)</(p|h1|h2|h3|h4|h5|h6|div|blockquote|ul|ol)>`)
@@ -80,6 +82,29 @@ func escapeHTML(s string) string {
 	s = strings.ReplaceAll(s, "<", "&lt;")
 	s = strings.ReplaceAll(s, ">", "&gt;")
 	return s
+}
+
+// extractLinks pulls every URL out of a Plane editor HTML fragment: both an <a href="...">'s
+// target and any bare "http(s)://..." typed as plain text, in the order they first appear, with
+// duplicates dropped. Used by the detail screen's "open link" action (see openFocusedLinks).
+func extractLinks(html string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	add := func(u string) {
+		u = strings.TrimRight(u, ".,;:)]}>\"'")
+		if u == "" || seen[u] {
+			return
+		}
+		seen[u] = true
+		out = append(out, u)
+	}
+	for _, m := range reHref.FindAllStringSubmatch(html, -1) {
+		add(unescapeHTML(m[1]))
+	}
+	for _, m := range rePlainURL.FindAllString(html, -1) {
+		add(m)
+	}
+	return out
 }
 
 // plainToHTML turns the plain text out of the comment editor into the paragraph-per-line

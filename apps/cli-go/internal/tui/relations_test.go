@@ -38,15 +38,16 @@ func relationsFixture(subTasks int) Model {
 	}
 
 	return Model{
-		screen:     screenDetail,
-		width:      120,
-		height:     40,
-		project:    api.Project{ID: "proj", Name: "Plane"},
-		states:     states,
-		items:      items,
-		colCursor:  make([]int, len(states)),
-		detailItem: &item,
-		editor:     newTestEditor(),
+		screen:       screenDetail,
+		width:        120,
+		height:       40,
+		project:      api.Project{ID: "proj", Name: "Plane"},
+		states:       states,
+		items:        items,
+		colCursor:    make([]int, len(states)),
+		detailItem:   &item,
+		editor:       newTestEditor(),
+		pickerSearch: newInput("", 40),
 	}
 }
 

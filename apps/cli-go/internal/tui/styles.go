@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/makeplane/plane/apps/cli-go/internal/api"
 )
 
 var (
@@ -89,6 +90,24 @@ var (
 		"none":   lipgloss.NewStyle().Foreground(colorMuted),
 	}
 )
+
+// effectiveStateColor is a state's swatch color: the local override set on the color settings
+// screen (see openColorPrompt) if one exists for this project, otherwise the state's own color
+// from Plane.
+func (m Model) effectiveStateColor(st api.State) string {
+	if hex := m.cfg.StateColorFor(m.project.ID, st.ID); hex != "" {
+		return hex
+	}
+	return st.Color
+}
+
+// effectiveLabelColor is effectiveStateColor for a label.
+func (m Model) effectiveLabelColor(l api.Label) string {
+	if hex := m.cfg.LabelColorFor(m.project.ID, l.ID); hex != "" {
+		return hex
+	}
+	return l.Color
+}
 
 // pastelStateColor lightens a Plane state's own hex color (State.Color, e.g. "#16a34a") by
 // blending it two-thirds of the way toward white, so a column header reads as a soft tint

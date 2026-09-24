@@ -158,6 +158,25 @@ type Comment struct {
 	EditedAt    string `json:"edited_at"`
 }
 
+// Attachment is a file attached to a work item (FileAsset, as returned by the
+// work-items/{id}/attachments/ endpoints). Its display fields live under "attributes" rather
+// than at the top level.
+type Attachment struct {
+	ID         string `json:"id"`
+	CreatedAt  string `json:"created_at"`
+	Attributes struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+		Size int64  `json:"size"`
+	} `json:"attributes"`
+}
+
+// Name is the attachment's original filename.
+func (a Attachment) Name() string { return a.Attributes.Name }
+
+// Size is the attachment's size in bytes.
+func (a Attachment) Size() int64 { return a.Attributes.Size }
+
 // paginatedResponse is the envelope every Plane list endpoint returns.
 type paginatedResponse[T any] struct {
 	Results         []T    `json:"results"`

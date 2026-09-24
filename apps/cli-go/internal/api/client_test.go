@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -223,5 +226,150 @@ func TestCreateWorkItem(t *testing.T) {
 	}
 	if item.ID != "wi-1" || item.Name != "New card" || item.State != "s1" {
 		t.Fatalf("created = %+v", item)
+	}
+}
+
+func TestListAttachments(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if want := "/api/v1/workspaces/ws/projects/proj/work-items/item1/attachments/"; r.URL.Path != want {
+			t.Errorf("path = %s, want %s", r.URL.Path, want)
+		}
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"id": "a1", "created_at": "2026-01-01T00:00:00Z", "attributes": map[string]any{"name": "f.pdf", "type": "application/pdf", "size": 1234}},
+		})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok")
+	items, err := c.ListAttachments(context.Background(), "ws", "proj", "item1")
+	if err != nil {
+		t.Fatalf("ListAttachments: %v", err)
+	}
+	if len(items) != 1 || items[0].Name() != "f.pdf" || items[0].Size() != 1234 {
+		t.Fatalf("items = %+v", items)
+	}
+}
+
+// TestCreateUploadConfirmAttachmentFlow drives the three-step attach-a-file flow end to end
+// against two mock servers (the Plane API and, standing in for S3, the presigned upload/
+// download target it hands back) — the same split docs/plane.sh's upload-asset relies on in
+// production.
+func TestCreateUploadConfirmAttachmentFlow(t *testing.T) {
+	var s3 *httptest.Server
+	var confirmedID string
+	var confirmBody map[string]any
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/workspaces/ws/projects/proj/work-items/item1/attachments/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["name"] != "notes.txt" {
+			t.Errorf("create body name = %v, want notes.txt", body["name"])
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"asset_id": "asset-1",
+			"upload_data": map[string]any{
+				"url":    s3.URL + "/upload",
+				"fields": map[string]string{"key": "some-key", "policy": "p"},
+			},
+		})
+	})
+	mux.HandleFunc("/api/v1/workspaces/ws/projects/proj/work-items/item1/attachments/asset-1/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			t.Errorf("method = %s, want PATCH", r.Method)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&confirmBody)
+		confirmedID = "asset-1"
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var uploadedFields map[string]string
+	var uploadedFileContent []byte
+	s3mux := http.NewServeMux()
+	s3mux.HandleFunc("/upload", func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			t.Fatalf("parse multipart: %v", err)
+		}
+		uploadedFields = map[string]string{}
+		for k, v := range r.MultipartForm.Value {
+			uploadedFields[k] = v[0]
+		}
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			t.Fatalf("FormFile: %v", err)
+		}
+		defer file.Close()
+		uploadedFileContent, _ = io.ReadAll(file)
+	})
+	s3 = httptest.NewServer(s3mux)
+	defer s3.Close()
+
+	c := New(srv.URL, "tok")
+	ctx := context.Background()
+
+	path := filepath.Join(t.TempDir(), "notes.txt")
+	if err := os.WriteFile(path, []byte("hello world"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	assetID, uploadURL, fields, err := c.CreateAttachment(ctx, "ws", "proj", "item1", "notes.txt", "text/plain", 11)
+	if err != nil {
+		t.Fatalf("CreateAttachment: %v", err)
+	}
+	if assetID != "asset-1" || uploadURL != s3.URL+"/upload" {
+		t.Fatalf("assetID=%q uploadURL=%q", assetID, uploadURL)
+	}
+
+	if err := c.UploadAttachmentFile(ctx, uploadURL, fields, path, "text/plain"); err != nil {
+		t.Fatalf("UploadAttachmentFile: %v", err)
+	}
+	if string(uploadedFileContent) != "hello world" {
+		t.Errorf("uploaded content = %q, want %q", uploadedFileContent, "hello world")
+	}
+	if uploadedFields["key"] != "some-key" || uploadedFields["policy"] != "p" {
+		t.Errorf("uploaded fields = %v, want key=some-key policy=p", uploadedFields)
+	}
+
+	if err := c.ConfirmAttachmentUploaded(ctx, "ws", "proj", "item1", assetID); err != nil {
+		t.Fatalf("ConfirmAttachmentUploaded: %v", err)
+	}
+	if confirmedID != "asset-1" || confirmBody["is_uploaded"] != true {
+		t.Fatalf("confirmedID=%q confirmBody=%v, want asset-1/is_uploaded=true", confirmedID, confirmBody)
+	}
+}
+
+// TestDownloadAttachmentFollowsRedirect checks DownloadAttachment follows the API's redirect to
+// the presigned download URL and does not forward the API token onto it.
+func TestDownloadAttachmentFollowsRedirect(t *testing.T) {
+	var download *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/workspaces/ws/projects/proj/work-items/item1/attachments/asset-1/", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Api-Key"); got != "tok" {
+			t.Errorf("X-Api-Key = %q, want tok", got)
+		}
+		http.Redirect(w, r, download.URL+"/file.bin", http.StatusFound)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	download = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Api-Key"); got != "" {
+			t.Errorf("the presigned download request must not carry the API token, got %q", got)
+		}
+		_, _ = w.Write([]byte("file bytes"))
+	}))
+	defer download.Close()
+
+	c := New(srv.URL, "tok")
+	data, err := c.DownloadAttachment(context.Background(), "ws", "proj", "item1", "asset-1")
+	if err != nil {
+		t.Fatalf("DownloadAttachment: %v", err)
+	}
+	if string(data) != "file bytes" {
+		t.Errorf("data = %q, want %q", data, "file bytes")
 	}
 }
