@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/makeplane/plane/apps/cli-go/internal/api"
 	"github.com/makeplane/plane/apps/cli-go/internal/auth"
+	"github.com/makeplane/plane/apps/cli-go/internal/logging"
 )
 
 const requestTimeout = 20 * time.Second
@@ -107,13 +108,20 @@ type boardExtrasMsg struct {
 
 // fetchBoardExtras fetches a board's labels and members. Best-effort: a project without
 // label/member read access still shows a working board, just without those two filters
-// populated.
+// populated — a failure here never reaches setError/the footer, so it is logged as a warning
+// instead of disappearing entirely.
 func fetchBoardExtras(client *api.Client, workspaceSlug, projectID string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
-		labels, _ := client.ListLabels(ctx, workspaceSlug, projectID)
-		members, _ := client.ListMembers(ctx, workspaceSlug, projectID)
+		labels, err := client.ListLabels(ctx, workspaceSlug, projectID)
+		if err != nil {
+			logging.Warn("fetch labels for project %s: %v", projectID, err)
+		}
+		members, err := client.ListMembers(ctx, workspaceSlug, projectID)
+		if err != nil {
+			logging.Warn("fetch members for project %s: %v", projectID, err)
+		}
 		return boardExtrasMsg{projectID: projectID, labels: labels, members: members}
 	}
 }
@@ -137,11 +145,23 @@ type workItemUpdatedMsg struct {
 	err  error
 }
 
+// updateWorkItem PATCHes the given fields and then, once that succeeds, re-fetches the work
+// item with its own GET rather than trusting the PATCH response as the new state to show: the
+// board and detail screen must only ever change what they display after a request that actually
+// reflects it has come back, and a follow-up GET is the authoritative read for that, the same
+// one openWorkItem/handleWorkItemLoaded already trust for a card just opened from the board. On
+// a PATCH failure the GET is skipped — there's nothing new to read yet.
 func updateWorkItem(client *api.Client, workspaceSlug, projectID, workItemID string, patch map[string]any) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
-		defer cancel()
-		item, err := client.UpdateWorkItem(ctx, workspaceSlug, projectID, workItemID, patch)
+		patchCtx, patchCancel := context.WithTimeout(context.Background(), requestTimeout)
+		_, err := client.UpdateWorkItem(patchCtx, workspaceSlug, projectID, workItemID, patch)
+		patchCancel()
+		if err != nil {
+			return workItemUpdatedMsg{err: err}
+		}
+		getCtx, getCancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer getCancel()
+		item, err := client.GetWorkItem(getCtx, workspaceSlug, projectID, workItemID)
 		return workItemUpdatedMsg{item: item, err: err}
 	}
 }
