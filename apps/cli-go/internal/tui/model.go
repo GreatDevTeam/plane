@@ -185,19 +185,23 @@ type Model struct {
 
 	editor           textarea.Model
 	editorOn         bool
-	editorMode       string // "comment" | "description" | "new-item", meaningful while editorOn
+	editorMode       string // "comment" | "description" | "new-item" | "new-item-description", meaningful while editorOn
 	editingCommentID string // "" while composing a new comment, set while editing an existing one
 
 	// New work item creation (board's "n"): the title is typed in the shared editor
 	// (editorMode == "new-item"), then creatingItem drives a review step — reusing the
 	// state/priority pickers plus a dedicated assignee one — where the user can change where
 	// it lands before the POST actually fires. See openNewItemEditor/updateNewItemReview.
-	creatingItem    bool
-	newItemName     string
-	newItemStateID  string
-	newItemPriority string
-	newItemAssignee string   // member ID, "" = unassigned
-	newItemLabels   []string // label IDs to create the item with
+	// newItemDescription is edited the same way an existing item's description is
+	// (editorMode == "new-item-description", see openDescriptionEditor) and stored as HTML,
+	// ready to send as description_html on the create POST.
+	creatingItem       bool
+	newItemName        string
+	newItemDescription string
+	newItemStateID     string
+	newItemPriority    string
+	newItemAssignee    string   // member ID, "" = unassigned
+	newItemLabels      []string // label IDs to create the item with
 
 	// idPromptOpen/idInput drive the board's "open by work item id" prompt (g): a bare
 	// numeric input, looked up against the board's own m.items (see updateIDPrompt).
@@ -450,6 +454,7 @@ var helpSections = []helpSection{
 		{"L", "filter by label"},
 		{"/", "search by title (loaded cards only)"},
 		{"u", "copy work item url"},
+		{"U", "open work item in browser"},
 		{"g", "open by work item id"},
 		{"o", "card order"},
 		{"n", "new work item"},
@@ -467,6 +472,7 @@ var helpSections = []helpSection{
 		{"g", "go to parent work item"},
 		{"S", "jump to a sub-task"},
 		{"u", "copy work item url"},
+		{"U", "open work item in browser"},
 		{"tab", "switch between description/comments"},
 		{"j/k or up/down", "scroll focused pane one line"},
 		{"n/p", "jump to next/prev comment"},

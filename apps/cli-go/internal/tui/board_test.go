@@ -239,6 +239,52 @@ func TestNewItemReviewPickersChangeStatePriorityAssignee(t *testing.T) {
 	}
 }
 
+// TestNewItemReviewDescriptionEditorRoundTrips covers "add description [field that] disappear[s]
+// on create task dialog": the create-work-item review step had no way to set a description at
+// all. d must open a textarea (the same shared one used for editing an existing item's
+// description), ctrl+s must save the typed text into m.newItemDescription without touching the
+// API (there is no work item yet), and the create POST must then include it.
+func TestNewItemReviewDescriptionEditorRoundTrips(t *testing.T) {
+	m := boardFixture(2, 2, 120, 40)
+	m.editor = newTestEditor()
+
+	next, _ := m.updateBoard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = next.(Model)
+	m.editor.SetValue("Described card")
+	next, _ = m.updateBoard(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+
+	next, _ = m.updateBoard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = next.(Model)
+	if !m.editorOn || m.editorMode != "new-item-description" {
+		t.Fatalf("d did not open the description editor (on=%v mode=%q)", m.editorOn, m.editorMode)
+	}
+
+	m.editor.SetValue("Steps to reproduce")
+	next, cmd := m.updateBoard(tea.KeyMsg{Type: tea.KeyCtrlS})
+	m = next.(Model)
+	if cmd != nil {
+		t.Error("ctrl+s on a new item's description issued a request — there is no item to PATCH yet")
+	}
+	if m.editorOn {
+		t.Error("ctrl+s left the description editor open")
+	}
+	if !m.creatingItem {
+		t.Error("ctrl+s on the description editor dropped out of the new-item flow entirely")
+	}
+	if m.newItemDescription != "<p>Steps to reproduce</p>" {
+		t.Fatalf("newItemDescription = %q, want it saved as HTML", m.newItemDescription)
+	}
+	if !strings.Contains(m.viewNewItemReview(), "Steps to reproduce") {
+		t.Error("the review step does not show the saved description")
+	}
+
+	_, cmd = m.updateBoard(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on the review step did not fire the create")
+	}
+}
+
 // TestNewItemEditorEscCreatesNothing checks esc drops the draft without calling the API and
 // without touching the board's items.
 func TestNewItemEditorEscCreatesNothing(t *testing.T) {
@@ -340,6 +386,12 @@ func TestViewBoardFitsTerminalWithOverlays(t *testing.T) {
 		{"state picker", func(m *Model) { m.pickerOpen = "state" }},
 		{"priority picker", func(m *Model) { m.pickerOpen = "priority" }},
 		{"filter picker", func(m *Model) { m.filterOpen = "label" }},
+		{"new item description editor", func(m *Model) {
+			m.editor = newTestEditor()
+			m.creatingItem = true
+			next, _ := m.openNewItemDescriptionEditor()
+			*m = next.(Model)
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := boardFixture(6, 900, 120, 40)
