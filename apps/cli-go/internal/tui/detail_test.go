@@ -235,7 +235,7 @@ func TestDeleteSelectedCommentRejectsSomeoneElses(t *testing.T) {
 	m.client = api.New("http://example.invalid", "token")
 	m.project = api.Project{ID: "proj-1"}
 	m.user = &api.User{ID: "u1"}
-	next, _ := m.handleComments(commentsMsg{items: []api.Comment{
+	next, _ := m.handleComments(commentsMsg{workItemID: "wi-1", items: []api.Comment{
 		{ID: "c1", Actor: "someone-else", CreatedAt: "2026-01-01T00:00:00Z", CommentHTML: "<p>hi</p>"},
 	}})
 	m = next.(Model)
@@ -259,7 +259,7 @@ func TestDeleteSelectedCommentRejectsSomeoneElses(t *testing.T) {
 func TestHandleCommentDeletedRemovesCommentAndMovesCursor(t *testing.T) {
 	m := detailFixture()
 	m.user = &api.User{ID: "u1"}
-	next, _ := m.handleComments(commentsMsg{items: []api.Comment{
+	next, _ := m.handleComments(commentsMsg{workItemID: "wi-1", items: []api.Comment{
 		{ID: "c1", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z", CommentHTML: "<p>one</p>"},
 		{ID: "c2", Actor: "u1", CreatedAt: "2026-01-02T00:00:00Z", CommentHTML: "<p>two</p>"},
 	}})
