@@ -245,6 +245,73 @@ func TestStatePickerSearchFiltersAndApplies(t *testing.T) {
 	}
 }
 
+// TestPriorityPickerSearchFiltersAndApplies is TestStatePickerSearchFiltersAndApplies for the
+// priority picker: typing narrows api.Priorities to matching entries and enter PATCHes whatever
+// ends up under the cursor after the filter.
+func TestPriorityPickerSearchFiltersAndApplies(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(api.WorkItem{ID: "id-0"})
+	}))
+	defer srv.Close()
+
+	m := boardFixture(1, 1, 120, 40)
+	m.client = api.New(srv.URL, "tok")
+	m.openPriorityPicker()
+
+	for _, r := range "urg" {
+		next, _ := m.updatePicker(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = next.(Model)
+	}
+	opts := m.filteredPriorities()
+	if len(opts) != 1 || opts[0] != "urgent" {
+		t.Fatalf("filteredPriorities() after typing %q = %v, want only urgent", m.pickerSearch.Value(), opts)
+	}
+	if m.pickerOptionCount() != 1 {
+		t.Fatalf("pickerOptionCount() = %d, want 1 while filtered", m.pickerOptionCount())
+	}
+
+	next, cmd := m.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("enter on the priority picker returned no command")
+	}
+	if msg, ok := cmd().(workItemUpdatedMsg); !ok || msg.err != nil {
+		t.Fatalf("updateWorkItem command = %+v", msg)
+	}
+	if gotBody["priority"] != "urgent" {
+		t.Fatalf("PATCH body priority = %v, want urgent", gotBody["priority"])
+	}
+}
+
+// TestNewItemPriorityPickerSearchSetsNewItemPriority checks the same search box works for the
+// board's new-work-item review step, where a choice lands in m.newItemPriority instead of
+// PATCHing anything (there is nothing to PATCH yet).
+func TestNewItemPriorityPickerSearchSetsNewItemPriority(t *testing.T) {
+	m := boardFixture(1, 1, 120, 40)
+	m.creatingItem = true
+	m.openNewItemPriorityPicker()
+
+	for _, r := range "high" {
+		next, _ := m.updatePicker(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = next.(Model)
+	}
+	opts := m.filteredPriorities()
+	if len(opts) != 1 || opts[0] != "high" {
+		t.Fatalf("filteredPriorities() after typing %q = %v, want only high", m.pickerSearch.Value(), opts)
+	}
+
+	next, _ := m.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.newItemPriority != "high" {
+		t.Fatalf("newItemPriority = %q, want high", m.newItemPriority)
+	}
+	if m.pickerOpen != "" {
+		t.Error("picker stayed open after enter")
+	}
+}
+
 // TestLabelsPickerSearchNarrowsListAndClampsCursor checks the labels picker's search box
 // narrows the list the same way, and that the cursor is clamped back onto the (now shorter)
 // filtered list rather than left pointing past its end.

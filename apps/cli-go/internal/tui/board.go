@@ -645,7 +645,7 @@ func (m Model) handleWorkItemCreated(msg workItemCreatedMsg) (tea.Model, tea.Cmd
 // detailBottom uses for the comment/description editor.
 func (m Model) viewNewItemEditor() string {
 	return focusedInputStyle.Render(columnHeaderStyle.Render("New work item") + "\n" + m.editor.View() + "\n" +
-		helpStyle.Render("enter  next    alt+enter  new line    esc  cancel"))
+		helpStyle.Render("enter  next    alt+enter/ctrl+j  new line    esc  cancel"))
 }
 
 // viewNewItemReview renders the review step that follows the title editor: the item's name

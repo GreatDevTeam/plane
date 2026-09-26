@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/makeplane/plane/apps/cli-go/internal/api"
 	"github.com/makeplane/plane/apps/cli-go/internal/config"
+	"github.com/makeplane/plane/apps/cli-go/internal/logging"
 )
 
 type screen int
@@ -391,9 +392,13 @@ func (m Model) View() string {
 	return body
 }
 
+// setError is every screen's single path for surfacing an API/auth failure: the footer only
+// ever shows the latest one (see footer below), so a new error setting it also appends it to
+// the local log — the only place an earlier one that already scrolled off is still visible.
 func (m *Model) setError(err error) {
 	if err != nil {
 		m.err = err.Error()
+		logging.Error("%s", m.err)
 	} else {
 		m.err = ""
 	}
@@ -480,13 +485,9 @@ var helpSections = []helpSection{
 		{"r", "refresh"},
 		{"esc/backspace", "back"},
 	}},
-	{"Editor (comment / new item title)", [][2]string{
+	{"Editor (comment / description / new item title)", [][2]string{
 		{"enter", "save"},
-		{"alt+enter", "insert newline"},
-		{"esc", "cancel"},
-	}},
-	{"Editor (description)", [][2]string{
-		{"ctrl+s", "save"},
+		{"alt+enter / ctrl+j", "insert newline"},
 		{"esc", "cancel"},
 	}},
 	{"Picker", [][2]string{
@@ -494,7 +495,7 @@ var helpSections = []helpSection{
 		{"enter", "apply"},
 		{"esc", "cancel"},
 	}},
-	{"Searchable picker (state/labels/assignee)", [][2]string{
+	{"Searchable picker (state/labels/assignee/priority)", [][2]string{
 		{"(type)", "filter the list"},
 		{"up/down", "move"},
 		{"space", "toggle label (labels only)"},

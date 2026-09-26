@@ -220,12 +220,11 @@ func (m *Model) closeEditor() {
 }
 
 // updateEditor drives the shared textarea for a comment, a description, and a new work item's
-// title. Comment and new-item submit on plain enter, with alt+enter to insert a newline instead
-// — bubbletea (no Kitty keyboard protocol support) cannot tell a real shift+enter from plain
-// enter on a standard terminal, so alt+enter (reliably reported, via ESC+CR) is the portable
-// stand-in. The description editor is unchanged: enter still inserts a newline there (falls
-// through to the textarea below) and ctrl+s still saves it — a multi-line body benefits from
-// plain enter being "just a newline" the way a short comment/title does not.
+// title — one consolidated scheme across all three: plain enter saves/submits, alt+enter (or
+// ctrl+j) inserts a newline instead. bubbletea (no Kitty keyboard protocol support) cannot tell
+// a real ctrl+enter or shift+enter from plain enter on a standard terminal — both arrive as the
+// same byte — so alt+enter (reliably reported, via ESC+CR) and ctrl+j (a real, distinct
+// linefeed byte) are the two working stand-ins.
 func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
@@ -236,15 +235,10 @@ func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.resetNewItem()
 			}
 			return m, nil
-		case "alt+enter":
-			if m.editorMode != "description" {
-				m.editor.InsertRune('\n')
-				return m, nil
-			}
+		case "alt+enter", "ctrl+j":
+			m.editor.InsertRune('\n')
+			return m, nil
 		case "enter":
-			if m.editorMode == "description" {
-				break
-			}
 			if m.editorMode == "new-item" {
 				name := strings.TrimSpace(m.editor.Value())
 				if name == "" {
@@ -257,6 +251,14 @@ func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.detailItem == nil {
 				return m, nil
 			}
+			if m.editorMode == "description" {
+				// Clearing a description is a legitimate edit, unlike posting an empty
+				// comment, so this one is saved exactly as typed.
+				html := plainToHTML(m.editor.Value())
+				m.status = "Saving description..."
+				return m, updateWorkItem(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID,
+					map[string]any{"description_html": html})
+			}
 			if strings.TrimSpace(m.editor.Value()) == "" {
 				return m, nil
 			}
@@ -266,16 +268,6 @@ func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, editComment(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID, m.editingCommentID, html)
 			}
 			return m, createComment(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID, html)
-		case "ctrl+s":
-			if m.editorMode != "description" || m.detailItem == nil {
-				return m, nil
-			}
-			// Clearing a description is a legitimate edit, unlike posting an empty comment,
-			// so this one is saved exactly as typed.
-			html := plainToHTML(m.editor.Value())
-			m.status = "Saving description..."
-			return m, updateWorkItem(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID,
-				map[string]any{"description_html": html})
 		}
 	}
 	var cmd tea.Cmd
@@ -655,10 +647,7 @@ func (m Model) detailBottom(width int) string {
 		case m.editingCommentID != "":
 			title = "Edit comment"
 		}
-		hint := "enter  save    alt+enter  new line    esc  cancel"
-		if m.editorMode == "description" {
-			hint = "ctrl+s  save    esc  cancel"
-		}
+		hint := "enter  save    alt+enter/ctrl+j  new line    esc  cancel"
 		bottom = focusedInputStyle.Render(columnHeaderStyle.Render(title) + "\n" + m.editor.View() + "\n" +
 			helpStyle.Render(hint))
 	} else {
