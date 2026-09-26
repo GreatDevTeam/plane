@@ -103,9 +103,9 @@ func (m Model) extrasStale(projectID string) bool {
 // handleBoardTick fires every boardRefreshInterval. It re-arms itself unconditionally, so
 // the board keeps refreshing after a skipped tick, and starts a background refresh unless
 // something on screen would be disturbed by one (see shouldSkipRefresh). While the detail
-// screen is open this also re-fetches its comments — applyBoardRefresh already keeps the open
-// item's own fields in sync, but comments are a separate endpoint the board refresh never
-// touches.
+// screen is open this also re-fetches its comments and activity log — applyBoardRefresh
+// already keeps the open item's own fields in sync, but those are separate endpoints the board
+// refresh never touches.
 func (m Model) handleBoardTick(boardTickMsg) (tea.Model, tea.Cmd) {
 	if m.shouldSkipRefresh() {
 		return m, boardTick()
@@ -121,7 +121,10 @@ func (m Model) handleBoardTick(boardTickMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.screen == screenDetail && m.detailItem != nil {
 		m.commentsLoading = true
-		cmds = append(cmds, fetchComments(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID))
+		cmds = append(cmds,
+			fetchComments(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID),
+			fetchActivities(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID),
+		)
 	}
 	return m, tea.Batch(cmds...)
 }
@@ -550,6 +553,7 @@ func (m Model) openNewItemEditor() (tea.Model, tea.Cmd) {
 	m.newItemPriority = "none"
 	m.newItemAssignee = ""
 	m.newItemLabels = nil
+	m.newItemDescription = ""
 	return m, nil
 }
 
@@ -559,6 +563,7 @@ func (m Model) openNewItemEditor() (tea.Model, tea.Cmd) {
 func (m *Model) resetNewItem() {
 	m.creatingItem = false
 	m.newItemName = ""
+	m.newItemDescription = ""
 	m.newItemStateID = ""
 	m.newItemPriority = ""
 	m.newItemAssignee = ""
@@ -567,9 +572,10 @@ func (m *Model) resetNewItem() {
 
 // updateNewItemReview drives the board's new-work-item review step: once a title has been
 // typed (openNewItemEditor's editor, confirmed with enter — see updateEditor), the user lands
-// here and can still change the state/priority/assignee/labels it will be created with, the
-// same s/y/T keys the board and detail screens already use, plus a on this screen for the
-// assignee. enter fires the actual POST; esc cancels the whole thing.
+// here and can still change the state/priority/assignee/labels/description it will be created
+// with, the same s/y/T keys the board and detail screens already use, plus a on this screen for
+// the assignee and d for the description (opens the shared editor in "new-item-description"
+// mode — see updateEditor). enter fires the actual POST; esc cancels the whole thing.
 func (m Model) updateNewItemReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
@@ -586,11 +592,16 @@ func (m Model) updateNewItemReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openNewItemAssigneePicker()
 	case "T":
 		m.openNewItemLabelPicker()
+	case "d":
+		m.openEditor("new-item-description", "Add a description (optional)...", plainRichText(m.newItemDescription), 8)
 	case "enter":
 		fields := map[string]any{
 			"name":     m.newItemName,
 			"state":    m.newItemStateID,
 			"priority": m.newItemPriority,
+		}
+		if m.newItemDescription != "" {
+			fields["description_html"] = m.newItemDescription
 		}
 		if m.newItemAssignee != "" {
 			fields["assignees"] = []string{m.newItemAssignee}
@@ -653,15 +664,31 @@ func (m Model) viewNewItemEditor() string {
 // fires the actual create.
 func (m Model) viewNewItemReview() string {
 	lines := []string{
-		"Name:      " + m.newItemName,
-		"State:     " + m.stateName(m.newItemStateID),
-		"Priority:  " + m.priorityLabel(m.newItemPriority),
-		"Assignee:  " + m.newItemAssigneeName(),
-		"Labels:    " + m.labelsLine(m.newItemLabels),
+		"Name:        " + m.newItemName,
+		"Description: " + m.newItemDescriptionSummary(),
+		"State:       " + m.stateName(m.newItemStateID),
+		"Priority:    " + m.priorityLabel(m.newItemPriority),
+		"Assignee:    " + m.newItemAssigneeName(),
+		"Labels:      " + m.labelsLine(m.newItemLabels),
 	}
 	body := columnHeaderStyle.Render("New work item") + "\n" + strings.Join(lines, "\n") + "\n" +
-		helpStyle.Render("s  state    y  priority    a  assignee    T  labels    enter  create    esc  cancel")
+		helpStyle.Render("s  state    y  priority    a  assignee    T  labels    d  description    enter  create    esc  cancel")
 	return focusedInputStyle.Render(body)
+}
+
+// newItemDescriptionSummary is the review step's one-line preview of the description set via
+// its "d" editor: "(none)" until one is set, otherwise the first line, truncated the same way
+// a board card's title is (see truncate) so a long or multi-line description cannot blow up
+// the review overlay's fixed layout.
+func (m Model) newItemDescriptionSummary() string {
+	plain := strings.TrimSpace(plainRichText(m.newItemDescription))
+	if plain == "" {
+		return "(none)"
+	}
+	if i := strings.IndexByte(plain, '\n'); i >= 0 {
+		plain = strings.TrimSpace(plain[:i])
+	}
+	return truncate(plain, 50)
 }
 
 // newItemAssigneeName is the review step's "Assignee:" value.

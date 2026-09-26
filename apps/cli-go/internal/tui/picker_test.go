@@ -69,7 +69,8 @@ func TestUpdatePickerAssigneeBuildsSingleAssigneePatch(t *testing.T) {
 	m.pickerOpen = "assignee"
 	m.pickerIdx = 2 // Bob (+1 for the leading Unassigned entry)
 
-	_, cmd := m.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
 	if cmd == nil {
 		t.Fatal("enter on the assignee picker returned no command")
 	}
@@ -79,12 +80,19 @@ func TestUpdatePickerAssigneeBuildsSingleAssigneePatch(t *testing.T) {
 	if ids, ok := gotBody["assignees"].([]any); !ok || len(ids) != 1 || ids[0] != "u2" {
 		t.Fatalf("PATCH body assignees = %v, want [\"u2\"]", gotBody["assignees"])
 	}
+	// The status names who it's assigning to (rather than a generic "Updating...") so this is
+	// distinguishable, in the moment, from the board's own "a" filter key — see the comment on
+	// this case in applyPickerEnter.
+	if m.status != "Assigning to Bob..." {
+		t.Errorf("status = %q, want it to name the assignee being set", m.status)
+	}
 
 	// Picking "Unassigned" (index 0) clears the list rather than leaving the previous
 	// assignee untouched.
 	gotBody = nil
 	m.pickerIdx = 0
-	_, cmd = m.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd = m.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
 	if msg, ok := cmd().(workItemUpdatedMsg); !ok || msg.err != nil {
 		t.Fatalf("updateWorkItem command = %+v", msg)
 	}

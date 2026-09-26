@@ -350,6 +350,80 @@ func TestHandleWorkItemLoadedIgnoresAStaleAnswer(t *testing.T) {
 	}
 }
 
+// TestHandleWorkItemLoadedSkipsAnswerOlderThanALaterPatch covers the race behind "changes made
+// from the task view don't stick": opening a card fires a background GET (openWorkItem) that
+// can still be in flight when the user immediately changes state/priority/assignee/labels from
+// a picker. That PATCH's own response (handleWorkItemUpdated) applies first and is
+// authoritative; the slower GET must not then overwrite it with the pre-change data it fetched.
+func TestHandleWorkItemLoadedSkipsAnswerOlderThanALaterPatch(t *testing.T) {
+	m := detailFixture()
+	m.items[0].State = "s2"
+	m.items[0].UpdatedAt = "2026-01-02T00:00:00Z"
+	m.detailItem.State = "s2"
+	m.detailItem.UpdatedAt = "2026-01-02T00:00:00Z"
+
+	stale := api.WorkItem{ID: "wi-1", State: "s1", UpdatedAt: "2026-01-01T00:00:00Z"}
+	next, _ := m.handleWorkItemLoaded(workItemLoadedMsg{item: &stale})
+	m = next.(Model)
+
+	if m.items[0].State != "s2" {
+		t.Errorf("board state = %q, a GET older than the last PATCH reverted it", m.items[0].State)
+	}
+	if m.detailItem.State != "s2" {
+		t.Errorf("detail state = %q, a GET older than the last PATCH reverted it", m.detailItem.State)
+	}
+}
+
+// TestCommentsContentIncludesActivities covers "load all actions as well (created, state
+// changed, etc)": the comments pane must also show the work item's activity log (activities.go),
+// interleaved with comments in timestamp order, even though only comments are ever focusable —
+// commentCursor still indexes m.comments alone.
+func TestCommentsContentIncludesActivities(t *testing.T) {
+	m := detailFixture()
+	m.comments = []api.Comment{
+		{ID: "c1", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z", CommentHTML: "<p>hello</p>"},
+	}
+	m.commentCursor = 0
+	m.activities = []api.Activity{
+		// Oldest first, matching the API's own order_by=created_at (see ListActivities) —
+		// the merge below assumes both slices already arrive sorted this way.
+		{ID: "a2", Actor: "u1", CreatedAt: "2025-12-31T00:00:00Z", Comment: "created the issue"},
+		{ID: "a1", Actor: "u2", CreatedAt: "2026-01-02T00:00:00Z", Field: "state", OldValue: "Todo", NewValue: "In Progress"},
+	}
+
+	view, _, _ := m.commentsContent(m.width)
+	if !strings.Contains(view, "hello") {
+		t.Errorf("comment missing from the merged view: %q", view)
+	}
+	if !strings.Contains(view, "changed state from Todo to In Progress") {
+		t.Errorf("state-change activity missing from the merged view: %q", view)
+	}
+	if !strings.Contains(view, "created the issue") {
+		t.Errorf("creation activity missing from the merged view: %q", view)
+	}
+	// a2 (2025-12-31) predates c1 (2026-01-01), which predates a1 (2026-01-02): the merge must
+	// preserve that order rather than grouping all activities after all comments.
+	if i, j := strings.Index(view, "created the issue"), strings.Index(view, "hello"); i > j {
+		t.Errorf("activity a2 rendered after comment c1 despite its earlier timestamp: %q", view)
+	}
+	if i, j := strings.Index(view, "hello"), strings.Index(view, "changed state"); i > j {
+		t.Errorf("comment c1 rendered after activity a1 despite its earlier timestamp: %q", view)
+	}
+}
+
+// TestDetailHeaderShowsActivityCount checks the pane header names both counts once there is at
+// least one activity entry, rather than only ever showing the comment count.
+func TestDetailHeaderShowsActivityCount(t *testing.T) {
+	m := detailFixture()
+	m.comments = []api.Comment{{ID: "c1", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z"}}
+	m.activities = []api.Activity{{ID: "a1", Actor: "u1", CreatedAt: "2026-01-02T00:00:00Z", Field: "priority", NewValue: "high"}}
+	m.commentCursor = 0
+
+	if view := m.viewDetail(); !strings.Contains(view, "Activity (1)") {
+		t.Errorf("header did not show the activity count: %q", view)
+	}
+}
+
 // TestDescriptionEditor covers editing a work item description: d opens the editor seeded
 // with the current description as plain text, and enter sends it back as HTML.
 func TestDescriptionEditor(t *testing.T) {
