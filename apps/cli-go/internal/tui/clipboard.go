@@ -32,3 +32,13 @@ func (m Model) copyItemURL(it *api.WorkItem) (tea.Model, tea.Cmd) {
 	m.status = "Copied " + url
 	return m, nil
 }
+
+// openItemInBrowser hands a work item's web-app URL to the OS's default handler — the board
+// and detail screens' "U" (shift+u) key, alongside "u"'s copy-to-clipboard. A nil item (the
+// board's U pressed with no card focused) is a no-op.
+func (m Model) openItemInBrowser(it *api.WorkItem) (tea.Model, tea.Cmd) {
+	if it == nil {
+		return m, nil
+	}
+	return m.openLinkInBrowser(m.workItemURL(*it))
+}

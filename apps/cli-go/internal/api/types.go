@@ -158,6 +158,21 @@ type Comment struct {
 	EditedAt    string `json:"edited_at"`
 }
 
+// Activity is one entry in a work item's activity/history log — a field change (state,
+// priority, assignee, labels, ...) or its creation. It is a separate endpoint/model from
+// Comment, and the two never overlap: the activities endpoint excludes comment/vote/reaction/
+// draft entries.
+type Activity struct {
+	ID        string `json:"id"`
+	Verb      string `json:"verb"`
+	Field     string `json:"field"`
+	OldValue  string `json:"old_value"`
+	NewValue  string `json:"new_value"`
+	Comment   string `json:"comment"`
+	Actor     string `json:"actor"`
+	CreatedAt string `json:"created_at"`
+}
+
 // Attachment is a file attached to a work item (FileAsset, as returned by the
 // work-items/{id}/attachments/ endpoints). Its display fields live under "attributes" rather
 // than at the top level.

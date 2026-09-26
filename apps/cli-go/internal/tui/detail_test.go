@@ -168,7 +168,7 @@ func TestBoardTickRefreshesDetailComments(t *testing.T) {
 func TestHandleCommentsFocusesTheLatestComment(t *testing.T) {
 	m := detailFixture()
 	m.commentCursor = 0
-	next, _ := m.handleComments(commentsMsg{items: []api.Comment{
+	next, _ := m.handleComments(commentsMsg{workItemID: "wi-1", items: []api.Comment{
 		{ID: "c1", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z"},
 		{ID: "c2", Actor: "u2", CreatedAt: "2026-01-02T00:00:00Z"},
 		{ID: "c3", Actor: "u1", CreatedAt: "2026-01-03T00:00:00Z"},
@@ -190,11 +190,33 @@ func TestHandleCommentsFocusesTheLatestComment(t *testing.T) {
 	}
 }
 
+// TestHandleCommentsIgnoresStaleWorkItem covers the "no comments yet but the task sure has
+// comments" bug: opening a card starts a comment fetch, and if the user backs out and opens a
+// different one before that fetch lands, the response is for a work item the screen has since
+// moved on from. Applying it anyway used to overwrite the newly opened item's (possibly
+// non-empty) comment thread with the previous item's — including an empty one, which rendered
+// as "No comments yet." for an item that actually has some.
+func TestHandleCommentsIgnoresStaleWorkItem(t *testing.T) {
+	m := detailFixture() // detailItem.ID == "wi-1"
+	m.comments = []api.Comment{{ID: "real", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z"}}
+	m.commentsLoading = true
+
+	next, _ := m.handleComments(commentsMsg{workItemID: "wi-2", items: nil})
+	m = next.(Model)
+
+	if len(m.comments) != 1 || m.comments[0].ID != "real" {
+		t.Fatalf("a stale response for a different work item overwrote the current comments: %+v", m.comments)
+	}
+	if !m.commentsLoading {
+		t.Error("a stale response cleared commentsLoading for the still-in-flight current fetch")
+	}
+}
+
 // TestHandleCommentsOnEmptyList checks an empty comment thread does not leave the cursor
 // pointing at a non-existent comment (len-1 == -1 must stay a safe, unused value).
 func TestHandleCommentsOnEmptyList(t *testing.T) {
 	m := detailFixture()
-	next, _ := m.handleComments(commentsMsg{items: nil})
+	next, _ := m.handleComments(commentsMsg{workItemID: "wi-1", items: nil})
 	m = next.(Model)
 	if m.commentCursor != -1 {
 		t.Fatalf("commentCursor = %d, want -1 for an empty comment list", m.commentCursor)
@@ -213,7 +235,7 @@ func TestDeleteSelectedCommentRejectsSomeoneElses(t *testing.T) {
 	m.client = api.New("http://example.invalid", "token")
 	m.project = api.Project{ID: "proj-1"}
 	m.user = &api.User{ID: "u1"}
-	next, _ := m.handleComments(commentsMsg{items: []api.Comment{
+	next, _ := m.handleComments(commentsMsg{workItemID: "wi-1", items: []api.Comment{
 		{ID: "c1", Actor: "someone-else", CreatedAt: "2026-01-01T00:00:00Z", CommentHTML: "<p>hi</p>"},
 	}})
 	m = next.(Model)
@@ -237,7 +259,7 @@ func TestDeleteSelectedCommentRejectsSomeoneElses(t *testing.T) {
 func TestHandleCommentDeletedRemovesCommentAndMovesCursor(t *testing.T) {
 	m := detailFixture()
 	m.user = &api.User{ID: "u1"}
-	next, _ := m.handleComments(commentsMsg{items: []api.Comment{
+	next, _ := m.handleComments(commentsMsg{workItemID: "wi-1", items: []api.Comment{
 		{ID: "c1", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z", CommentHTML: "<p>one</p>"},
 		{ID: "c2", Actor: "u1", CreatedAt: "2026-01-02T00:00:00Z", CommentHTML: "<p>two</p>"},
 	}})
@@ -265,7 +287,7 @@ func TestHandleCommentsBackgroundRefreshNoOpsWhenUnchanged(t *testing.T) {
 		{ID: "c1", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z", CommentHTML: "<p>hi</p>"},
 		{ID: "c2", Actor: "u2", CreatedAt: "2026-01-02T00:00:00Z", CommentHTML: "<p>hey</p>"},
 	}
-	next, _ := m.handleComments(commentsMsg{items: same})
+	next, _ := m.handleComments(commentsMsg{workItemID: "wi-1", items: same})
 	m = next.(Model)
 	m.commentCursor = 0 // simulate the user having scrolled back to the first comment
 
@@ -274,7 +296,7 @@ func TestHandleCommentsBackgroundRefreshNoOpsWhenUnchanged(t *testing.T) {
 		{ID: "c1", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z", CommentHTML: "<p>hi</p>"},
 		{ID: "c2", Actor: "u2", CreatedAt: "2026-01-02T00:00:00Z", CommentHTML: "<p>hey</p>"},
 	}
-	next, _ = m.handleComments(commentsMsg{items: unchanged})
+	next, _ = m.handleComments(commentsMsg{workItemID: "wi-1", items: unchanged})
 	m = next.(Model)
 	if m.commentCursor != 0 {
 		t.Errorf("an unchanged background refresh moved the cursor to %d, want it left at 0", m.commentCursor)
@@ -290,7 +312,7 @@ func TestHandleCommentsBackgroundRefreshKeepsCursorOnSameComment(t *testing.T) {
 		{ID: "c1", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z"},
 		{ID: "c2", Actor: "u2", CreatedAt: "2026-01-02T00:00:00Z"},
 	}
-	next, _ := m.handleComments(commentsMsg{items: first})
+	next, _ := m.handleComments(commentsMsg{workItemID: "wi-1", items: first})
 	m = next.(Model)
 	m.commentCursor = 0 // reading the first comment when a new one arrives
 
@@ -299,7 +321,7 @@ func TestHandleCommentsBackgroundRefreshKeepsCursorOnSameComment(t *testing.T) {
 		{ID: "c2", Actor: "u2", CreatedAt: "2026-01-02T00:00:00Z"},
 		{ID: "c3", Actor: "u1", CreatedAt: "2026-01-03T00:00:00Z"},
 	}
-	next, _ = m.handleComments(commentsMsg{items: withNewComment})
+	next, _ = m.handleComments(commentsMsg{workItemID: "wi-1", items: withNewComment})
 	m = next.(Model)
 	if m.commentCursor != 0 || m.comments[m.commentCursor].ID != "c1" {
 		t.Errorf("commentCursor = %d (%q), want it to stay on c1", m.commentCursor, m.comments[m.commentCursor].ID)
@@ -312,7 +334,7 @@ func TestHandleCommentsBackgroundRefreshKeepsCursorOnSameComment(t *testing.T) {
 // new — not get replaced by the loading placeholder every tick.
 func TestCommentsContentDoesNotBlankDuringBackgroundRefresh(t *testing.T) {
 	m := detailFixture()
-	next, _ := m.handleComments(commentsMsg{items: []api.Comment{
+	next, _ := m.handleComments(commentsMsg{workItemID: "wi-1", items: []api.Comment{
 		{ID: "c1", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z", CommentHTML: "<p>hi there</p>"},
 	}})
 	m = next.(Model)
@@ -350,8 +372,82 @@ func TestHandleWorkItemLoadedIgnoresAStaleAnswer(t *testing.T) {
 	}
 }
 
+// TestHandleWorkItemLoadedSkipsAnswerOlderThanALaterPatch covers the race behind "changes made
+// from the task view don't stick": opening a card fires a background GET (openWorkItem) that
+// can still be in flight when the user immediately changes state/priority/assignee/labels from
+// a picker. That PATCH's own response (handleWorkItemUpdated) applies first and is
+// authoritative; the slower GET must not then overwrite it with the pre-change data it fetched.
+func TestHandleWorkItemLoadedSkipsAnswerOlderThanALaterPatch(t *testing.T) {
+	m := detailFixture()
+	m.items[0].State = "s2"
+	m.items[0].UpdatedAt = "2026-01-02T00:00:00Z"
+	m.detailItem.State = "s2"
+	m.detailItem.UpdatedAt = "2026-01-02T00:00:00Z"
+
+	stale := api.WorkItem{ID: "wi-1", State: "s1", UpdatedAt: "2026-01-01T00:00:00Z"}
+	next, _ := m.handleWorkItemLoaded(workItemLoadedMsg{item: &stale})
+	m = next.(Model)
+
+	if m.items[0].State != "s2" {
+		t.Errorf("board state = %q, a GET older than the last PATCH reverted it", m.items[0].State)
+	}
+	if m.detailItem.State != "s2" {
+		t.Errorf("detail state = %q, a GET older than the last PATCH reverted it", m.detailItem.State)
+	}
+}
+
+// TestCommentsContentIncludesActivities covers "load all actions as well (created, state
+// changed, etc)": the comments pane must also show the work item's activity log (activities.go),
+// interleaved with comments in timestamp order, even though only comments are ever focusable —
+// commentCursor still indexes m.comments alone.
+func TestCommentsContentIncludesActivities(t *testing.T) {
+	m := detailFixture()
+	m.comments = []api.Comment{
+		{ID: "c1", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z", CommentHTML: "<p>hello</p>"},
+	}
+	m.commentCursor = 0
+	m.activities = []api.Activity{
+		// Oldest first, matching the API's own order_by=created_at (see ListActivities) —
+		// the merge below assumes both slices already arrive sorted this way.
+		{ID: "a2", Actor: "u1", CreatedAt: "2025-12-31T00:00:00Z", Comment: "created the issue"},
+		{ID: "a1", Actor: "u2", CreatedAt: "2026-01-02T00:00:00Z", Field: "state", OldValue: "Todo", NewValue: "In Progress"},
+	}
+
+	view, _, _ := m.commentsContent(m.width)
+	if !strings.Contains(view, "hello") {
+		t.Errorf("comment missing from the merged view: %q", view)
+	}
+	if !strings.Contains(view, "changed state from Todo to In Progress") {
+		t.Errorf("state-change activity missing from the merged view: %q", view)
+	}
+	if !strings.Contains(view, "created the issue") {
+		t.Errorf("creation activity missing from the merged view: %q", view)
+	}
+	// a2 (2025-12-31) predates c1 (2026-01-01), which predates a1 (2026-01-02): the merge must
+	// preserve that order rather than grouping all activities after all comments.
+	if i, j := strings.Index(view, "created the issue"), strings.Index(view, "hello"); i > j {
+		t.Errorf("activity a2 rendered after comment c1 despite its earlier timestamp: %q", view)
+	}
+	if i, j := strings.Index(view, "hello"), strings.Index(view, "changed state"); i > j {
+		t.Errorf("comment c1 rendered after activity a1 despite its earlier timestamp: %q", view)
+	}
+}
+
+// TestDetailHeaderShowsActivityCount checks the pane header names both counts once there is at
+// least one activity entry, rather than only ever showing the comment count.
+func TestDetailHeaderShowsActivityCount(t *testing.T) {
+	m := detailFixture()
+	m.comments = []api.Comment{{ID: "c1", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z"}}
+	m.activities = []api.Activity{{ID: "a1", Actor: "u1", CreatedAt: "2026-01-02T00:00:00Z", Field: "priority", NewValue: "high"}}
+	m.commentCursor = 0
+
+	if view := m.viewDetail(); !strings.Contains(view, "Activity (1)") {
+		t.Errorf("header did not show the activity count: %q", view)
+	}
+}
+
 // TestDescriptionEditor covers editing a work item description: d opens the editor seeded
-// with the current description as plain text, and ctrl+s sends it back as HTML.
+// with the current description as plain text, and enter sends it back as HTML.
 func TestDescriptionEditor(t *testing.T) {
 	m := detailFixture()
 	m.client = api.New("http://example.invalid", "token")
@@ -370,10 +466,10 @@ func TestDescriptionEditor(t *testing.T) {
 	}
 
 	m.editor.SetValue("rewritten\n\nsecond paragraph")
-	next, cmd := m.updateEditor(tea.KeyMsg{Type: tea.KeyCtrlS})
+	next, cmd := m.updateEditor(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
 	if cmd == nil {
-		t.Fatal("ctrl+s did not save the description")
+		t.Fatal("enter did not save the description")
 	}
 	if !strings.Contains(m.status, "Saving description") {
 		t.Errorf("status = %q, want it to mention saving the description", m.status)
@@ -401,7 +497,7 @@ func TestDescriptionEditorCanClearADescription(t *testing.T) {
 	next, _ := m.openDescriptionEditor()
 	m = next.(Model)
 	m.editor.SetValue("")
-	if _, cmd := m.updateEditor(tea.KeyMsg{Type: tea.KeyCtrlS}); cmd == nil {
+	if _, cmd := m.updateEditor(tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
 		t.Error("clearing a description was discarded like an empty comment")
 	}
 
@@ -414,10 +510,10 @@ func TestDescriptionEditorCanClearADescription(t *testing.T) {
 }
 
 // TestCommentEditorEnterSubmitsAltEnterInsertsNewline covers the comment/new-item editor's
-// submit key: plain enter saves (unlike the description editor, which keeps enter as a plain
-// newline and ctrl+s to save — see TestDescriptionEditor), and alt+enter inserts a literal
-// newline instead of submitting, the portable substitute for shift+enter this bubbletea version
-// cannot detect on a standard terminal (see updateEditor's doc comment).
+// submit key: plain enter saves, and alt+enter inserts a literal newline instead of submitting,
+// the portable substitute for ctrl+enter/shift+enter this bubbletea version cannot detect on a
+// standard terminal (see updateEditor's doc comment). The description editor uses the same
+// scheme — see TestDescriptionEditor.
 func TestCommentEditorEnterSubmitsAltEnterInsertsNewline(t *testing.T) {
 	m := detailFixture()
 	m.client = api.New("http://example.invalid", "token")
@@ -444,6 +540,38 @@ func TestCommentEditorEnterSubmitsAltEnterInsertsNewline(t *testing.T) {
 	}
 	if !strings.Contains(m.status, "Saving comment") {
 		t.Errorf("status = %q, want it to mention saving the comment", m.status)
+	}
+}
+
+// TestDescriptionEditorAltEnterAndCtrlJInsertNewline locks in the consolidated shortcut scheme
+// for the description editor: it used to treat plain enter as a newline and ctrl+s as save (see
+// TestDescriptionEditor's history); now, like the comment editor, alt+enter and ctrl+j both
+// insert a newline instead of saving.
+func TestDescriptionEditorAltEnterAndCtrlJInsertNewline(t *testing.T) {
+	m := detailFixture()
+	m.client = api.New("http://example.invalid", "token")
+	m.project = api.Project{ID: "proj-1"}
+
+	next, _ := m.openDescriptionEditor()
+	m = next.(Model)
+	m.editor.SetValue("first line")
+
+	next, _ = m.updateEditor(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	m = next.(Model)
+	if !m.editorOn {
+		t.Fatal("alt+enter closed the description editor instead of inserting a newline")
+	}
+	if got := m.editor.Value(); got != "first line\n" {
+		t.Fatalf("editor value after alt+enter = %q, want a trailing newline appended", got)
+	}
+
+	next, _ = m.updateEditor(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	m = next.(Model)
+	if !m.editorOn {
+		t.Fatal("ctrl+j closed the description editor instead of inserting a newline")
+	}
+	if got := m.editor.Value(); got != "first line\n\n" {
+		t.Fatalf("editor value after ctrl+j = %q, want a second trailing newline appended", got)
 	}
 }
 
@@ -483,7 +611,7 @@ func longDetailFixture(width, height int) Model {
 			CommentHTML: fmt.Sprintf("<p>%s comment %d, also long enough to wrap on its own.</p>", longNames[i%len(longNames)], i),
 		}
 	}
-	next, _ := m.handleComments(commentsMsg{items: comments})
+	next, _ := m.handleComments(commentsMsg{workItemID: "wi-1", items: comments})
 	return next.(Model)
 }
 

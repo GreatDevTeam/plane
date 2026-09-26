@@ -1,7 +1,10 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -239,6 +242,80 @@ func TestNewItemReviewPickersChangeStatePriorityAssignee(t *testing.T) {
 	}
 }
 
+// TestNewItemReviewDescriptionEditor covers the review step's "d" key: it opens the shared
+// editor in "new-item-description" mode, and ctrl+s stores the typed text as HTML in
+// m.newItemDescription — a PATCH-free save, since the item does not exist yet — and returns to
+// the review step with creatingItem still true.
+func TestNewItemReviewDescriptionEditor(t *testing.T) {
+	m := boardFixture(2, 2, 120, 40)
+	m.editor = newTestEditor()
+
+	next, _ := m.updateBoard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = next.(Model)
+	m.editor.SetValue("Card with a description")
+	next, _ = m.updateBoard(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+
+	next, _ = m.updateBoard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = next.(Model)
+	if !m.editorOn || m.editorMode != "new-item-description" {
+		t.Fatalf("d did not open the new-item description editor (on=%v mode=%q)", m.editorOn, m.editorMode)
+	}
+
+	m.editor.SetValue("Steps to reproduce")
+	next, cmd := m.updateBoard(tea.KeyMsg{Type: tea.KeyCtrlS})
+	m = next.(Model)
+	if cmd != nil {
+		t.Error("ctrl+s on a new-item description issued an API request, want none (the item does not exist yet)")
+	}
+	if m.editorOn {
+		t.Error("ctrl+s left the description editor open")
+	}
+	if !m.creatingItem {
+		t.Error("ctrl+s dropped the review step instead of returning to it")
+	}
+	if m.newItemDescription != "<p>Steps to reproduce</p>" {
+		t.Fatalf("newItemDescription = %q, want it saved as HTML", m.newItemDescription)
+	}
+	if !strings.Contains(m.viewNewItemReview(), "Steps to reproduce") {
+		t.Error("the review step does not show the description that was just set")
+	}
+}
+
+// TestCreateWorkItemIncludesDescription checks the review step's "enter" sends
+// description_html in the POST once one has been set via "d", and omits the field entirely
+// (like assignees/labels already do) when none was.
+func TestCreateWorkItemIncludesDescription(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(api.WorkItem{ID: "new-1"})
+	}))
+	defer srv.Close()
+
+	m := boardFixture(1, 0, 120, 40)
+	m.client = api.New(srv.URL, "tok")
+	m.creatingItem = true
+	m.newItemName = "Card"
+	m.newItemStateID = "s1"
+	m.newItemPriority = "none"
+
+	if _, cmd := m.updateNewItemReview(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		cmd()
+	}
+	if _, ok := gotBody["description_html"]; ok {
+		t.Errorf("POST body had description_html with none set: %+v", gotBody)
+	}
+
+	m.newItemDescription = "<p>Steps to reproduce</p>"
+	if _, cmd := m.updateNewItemReview(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		cmd()
+	}
+	if gotBody["description_html"] != "<p>Steps to reproduce</p>" {
+		t.Errorf("description_html = %v, want the text set via the review step's d editor", gotBody["description_html"])
+	}
+}
+
 // TestNewItemEditorEscCreatesNothing checks esc drops the draft without calling the API and
 // without touching the board's items.
 func TestNewItemEditorEscCreatesNothing(t *testing.T) {
@@ -340,6 +417,12 @@ func TestViewBoardFitsTerminalWithOverlays(t *testing.T) {
 		{"state picker", func(m *Model) { m.pickerOpen = "state" }},
 		{"priority picker", func(m *Model) { m.pickerOpen = "priority" }},
 		{"filter picker", func(m *Model) { m.filterOpen = "label" }},
+		{"new item description editor", func(m *Model) {
+			m.editor = newTestEditor()
+			m.creatingItem = true
+			next, _ := m.openNewItemDescriptionEditor()
+			*m = next.(Model)
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := boardFixture(6, 900, 120, 40)

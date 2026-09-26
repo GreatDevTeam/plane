@@ -60,6 +60,23 @@ func (m Model) filteredStates() []api.State {
 	return out
 }
 
+// filteredPriorities is filteredStates for the priority picker. api.Priorities is a short, fixed
+// enum rather than project data, but it still gets the same type-to-filter box as state/labels
+// for a consistent picker experience once a hand is already on the keyboard.
+func (m Model) filteredPriorities() []string {
+	q := strings.ToLower(strings.TrimSpace(m.pickerSearch.Value()))
+	if q == "" {
+		return api.Priorities
+	}
+	out := make([]string, 0, len(api.Priorities))
+	for _, p := range api.Priorities {
+		if strings.Contains(strings.ToLower(p), q) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // filteredLabels is filteredStates for the labels picker.
 func (m Model) filteredLabels() []api.Label {
 	q := strings.ToLower(strings.TrimSpace(m.pickerSearch.Value()))
@@ -100,6 +117,7 @@ func (m *Model) openPriorityPicker() {
 	}
 	m.pickerOpen = "priority"
 	m.pickerIdx = 0
+	m.resetPickerSearch()
 	for i, p := range api.Priorities {
 		if p == item.Priority {
 			m.pickerIdx = i
@@ -155,6 +173,7 @@ func (m *Model) openNewItemStatePicker() {
 func (m *Model) openNewItemPriorityPicker() {
 	m.pickerOpen = "priority"
 	m.pickerIdx = 0
+	m.resetPickerSearch()
 	for i, p := range api.Priorities {
 		if p == m.newItemPriority {
 			m.pickerIdx = i
@@ -237,6 +256,8 @@ func (m Model) pickerOptionCount() int {
 		return len(m.assigneePickerRows())
 	case "labels":
 		return len(m.filteredLabels())
+	case "priority":
+		return len(m.filteredPriorities())
 	case "links":
 		return len(m.linkOptions)
 	case "attachments":
@@ -252,12 +273,12 @@ func (m Model) updatePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	// The state, labels and assignee pickers are type-to-filter search boxes (see
+	// The state, labels, assignee and priority pickers are type-to-filter search boxes (see
 	// updateSearchablePicker): j/k/x are ordinary characters to type there, not shortcuts, so
 	// they need their own key handling entirely separate from every other (plain list) picker
 	// below.
 	switch m.pickerOpen {
-	case "state", "labels", "assignee", "new-item-assignee":
+	case "state", "labels", "assignee", "new-item-assignee", "priority":
 		return m.updateSearchablePicker(key)
 	}
 	switch key.String() {
@@ -400,8 +421,9 @@ func (m Model) applyPickerEnter() (tea.Model, tea.Cmd) {
 				m.newItemStateID = opts[m.pickerIdx].ID
 			}
 		case "priority":
-			if m.pickerIdx >= 0 && m.pickerIdx < len(api.Priorities) {
-				m.newItemPriority = api.Priorities[m.pickerIdx]
+			opts := m.filteredPriorities()
+			if m.pickerIdx >= 0 && m.pickerIdx < len(opts) {
+				m.newItemPriority = opts[m.pickerIdx]
 			}
 		case "new-item-assignee":
 			rows := m.assigneePickerRows()
@@ -434,6 +456,7 @@ func (m Model) applyPickerEnter() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		patch = map[string]any{"state": opts[m.pickerIdx].ID}
+		m.status = "Changing state..."
 	case "assignee":
 		// ids starts non-nil (rather than a nil slice) so clearing the assignee PATCHes
 		// "assignees": [] — a nil slice marshals to JSON null, which is not the same
@@ -444,6 +467,17 @@ func (m Model) applyPickerEnter() (tea.Model, tea.Cmd) {
 			ids = []string{rows[m.pickerIdx]}
 		}
 		patch = map[string]any{"assignees": ids}
+		// Naming who it's being assigned to (rather than a generic "Updating...") is the
+		// status message's one chance to tell this apart, in the moment, from the board's own
+		// "a" key: that one only filters the board and never shows a status at all — pressing
+		// the wrong one and seeing "Assigning to Bob..." here says immediately that this PATCHed
+		// the card instead of filtering it, rather than leaving that to be inferred from the
+		// board looking unfiltered afterwards.
+		name := "Unassigned"
+		if len(ids) > 0 {
+			name = m.memberName(ids[0])
+		}
+		m.status = "Assigning to " + name + "..."
 	case "labels":
 		// ids starts non-nil for the same reason the assignee PATCH above does: a nil
 		// slice marshals to JSON null, and clearing every label needs to PATCH "labels":
@@ -456,10 +490,19 @@ func (m Model) applyPickerEnter() (tea.Model, tea.Cmd) {
 			}
 		}
 		patch = map[string]any{"labels": ids}
+		m.status = "Updating labels..."
+	case "priority":
+		opts := m.filteredPriorities()
+		if m.pickerIdx < 0 || m.pickerIdx >= len(opts) {
+			m.pickerOpen = ""
+			return m, nil
+		}
+		patch = map[string]any{"priority": opts[m.pickerIdx]}
+		m.status = "Changing priority..."
 	default:
-		patch = map[string]any{"priority": api.Priorities[m.pickerIdx]}
+		m.pickerOpen = ""
+		return m, nil
 	}
-	m.status = "Updating..."
 	return m, updateWorkItem(m.client, m.workspaceSlug, m.project.ID, item.ID, patch)
 }
 
@@ -518,6 +561,12 @@ func (m Model) viewPicker() string {
 			out += pickerLine(name, i == m.pickerIdx)
 		}
 		hint = "type  search    up/down  move    enter  apply    esc  cancel"
+	case m.pickerOpen == "priority":
+		out += helpStyle.Render("Search: ") + m.pickerSearch.View() + "\n"
+		for i, p := range m.filteredPriorities() {
+			out += pickerLine(p, i == m.pickerIdx)
+		}
+		hint = "type  search    up/down  move    enter  apply    esc  cancel"
 	case m.pickerOpen == "labels":
 		out += helpStyle.Render("Search: ") + m.pickerSearch.View() + "\n"
 		for i, l := range m.filteredLabels() {
@@ -567,10 +616,6 @@ func (m Model) viewPicker() string {
 			out += pickerLine(m.relationSummary(opts[i]), i == m.pickerIdx)
 		}
 		hint = "j/k  move    enter  open    esc  cancel"
-	default:
-		for i, p := range api.Priorities {
-			out += pickerLine(p, i == m.pickerIdx)
-		}
 	}
 	out += helpStyle.Render(hint)
 	return focusedInputStyle.Render(out)

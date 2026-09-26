@@ -69,7 +69,8 @@ func TestUpdatePickerAssigneeBuildsSingleAssigneePatch(t *testing.T) {
 	m.pickerOpen = "assignee"
 	m.pickerIdx = 2 // Bob (+1 for the leading Unassigned entry)
 
-	_, cmd := m.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
 	if cmd == nil {
 		t.Fatal("enter on the assignee picker returned no command")
 	}
@@ -79,12 +80,19 @@ func TestUpdatePickerAssigneeBuildsSingleAssigneePatch(t *testing.T) {
 	if ids, ok := gotBody["assignees"].([]any); !ok || len(ids) != 1 || ids[0] != "u2" {
 		t.Fatalf("PATCH body assignees = %v, want [\"u2\"]", gotBody["assignees"])
 	}
+	// The status names who it's assigning to (rather than a generic "Updating...") so this is
+	// distinguishable, in the moment, from the board's own "a" filter key — see the comment on
+	// this case in applyPickerEnter.
+	if m.status != "Assigning to Bob..." {
+		t.Errorf("status = %q, want it to name the assignee being set", m.status)
+	}
 
 	// Picking "Unassigned" (index 0) clears the list rather than leaving the previous
 	// assignee untouched.
 	gotBody = nil
 	m.pickerIdx = 0
-	_, cmd = m.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd = m.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
 	if msg, ok := cmd().(workItemUpdatedMsg); !ok || msg.err != nil {
 		t.Fatalf("updateWorkItem command = %+v", msg)
 	}
@@ -242,6 +250,73 @@ func TestStatePickerSearchFiltersAndApplies(t *testing.T) {
 	}
 	if gotBody["state"] != "s2" {
 		t.Fatalf("PATCH body state = %v, want s2", gotBody["state"])
+	}
+}
+
+// TestPriorityPickerSearchFiltersAndApplies is TestStatePickerSearchFiltersAndApplies for the
+// priority picker: typing narrows api.Priorities to matching entries and enter PATCHes whatever
+// ends up under the cursor after the filter.
+func TestPriorityPickerSearchFiltersAndApplies(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(api.WorkItem{ID: "id-0"})
+	}))
+	defer srv.Close()
+
+	m := boardFixture(1, 1, 120, 40)
+	m.client = api.New(srv.URL, "tok")
+	m.openPriorityPicker()
+
+	for _, r := range "urg" {
+		next, _ := m.updatePicker(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = next.(Model)
+	}
+	opts := m.filteredPriorities()
+	if len(opts) != 1 || opts[0] != "urgent" {
+		t.Fatalf("filteredPriorities() after typing %q = %v, want only urgent", m.pickerSearch.Value(), opts)
+	}
+	if m.pickerOptionCount() != 1 {
+		t.Fatalf("pickerOptionCount() = %d, want 1 while filtered", m.pickerOptionCount())
+	}
+
+	next, cmd := m.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("enter on the priority picker returned no command")
+	}
+	if msg, ok := cmd().(workItemUpdatedMsg); !ok || msg.err != nil {
+		t.Fatalf("updateWorkItem command = %+v", msg)
+	}
+	if gotBody["priority"] != "urgent" {
+		t.Fatalf("PATCH body priority = %v, want urgent", gotBody["priority"])
+	}
+}
+
+// TestNewItemPriorityPickerSearchSetsNewItemPriority checks the same search box works for the
+// board's new-work-item review step, where a choice lands in m.newItemPriority instead of
+// PATCHing anything (there is nothing to PATCH yet).
+func TestNewItemPriorityPickerSearchSetsNewItemPriority(t *testing.T) {
+	m := boardFixture(1, 1, 120, 40)
+	m.creatingItem = true
+	m.openNewItemPriorityPicker()
+
+	for _, r := range "high" {
+		next, _ := m.updatePicker(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = next.(Model)
+	}
+	opts := m.filteredPriorities()
+	if len(opts) != 1 || opts[0] != "high" {
+		t.Fatalf("filteredPriorities() after typing %q = %v, want only high", m.pickerSearch.Value(), opts)
+	}
+
+	next, _ := m.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.newItemPriority != "high" {
+		t.Fatalf("newItemPriority = %q, want high", m.newItemPriority)
+	}
+	if m.pickerOpen != "" {
+		t.Error("picker stayed open after enter")
 	}
 }
 

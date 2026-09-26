@@ -35,6 +35,41 @@ type Config struct {
 	// StateColors/LabelColors, since a work item's priority is a fixed enum (api.Priorities)
 	// shared by every project rather than project-specific data.
 	PriorityColors map[string]string `json:"priority_colors,omitempty"`
+
+	// BoardFilters maps a project ID to the assignee/label/state/priority filters applied to
+	// that project's board, so they survive switching away to another project (or the
+	// projects list) and back, and a restart — the same way HiddenStates does for collapsed
+	// columns. The board's title search is deliberately not part of this: it is a transient
+	// query, not a standing filter, and persisting it across restarts would be surprising.
+	BoardFilters map[string]BoardFilter `json:"board_filters,omitempty"`
+}
+
+// BoardFilter is one project's board filters (see BoardFilters), each field "" meaning that
+// filter is not applied.
+type BoardFilter struct {
+	Assignee string `json:"assignee,omitempty"`
+	Label    string `json:"label,omitempty"`
+	State    string `json:"state,omitempty"`
+	Priority string `json:"priority,omitempty"`
+}
+
+// BoardFilterFor returns a project's saved board filters, or the zero value (no filters) if
+// none are saved.
+func (c Config) BoardFilterFor(projectID string) BoardFilter {
+	return c.BoardFilters[projectID]
+}
+
+// SetBoardFilter records a project's board filters. Passing the zero value (every filter
+// cleared) drops the project's entry entirely rather than persisting an empty one.
+func (c *Config) SetBoardFilter(projectID string, f BoardFilter) {
+	if f == (BoardFilter{}) {
+		delete(c.BoardFilters, projectID)
+		return
+	}
+	if c.BoardFilters == nil {
+		c.BoardFilters = make(map[string]BoardFilter)
+	}
+	c.BoardFilters[projectID] = f
 }
 
 // StateColorFor returns the local override color for a state, or "" when none is set.

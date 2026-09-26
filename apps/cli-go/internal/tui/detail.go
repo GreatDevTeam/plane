@@ -57,6 +57,8 @@ func (m Model) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openLabelPicker()
 	case "u":
 		return m.copyItemURL(m.detailItem)
+	case "U":
+		return m.openItemInBrowser(m.detailItem)
 	case "c":
 		return m.openCommentEditor("")
 	case "d":
@@ -129,6 +131,7 @@ func (m Model) refreshDetail() (tea.Model, tea.Cmd) {
 	return m, tea.Batch(
 		refreshBoard(m.client, m.workspaceSlug, m.project.ID),
 		fetchComments(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID),
+		fetchActivities(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID),
 		fetchAttachments(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID),
 	)
 }
@@ -220,12 +223,11 @@ func (m *Model) closeEditor() {
 }
 
 // updateEditor drives the shared textarea for a comment, a description, and a new work item's
-// title. Comment and new-item submit on plain enter, with alt+enter to insert a newline instead
-// — bubbletea (no Kitty keyboard protocol support) cannot tell a real shift+enter from plain
-// enter on a standard terminal, so alt+enter (reliably reported, via ESC+CR) is the portable
-// stand-in. The description editor is unchanged: enter still inserts a newline there (falls
-// through to the textarea below) and ctrl+s still saves it — a multi-line body benefits from
-// plain enter being "just a newline" the way a short comment/title does not.
+// title — one consolidated scheme across all three: plain enter saves/submits, alt+enter (or
+// ctrl+j) inserts a newline instead. bubbletea (no Kitty keyboard protocol support) cannot tell
+// a real ctrl+enter or shift+enter from plain enter on a standard terminal — both arrive as the
+// same byte — so alt+enter (reliably reported, via ESC+CR) and ctrl+j (a real, distinct
+// linefeed byte) are the two working stand-ins.
 func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
@@ -236,13 +238,11 @@ func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.resetNewItem()
 			}
 			return m, nil
-		case "alt+enter":
-			if m.editorMode != "description" {
-				m.editor.InsertRune('\n')
-				return m, nil
-			}
+		case "alt+enter", "ctrl+j":
+			m.editor.InsertRune('\n')
+			return m, nil
 		case "enter":
-			if m.editorMode == "description" {
+			if m.editorMode == "new-item-description" {
 				break
 			}
 			if m.editorMode == "new-item" {
@@ -257,6 +257,14 @@ func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.detailItem == nil {
 				return m, nil
 			}
+			if m.editorMode == "description" {
+				// Clearing a description is a legitimate edit, unlike posting an empty
+				// comment, so this one is saved exactly as typed.
+				html := plainToHTML(m.editor.Value())
+				m.status = "Saving description..."
+				return m, updateWorkItem(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID,
+					map[string]any{"description_html": html})
+			}
 			if strings.TrimSpace(m.editor.Value()) == "" {
 				return m, nil
 			}
@@ -267,15 +275,15 @@ func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, createComment(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID, html)
 		case "ctrl+s":
-			if m.editorMode != "description" || m.detailItem == nil {
+			if m.editorMode != "new-item-description" {
 				return m, nil
 			}
-			// Clearing a description is a legitimate edit, unlike posting an empty comment,
-			// so this one is saved exactly as typed.
-			html := plainToHTML(m.editor.Value())
-			m.status = "Saving description..."
-			return m, updateWorkItem(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID,
-				map[string]any{"description_html": html})
+			// The item does not exist yet, so there is nothing to PATCH: the text just
+			// lands in m.newItemDescription for the review step (viewNewItemReview) to
+			// show, and updateNewItemReview's "enter" to send with the actual POST.
+			m.newItemDescription = plainToHTML(m.editor.Value())
+			m.closeEditor()
+			return m, nil
 		}
 	}
 	var cmd tea.Cmd
@@ -295,19 +303,38 @@ func (m Model) handleWorkItemLoaded(msg workItemLoadedMsg) (tea.Model, tea.Cmd) 
 	m.setError(nil)
 	for i := range m.items {
 		if m.items[i].ID == msg.item.ID {
+			// This GET was fired the instant the card was opened (see openWorkItem) and can
+			// still be in flight when the user immediately changes state/priority/assignee/
+			// labels from the picker: that PATCH's own response (handleWorkItemUpdated) can
+			// land first and is authoritative, since it reflects a change this GET was issued
+			// before. Applying this GET's answer over it would silently revert the change —
+			// on the board and, if still open, the detail screen — until the next refresh.
+			// UpdatedAt is an RFC3339 timestamp, so a plain string compare orders it correctly
+			// (the same convention board.go's "updated-desc" sort already relies on).
+			if m.items[i].UpdatedAt > msg.item.UpdatedAt {
+				break
+			}
 			m.items[i] = *msg.item
 			break
 		}
 	}
 	// Only adopt it if the user is still looking at the same work item: by the time a slow
 	// request lands they may have gone back and opened a different card.
-	if m.detailItem != nil && m.detailItem.ID == msg.item.ID {
+	if m.detailItem != nil && m.detailItem.ID == msg.item.ID && m.detailItem.UpdatedAt <= msg.item.UpdatedAt {
 		m.detailItem = msg.item
 	}
 	return m, nil
 }
 
 func (m Model) handleComments(msg commentsMsg) (tea.Model, tea.Cmd) {
+	// A stale response for a work item the user has since navigated away from (e.g. they
+	// opened another card before this one's fetch returned): applying it would show that
+	// item's comments — or wrongly report "no comments yet" for one that has some — on top
+	// of whatever the screen has actually moved on to. commentsLoading/m.comments belong to
+	// whichever fetch is actually current, so leave both alone and drop this one.
+	if m.detailItem == nil || msg.workItemID != m.detailItem.ID {
+		return m, nil
+	}
 	// The 30s auto-refresh (handleBoardTick) re-fetches comments the same way opening the
 	// detail screen does, so this also runs every 30s while it is open. wasInitialLoad tells
 	// the two apart: openWorkItem clears m.comments to nil before firing the fetch, a
@@ -437,7 +464,7 @@ func formatTimestamp(s string) string {
 // wrap them at a word boundary rather than letting the terminal split one mid-hint.
 var detailHints = [][2]string{
 	{"s", "state"}, {"y", "priority"}, {"A", "assignee"}, {"T", "labels"}, {"d", "description"}, {"g", "parent"},
-	{"S", "sub-tasks"}, {"u", "copy url"}, {"tab", "switch pane"}, {"j/k", "scroll"}, {"n/p", "next/prev comment"},
+	{"S", "sub-tasks"}, {"u", "copy url"}, {"U", "open url"}, {"tab", "switch pane"}, {"j/k", "scroll"}, {"n/p", "next/prev comment"},
 	{"o", "open link"}, {"f", "attachments"}, {"c", "add comment"}, {"e", "edit comment"}, {"x", "delete comment"},
 	{"r", "refresh"}, {"esc", "back"}, {"q", "quit"},
 }
@@ -452,7 +479,11 @@ func (m Model) viewDetail() string {
 
 	header, meta := m.detailHeader(), m.detailMeta(width)
 
-	descHeader, commentsHeader := "Description", fmt.Sprintf("Comments (%d)", len(m.comments))
+	descHeader := "Description"
+	commentsHeader := fmt.Sprintf("Comments (%d)", len(m.comments))
+	if len(m.activities) > 0 {
+		commentsHeader = fmt.Sprintf("Comments (%d) & Activity (%d)", len(m.comments), len(m.activities))
+	}
 	if m.detailFocus == detailPaneDescription {
 		descHeader, commentsHeader = columnHeaderFocusedStyle.Render(descHeader), columnHeaderStyle.Render(commentsHeader)
 	} else {
@@ -655,10 +686,7 @@ func (m Model) detailBottom(width int) string {
 		case m.editingCommentID != "":
 			title = "Edit comment"
 		}
-		hint := "enter  save    alt+enter  new line    esc  cancel"
-		if m.editorMode == "description" {
-			hint = "ctrl+s  save    esc  cancel"
-		}
+		hint := "enter  save    alt+enter/ctrl+j  new line    esc  cancel"
 		bottom = focusedInputStyle.Render(columnHeaderStyle.Render(title) + "\n" + m.editor.View() + "\n" +
 			helpStyle.Render(hint))
 	} else {
@@ -698,19 +726,23 @@ func (m Model) descPaneContent(width int) string {
 	return ansi.Wrap(desc, width, "")
 }
 
-// commentsContent renders the comment thread's body — everything but the "Comments (N)"
-// header, which stays outside the scrollable pane so it never scrolls out of view — wrapped
-// to width for the same reason descPaneContent is. It also reports the line range the
-// focused comment ends up on, so scrollCommentsToCursor can scroll it into view.
+// commentsContent renders the comment-and-activity thread's body — everything but the
+// "Comments (N)" header, which stays outside the scrollable pane so it never scrolls out of
+// view — wrapped to width for the same reason descPaneContent is. It also reports the line
+// range the focused comment ends up on, so scrollCommentsToCursor can scroll it into view.
+// Activity entries (state/priority/assignee/label changes, creation — see activities.go) are
+// interleaved with comments in timestamp order, both already oldest-first from the API, but are
+// read-only: commentCursor only ever indexes m.comments, so an activity is never focused,
+// editable, or counted toward the cursor's bounds.
 func (m Model) commentsContent(width int) (content string, focusStart, focusEnd int) {
-	// Only the initial fetch (no comments yet) shows the loading placeholder. The 30s
-	// auto-refresh also sets commentsLoading while it re-fetches, but the thread already on
-	// screen must stay put until handleComments actually has something different to show —
-	// otherwise this blanked the pane on every tick, blinking it even when nothing changed.
-	if m.commentsLoading && len(m.comments) == 0 {
+	// Only the initial fetch (nothing yet) shows the loading placeholder. The 30s auto-refresh
+	// also sets commentsLoading while it re-fetches, but the thread already on screen must stay
+	// put until handleComments actually has something different to show — otherwise this
+	// blanked the pane on every tick, blinking it even when nothing changed.
+	if m.commentsLoading && len(m.comments) == 0 && len(m.activities) == 0 {
 		return helpStyle.Render("Loading comments..."), 0, 0
 	}
-	if len(m.comments) == 0 {
+	if len(m.comments) == 0 && len(m.activities) == 0 {
 		return helpStyle.Render("No comments yet."), 0, 0
 	}
 	var b strings.Builder
@@ -721,27 +753,38 @@ func (m Model) commentsContent(width int) (content string, focusStart, focusEnd 
 		b.WriteString("\n")
 		line += strings.Count(wrapped, "\n") + 1
 	}
-	for i, cm := range m.comments {
-		start := line
-		header := fmt.Sprintf("%s  %s", m.memberName(cm.Actor), formatTimestamp(cm.CreatedAt))
-		if cm.EditedAt != "" {
-			header += "  (edited)"
+	ci, ai := 0, 0
+	for ci < len(m.comments) || ai < len(m.activities) {
+		if ai >= len(m.activities) || (ci < len(m.comments) && m.comments[ci].CreatedAt <= m.activities[ai].CreatedAt) {
+			i, cm := ci, m.comments[ci]
+			start := line
+			header := fmt.Sprintf("%s  %s", m.memberName(cm.Actor), formatTimestamp(cm.CreatedAt))
+			if cm.EditedAt != "" {
+				header += "  (edited)"
+			}
+			style := helpStyle
+			if i == m.commentCursor {
+				header = "> " + header
+				style = commentHeaderFocusedStyle
+			} else {
+				header = "  " + header
+			}
+			writeLine(style.Render(header))
+			body := formatRichText(cm.CommentHTML)
+			for _, l := range strings.Split(body, "\n") {
+				writeLine("    " + l)
+			}
+			if i == m.commentCursor {
+				focusStart, focusEnd = start, line-1
+			}
+			ci++
+			continue
 		}
-		style := helpStyle
-		if i == m.commentCursor {
-			header = "> " + header
-			style = commentHeaderFocusedStyle
-		} else {
-			header = "  " + header
-		}
-		writeLine(style.Render(header))
-		body := formatRichText(cm.CommentHTML)
-		for _, l := range strings.Split(body, "\n") {
-			writeLine("    " + l)
-		}
-		if i == m.commentCursor {
-			focusStart, focusEnd = start, line-1
-		}
+		a := m.activities[ai]
+		header := fmt.Sprintf("  %s  %s", m.memberName(a.Actor), formatTimestamp(a.CreatedAt))
+		writeLine(helpStyle.Render(header))
+		writeLine("    " + helpStyle.Render(activitySummary(a)))
+		ai++
 	}
 	return strings.TrimSuffix(b.String(), "\n"), focusStart, focusEnd
 }

@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/makeplane/plane/apps/cli-go/internal/api"
 	"github.com/makeplane/plane/apps/cli-go/internal/config"
+	"github.com/makeplane/plane/apps/cli-go/internal/logging"
 )
 
 type screen int
@@ -175,6 +176,11 @@ type Model struct {
 	commentsLoading bool
 	commentCursor   int
 
+	// activities is the work item's activity/history log (state/priority/assignee/label
+	// changes, its creation, ...), fetched alongside comments and merged into the same pane
+	// by commentsContent — see activities.go. Read-only: commentCursor never indexes into it.
+	activities []api.Activity
+
 	// descViewport and commentsViewport are the detail screen's two independently
 	// scrollable panes (see detailPaneRows/detailLayout in detail.go). detailFocus says
 	// which one j/k currently drives: within detailPaneComments that still moves
@@ -185,19 +191,20 @@ type Model struct {
 
 	editor           textarea.Model
 	editorOn         bool
-	editorMode       string // "comment" | "description" | "new-item", meaningful while editorOn
+	editorMode       string // "comment" | "description" | "new-item" | "new-item-description", meaningful while editorOn
 	editingCommentID string // "" while composing a new comment, set while editing an existing one
 
 	// New work item creation (board's "n"): the title is typed in the shared editor
 	// (editorMode == "new-item"), then creatingItem drives a review step — reusing the
 	// state/priority pickers plus a dedicated assignee one — where the user can change where
 	// it lands before the POST actually fires. See openNewItemEditor/updateNewItemReview.
-	creatingItem    bool
-	newItemName     string
-	newItemStateID  string
-	newItemPriority string
-	newItemAssignee string   // member ID, "" = unassigned
-	newItemLabels   []string // label IDs to create the item with
+	creatingItem       bool
+	newItemName        string
+	newItemDescription string // HTML, set via the review step's "d" editor; "" = none
+	newItemStateID     string
+	newItemPriority    string
+	newItemAssignee    string   // member ID, "" = unassigned
+	newItemLabels      []string // label IDs to create the item with
 
 	// idPromptOpen/idInput drive the board's "open by work item id" prompt (g): a bare
 	// numeric input, looked up against the board's own m.items (see updateIDPrompt).
@@ -320,6 +327,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleWorkItemUpdated(msg)
 	case commentsMsg:
 		return m.handleComments(msg)
+	case activitiesMsg:
+		return m.handleActivities(msg)
 	case commentSavedMsg:
 		return m.handleCommentSaved(msg)
 	case commentDeletedMsg:
@@ -391,9 +400,13 @@ func (m Model) View() string {
 	return body
 }
 
+// setError is every screen's single path for surfacing an API/auth failure: the footer only
+// ever shows the latest one (see footer below), so a new error setting it also appends it to
+// the local log — the only place an earlier one that already scrolled off is still visible.
 func (m *Model) setError(err error) {
 	if err != nil {
 		m.err = err.Error()
+		logging.Error("%s", m.err)
 	} else {
 		m.err = ""
 	}
@@ -452,6 +465,7 @@ var helpSections = []helpSection{
 		{"L", "filter by label"},
 		{"/", "search by title (loaded cards only)"},
 		{"u", "copy work item url"},
+		{"U", "open work item in browser"},
 		{"g", "open by work item id"},
 		{"o", "card order"},
 		{"n", "new work item"},
@@ -469,6 +483,7 @@ var helpSections = []helpSection{
 		{"g", "go to parent work item"},
 		{"S", "jump to a sub-task"},
 		{"u", "copy work item url"},
+		{"U", "open work item in browser"},
 		{"tab", "switch between description/comments"},
 		{"j/k or up/down", "scroll focused pane one line"},
 		{"n/p", "jump to next/prev comment"},
@@ -480,13 +495,9 @@ var helpSections = []helpSection{
 		{"r", "refresh"},
 		{"esc/backspace", "back"},
 	}},
-	{"Editor (comment / new item title)", [][2]string{
+	{"Editor (comment / description / new item title)", [][2]string{
 		{"enter", "save"},
-		{"alt+enter", "insert newline"},
-		{"esc", "cancel"},
-	}},
-	{"Editor (description)", [][2]string{
-		{"ctrl+s", "save"},
+		{"alt+enter / ctrl+j", "insert newline"},
 		{"esc", "cancel"},
 	}},
 	{"Picker", [][2]string{
@@ -494,7 +505,7 @@ var helpSections = []helpSection{
 		{"enter", "apply"},
 		{"esc", "cancel"},
 	}},
-	{"Searchable picker (state/labels/assignee)", [][2]string{
+	{"Searchable picker (state/labels/assignee/priority)", [][2]string{
 		{"(type)", "filter the list"},
 		{"up/down", "move"},
 		{"space", "toggle label (labels only)"},

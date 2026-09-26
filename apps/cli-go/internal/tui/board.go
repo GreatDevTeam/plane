@@ -39,10 +39,16 @@ func (m Model) handleBoardData(msg boardDataMsg) (tea.Model, tea.Cmd) {
 	}
 	m.focusedCol = 0
 	m.colCursor = make([]int, len(m.states))
-	m.filterAssignee = ""
-	m.filterLabel = ""
-	m.filterState = ""
-	m.filterPriority = ""
+	// The assignee/label/state/priority filters persist per project (see config.BoardFilter)
+	// the same way hiddenStates does, so they stay applied until the user changes them —
+	// rather than silently clearing every time the board is (re)loaded, e.g. switching away to
+	// another project and back, or restarting. The title search is not part of this: it is a
+	// transient query, not a standing filter, and clears with every board load same as before.
+	bf := m.cfg.BoardFilterFor(m.project.ID)
+	m.filterAssignee = bf.Assignee
+	m.filterLabel = bf.Label
+	m.filterState = bf.State
+	m.filterPriority = bf.Priority
 	m.titleSearch = ""
 	m.hiddenStates = m.cfg.HiddenStatesFor(m.project.ID)
 	m.screen = screenBoard
@@ -103,9 +109,9 @@ func (m Model) extrasStale(projectID string) bool {
 // handleBoardTick fires every boardRefreshInterval. It re-arms itself unconditionally, so
 // the board keeps refreshing after a skipped tick, and starts a background refresh unless
 // something on screen would be disturbed by one (see shouldSkipRefresh). While the detail
-// screen is open this also re-fetches its comments — applyBoardRefresh already keeps the open
-// item's own fields in sync, but comments are a separate endpoint the board refresh never
-// touches.
+// screen is open this also re-fetches its comments and activity log — applyBoardRefresh
+// already keeps the open item's own fields in sync, but those are separate endpoints the board
+// refresh never touches.
 func (m Model) handleBoardTick(boardTickMsg) (tea.Model, tea.Cmd) {
 	if m.shouldSkipRefresh() {
 		return m, boardTick()
@@ -121,7 +127,10 @@ func (m Model) handleBoardTick(boardTickMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.screen == screenDetail && m.detailItem != nil {
 		m.commentsLoading = true
-		cmds = append(cmds, fetchComments(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID))
+		cmds = append(cmds,
+			fetchComments(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID),
+			fetchActivities(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID),
+		)
 	}
 	return m, tea.Batch(cmds...)
 }
@@ -480,6 +489,8 @@ func (m Model) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openTitleSearch()
 	case "u":
 		return m.copyItemURL(m.selectedItem())
+	case "U":
+		return m.openItemInBrowser(m.selectedItem())
 	case "g":
 		m.openIDPrompt()
 	}
@@ -550,6 +561,7 @@ func (m Model) openNewItemEditor() (tea.Model, tea.Cmd) {
 	m.newItemPriority = "none"
 	m.newItemAssignee = ""
 	m.newItemLabels = nil
+	m.newItemDescription = ""
 	return m, nil
 }
 
@@ -559,17 +571,30 @@ func (m Model) openNewItemEditor() (tea.Model, tea.Cmd) {
 func (m *Model) resetNewItem() {
 	m.creatingItem = false
 	m.newItemName = ""
+	m.newItemDescription = ""
 	m.newItemStateID = ""
 	m.newItemPriority = ""
 	m.newItemAssignee = ""
 	m.newItemLabels = nil
 }
 
+// openNewItemDescriptionEditor is the new-work-item review step's "d" key: it opens the same
+// shared textarea openDescriptionEditor uses for an existing item, pre-filled with whatever was
+// typed already, so it round-trips through plainRichText/plainToHTML the same way.
+func (m Model) openNewItemDescriptionEditor() (tea.Model, tea.Cmd) {
+	if !m.creatingItem {
+		return m, nil
+	}
+	m.openEditor("new-item-description", "Describe this work item...", plainRichText(m.newItemDescription), 12)
+	return m, nil
+}
+
 // updateNewItemReview drives the board's new-work-item review step: once a title has been
 // typed (openNewItemEditor's editor, confirmed with enter — see updateEditor), the user lands
-// here and can still change the state/priority/assignee/labels it will be created with, the
-// same s/y/T keys the board and detail screens already use, plus a on this screen for the
-// assignee. enter fires the actual POST; esc cancels the whole thing.
+// here and can still change the state/priority/assignee/labels/description it will be created
+// with, the same s/y/T keys the board and detail screens already use, plus a on this screen for
+// the assignee and d for the description (opens the shared editor in "new-item-description"
+// mode — see updateEditor). enter fires the actual POST; esc cancels the whole thing.
 func (m Model) updateNewItemReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
@@ -586,17 +611,25 @@ func (m Model) updateNewItemReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openNewItemAssigneePicker()
 	case "T":
 		m.openNewItemLabelPicker()
+	case "d":
+		return m.openNewItemDescriptionEditor()
 	case "enter":
 		fields := map[string]any{
 			"name":     m.newItemName,
 			"state":    m.newItemStateID,
 			"priority": m.newItemPriority,
 		}
+		if m.newItemDescription != "" {
+			fields["description_html"] = m.newItemDescription
+		}
 		if m.newItemAssignee != "" {
 			fields["assignees"] = []string{m.newItemAssignee}
 		}
 		if len(m.newItemLabels) > 0 {
 			fields["labels"] = m.newItemLabels
+		}
+		if m.newItemDescription != "" {
+			fields["description_html"] = m.newItemDescription
 		}
 		m.status = "Creating work item..."
 		return m, createWorkItem(m.client, m.workspaceSlug, m.project.ID, fields)
@@ -641,11 +674,17 @@ func (m Model) handleWorkItemCreated(msg workItemCreatedMsg) (tea.Model, tea.Cmd
 	return m, nil
 }
 
-// viewNewItemEditor renders the board's new-work-item title composer, in the same style
-// detailBottom uses for the comment/description editor.
+// viewNewItemEditor renders the board's new-work-item title or description composer (whichever
+// editorMode is active), in the same style detailBottom uses for the comment/description
+// editor. The description step behaves like an existing item's description editor (enter is a
+// plain newline, ctrl+s saves) rather than the title's enter-submits/alt+enter-for-newline.
 func (m Model) viewNewItemEditor() string {
-	return focusedInputStyle.Render(columnHeaderStyle.Render("New work item") + "\n" + m.editor.View() + "\n" +
-		helpStyle.Render("enter  next    alt+enter  new line    esc  cancel"))
+	title, hint := "New work item", "enter  next    alt+enter/ctrl+j  new line    esc  cancel"
+	if m.editorMode == "new-item-description" {
+		title, hint = "New work item: description", "ctrl+s  save    esc  cancel"
+	}
+	return focusedInputStyle.Render(columnHeaderStyle.Render(title) + "\n" + m.editor.View() + "\n" +
+		helpStyle.Render(hint))
 }
 
 // viewNewItemReview renders the review step that follows the title editor: the item's name
@@ -653,15 +692,31 @@ func (m Model) viewNewItemEditor() string {
 // fires the actual create.
 func (m Model) viewNewItemReview() string {
 	lines := []string{
-		"Name:      " + m.newItemName,
-		"State:     " + m.stateName(m.newItemStateID),
-		"Priority:  " + m.priorityLabel(m.newItemPriority),
-		"Assignee:  " + m.newItemAssigneeName(),
-		"Labels:    " + m.labelsLine(m.newItemLabels),
+		"Name:        " + m.newItemName,
+		"State:       " + m.stateName(m.newItemStateID),
+		"Priority:    " + m.priorityLabel(m.newItemPriority),
+		"Assignee:    " + m.newItemAssigneeName(),
+		"Labels:      " + m.labelsLine(m.newItemLabels),
+		"Description: " + m.newItemDescriptionSummary(),
 	}
 	body := columnHeaderStyle.Render("New work item") + "\n" + strings.Join(lines, "\n") + "\n" +
-		helpStyle.Render("s  state    y  priority    a  assignee    T  labels    enter  create    esc  cancel")
+		helpStyle.Render("s  state    y  priority    a  assignee    T  labels    d  description    enter  create    esc  cancel")
 	return focusedInputStyle.Render(body)
+}
+
+// newItemDescriptionSummary is the review step's one-line preview of the description set via
+// its "d" editor: "(none)" until one is set, otherwise the first line, truncated the same way
+// a board card's title is (see truncate) so a long or multi-line description cannot blow up
+// the review overlay's fixed layout.
+func (m Model) newItemDescriptionSummary() string {
+	plain := strings.TrimSpace(plainRichText(m.newItemDescription))
+	if plain == "" {
+		return "(none)"
+	}
+	if i := strings.IndexByte(plain, '\n'); i >= 0 {
+		plain = strings.TrimSpace(plain[:i])
+	}
+	return truncate(plain, 50)
 }
 
 // newItemAssigneeName is the review step's "Assignee:" value.
@@ -1025,7 +1080,7 @@ var boardHints = [][2]string{
 	{"h/l", "column"}, {"j/k", "card"}, {"enter", "open"}, {"s", "state"}, {"y", "priority"},
 	{"A", "assignee"}, {"T", "labels"}, {"a", "filter assignee"}, {"L", "filter label"},
 	{"S", "filter state"}, {"Y", "filter priority"}, {"/", "search title"}, {"u", "copy url"},
-	{"g", "open by id"}, {"o", "order"}, {"n", "new item"}, {"x", "hide col"}, {"C", "colors"},
+	{"U", "open url"}, {"g", "open by id"}, {"o", "order"}, {"n", "new item"}, {"x", "hide col"}, {"C", "colors"},
 	{"r", "refresh"}, {"p", "boards"}, {"q", "quit"},
 }
 

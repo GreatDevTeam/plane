@@ -104,6 +104,7 @@ func TestUpdateTitleSearchOpenTypeEnterEsc(t *testing.T) {
 // picker's option list (filterOptionLabels/filterOptionIDs), and enter applies whichever
 // filtered row is highlighted.
 func TestLabelFilterSearchNarrowsAndApplies(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	m := boardFixture(1, 1, 120, 40)
 	m.labels = []api.Label{
 		{ID: "l1", Name: "bug"},
