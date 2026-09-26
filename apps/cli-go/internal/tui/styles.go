@@ -77,6 +77,13 @@ var (
 
 	cardSelectedStyle = cardStyle.Background(colorSelect).Foreground(lipgloss.Color("255"))
 
+	// cardSelectedTextStyle is cardSelectedStyle's own background/foreground without its
+	// padding — used to explicitly repaint a plain run of text on a selected card's meta line
+	// (a separator between a colored priority/label segment and the next one) so it does not
+	// fall back to the terminal default the moment a neighboring segment's own Style.Render
+	// call resets. See cardMetaLine.
+	cardSelectedTextStyle = lipgloss.NewStyle().Background(colorSelect).Foreground(lipgloss.Color("255"))
+
 	// cardNumberStyle is a card's "#123" prefix — dimmer than the title next to it, the same
 	// way priorityStyles/pastelStateColor exist so a card's title is the thing that actually
 	// draws the eye rather than competing equally with its own work item number.
@@ -180,6 +187,14 @@ func labelText(name, hex string) string {
 	return lipgloss.NewStyle().Foreground(labelColor(hex)).Render(name)
 }
 
+// labelTextOn is labelText, but also painting the given background so the color survives
+// intact on a selected board card: its own Render call still ends with a full reset, but every
+// other run on that line explicitly restates the same background (see cardSelectedTextStyle,
+// priorityLabelOn), so the reset never leaves an unstyled gap for the next run to fall into.
+func labelTextOn(name, hex string, bg lipgloss.Color) string {
+	return lipgloss.NewStyle().Foreground(labelColor(hex)).Background(bg).Render(name)
+}
+
 // priorityLabel renders a priority's name in its own color (effectivePriorityColor), bold for
 // "urgent" the same way the built-in styles used to single it out before a local override could
 // replace them.
@@ -195,11 +210,17 @@ func (m Model) priorityLabel(p string) string {
 	return style.Render(name)
 }
 
-// priorityText is priorityLabel without the color — used on a selected board card, where the
-// outer highlight must not be interrupted by a nested style's own reset (see cardLines).
-func priorityText(p string) string {
-	if p == "" {
-		return "none"
+// priorityLabelOn is priorityLabel, but also painting the given background — the selected-card
+// counterpart to labelTextOn (see its own comment for why this keeps the color without
+// breaking the outer highlight).
+func (m Model) priorityLabelOn(p string, bg lipgloss.Color) string {
+	name := p
+	if name == "" {
+		name = "none"
 	}
-	return p
+	style := lipgloss.NewStyle().Foreground(labelColor(m.effectivePriorityColor(name))).Background(bg)
+	if name == "urgent" {
+		style = style.Bold(true)
+	}
+	return style.Render(name)
 }

@@ -77,6 +77,8 @@ func (m Model) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.openCommentEditor(cm.ID)
+	case "x":
+		return m.deleteSelectedComment()
 	case "tab":
 		if m.detailFocus == detailPaneComments {
 			m.detailFocus = detailPaneDescription
@@ -149,6 +151,22 @@ func (m Model) openCommentEditor(commentID string) (tea.Model, tea.Cmd) {
 	m.openEditor("comment", "Write a comment...", body, 5)
 	m.editingCommentID = commentID
 	return m, nil
+}
+
+// deleteSelectedComment removes the comment under the cursor — own comments only, the same
+// restriction "e" (edit) enforces. Unlike edit/create there is nothing to confirm or type, so
+// this fires the delete request straight away rather than opening a prompt first.
+func (m Model) deleteSelectedComment() (tea.Model, tea.Cmd) {
+	if m.detailItem == nil || len(m.comments) == 0 || m.commentCursor < 0 || m.commentCursor >= len(m.comments) {
+		return m, nil
+	}
+	cm := m.comments[m.commentCursor]
+	if m.user == nil || cm.Actor != m.user.ID {
+		m.setError(fmt.Errorf("you can only delete your own comments"))
+		return m, nil
+	}
+	m.status = "Deleting comment..."
+	return m, deleteComment(m.client, m.workspaceSlug, m.project.ID, m.detailItem.ID, cm.ID)
 }
 
 // openDescriptionEditor opens the work item's description for editing, seeded with the
@@ -369,6 +387,29 @@ func (m Model) handleCommentSaved(msg commentSavedMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleCommentDeleted removes the comment locally once the server confirms the delete,
+// moving the cursor onto the comment that took its place (or the new last one, if it was the
+// last comment) the same way handleCommentSaved settles the cursor after a create/edit.
+func (m Model) handleCommentDeleted(msg commentDeletedMsg) (tea.Model, tea.Cmd) {
+	m.status = ""
+	if msg.err != nil {
+		m.setError(msg.err)
+		return m, nil
+	}
+	m.setError(nil)
+	for i := range m.comments {
+		if m.comments[i].ID == msg.commentID {
+			m.comments = append(m.comments[:i], m.comments[i+1:]...)
+			break
+		}
+	}
+	if m.commentCursor >= len(m.comments) {
+		m.commentCursor = len(m.comments) - 1
+	}
+	m.scrollCommentsToCursor()
+	return m, nil
+}
+
 // memberName resolves a user ID to the person's full name ("Jane Doe"), falling back to
 // their Plane handle and then their email. The detail screen has room for real names, so it
 // uses these rather than the compact handles the filter pickers show.
@@ -397,8 +438,8 @@ func formatTimestamp(s string) string {
 var detailHints = [][2]string{
 	{"s", "state"}, {"y", "priority"}, {"A", "assignee"}, {"T", "labels"}, {"d", "description"}, {"g", "parent"},
 	{"S", "sub-tasks"}, {"u", "copy url"}, {"tab", "switch pane"}, {"j/k", "scroll"}, {"n/p", "next/prev comment"},
-	{"o", "open link"}, {"f", "attachments"}, {"c", "add comment"}, {"e", "edit comment"}, {"r", "refresh"},
-	{"esc", "back"}, {"q", "quit"},
+	{"o", "open link"}, {"f", "attachments"}, {"c", "add comment"}, {"e", "edit comment"}, {"x", "delete comment"},
+	{"r", "refresh"}, {"esc", "back"}, {"q", "quit"},
 }
 
 func (m Model) viewDetail() string {

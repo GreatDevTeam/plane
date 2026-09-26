@@ -205,6 +205,55 @@ func TestHandleCommentsOnEmptyList(t *testing.T) {
 	}
 }
 
+// TestDeleteSelectedCommentRejectsSomeoneElses covers "x" (delete comment): only the comment's
+// own author may delete it, the same restriction "e" (edit) already enforces, and this must be
+// checked locally before ever firing the request.
+func TestDeleteSelectedCommentRejectsSomeoneElses(t *testing.T) {
+	m := detailFixture()
+	m.client = api.New("http://example.invalid", "token")
+	m.project = api.Project{ID: "proj-1"}
+	m.user = &api.User{ID: "u1"}
+	next, _ := m.handleComments(commentsMsg{items: []api.Comment{
+		{ID: "c1", Actor: "someone-else", CreatedAt: "2026-01-01T00:00:00Z", CommentHTML: "<p>hi</p>"},
+	}})
+	m = next.(Model)
+
+	next, cmd := m.deleteSelectedComment()
+	m = next.(Model)
+	if cmd != nil {
+		t.Fatal("deleting someone else's comment fired a request")
+	}
+	if m.err == "" {
+		t.Fatal("deleting someone else's comment did not surface an error")
+	}
+	if len(m.comments) != 1 {
+		t.Fatal("the comment was removed locally despite being rejected")
+	}
+}
+
+// TestHandleCommentDeletedRemovesCommentAndMovesCursor covers the delete landing: the deleted
+// comment must disappear from m.comments (no confirmation round-trip, it is just gone), and the
+// cursor must land on the comment that took its place rather than past the end of the list.
+func TestHandleCommentDeletedRemovesCommentAndMovesCursor(t *testing.T) {
+	m := detailFixture()
+	m.user = &api.User{ID: "u1"}
+	next, _ := m.handleComments(commentsMsg{items: []api.Comment{
+		{ID: "c1", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z", CommentHTML: "<p>one</p>"},
+		{ID: "c2", Actor: "u1", CreatedAt: "2026-01-02T00:00:00Z", CommentHTML: "<p>two</p>"},
+	}})
+	m = next.(Model)
+	m.commentCursor = 1 // on c2, the last comment
+
+	next, _ = m.handleCommentDeleted(commentDeletedMsg{commentID: "c2"})
+	m = next.(Model)
+	if len(m.comments) != 1 || m.comments[0].ID != "c1" {
+		t.Fatalf("comments after delete = %+v, want only c1 left", m.comments)
+	}
+	if m.commentCursor != 0 {
+		t.Errorf("commentCursor = %d, want 0 after deleting the last comment", m.commentCursor)
+	}
+}
+
 // TestHandleCommentsBackgroundRefreshNoOpsWhenUnchanged covers the auto-refresh blink: the 30s
 // tick re-fetches comments unconditionally (TestBoardTickRefreshesDetailComments), and if the
 // thread has not actually changed, handleComments must leave the cursor and the rendered

@@ -220,6 +220,20 @@ func editComment(client *api.Client, workspaceSlug, projectID, workItemID, comme
 	}
 }
 
+type commentDeletedMsg struct {
+	commentID string
+	err       error
+}
+
+func deleteComment(client *api.Client, workspaceSlug, projectID, workItemID, commentID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		err := client.DeleteComment(ctx, workspaceSlug, projectID, workItemID, commentID)
+		return commentDeletedMsg{commentID: commentID, err: err}
+	}
+}
+
 // boardRefreshInterval is how often the board re-fetches itself in the background.
 const boardRefreshInterval = 30 * time.Second
 
