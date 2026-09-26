@@ -57,6 +57,8 @@ func (m Model) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openLabelPicker()
 	case "u":
 		return m.copyItemURL(m.detailItem)
+	case "U":
+		return m.openItemInBrowser(m.detailItem)
 	case "c":
 		return m.openCommentEditor("")
 	case "d":
@@ -325,6 +327,14 @@ func (m Model) handleWorkItemLoaded(msg workItemLoadedMsg) (tea.Model, tea.Cmd) 
 }
 
 func (m Model) handleComments(msg commentsMsg) (tea.Model, tea.Cmd) {
+	// A stale response for a work item the user has since navigated away from (e.g. they
+	// opened another card before this one's fetch returned): applying it would show that
+	// item's comments — or wrongly report "no comments yet" for one that has some — on top
+	// of whatever the screen has actually moved on to. commentsLoading/m.comments belong to
+	// whichever fetch is actually current, so leave both alone and drop this one.
+	if m.detailItem == nil || msg.workItemID != m.detailItem.ID {
+		return m, nil
+	}
 	// The 30s auto-refresh (handleBoardTick) re-fetches comments the same way opening the
 	// detail screen does, so this also runs every 30s while it is open. wasInitialLoad tells
 	// the two apart: openWorkItem clears m.comments to nil before firing the fetch, a
@@ -454,7 +464,7 @@ func formatTimestamp(s string) string {
 // wrap them at a word boundary rather than letting the terminal split one mid-hint.
 var detailHints = [][2]string{
 	{"s", "state"}, {"y", "priority"}, {"A", "assignee"}, {"T", "labels"}, {"d", "description"}, {"g", "parent"},
-	{"S", "sub-tasks"}, {"u", "copy url"}, {"tab", "switch pane"}, {"j/k", "scroll"}, {"n/p", "next/prev comment"},
+	{"S", "sub-tasks"}, {"u", "copy url"}, {"U", "open url"}, {"tab", "switch pane"}, {"j/k", "scroll"}, {"n/p", "next/prev comment"},
 	{"o", "open link"}, {"f", "attachments"}, {"c", "add comment"}, {"e", "edit comment"}, {"x", "delete comment"},
 	{"r", "refresh"}, {"esc", "back"}, {"q", "quit"},
 }

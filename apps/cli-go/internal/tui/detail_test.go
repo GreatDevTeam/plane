@@ -168,7 +168,7 @@ func TestBoardTickRefreshesDetailComments(t *testing.T) {
 func TestHandleCommentsFocusesTheLatestComment(t *testing.T) {
 	m := detailFixture()
 	m.commentCursor = 0
-	next, _ := m.handleComments(commentsMsg{items: []api.Comment{
+	next, _ := m.handleComments(commentsMsg{workItemID: "wi-1", items: []api.Comment{
 		{ID: "c1", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z"},
 		{ID: "c2", Actor: "u2", CreatedAt: "2026-01-02T00:00:00Z"},
 		{ID: "c3", Actor: "u1", CreatedAt: "2026-01-03T00:00:00Z"},
@@ -190,11 +190,33 @@ func TestHandleCommentsFocusesTheLatestComment(t *testing.T) {
 	}
 }
 
+// TestHandleCommentsIgnoresStaleWorkItem covers the "no comments yet but the task sure has
+// comments" bug: opening a card starts a comment fetch, and if the user backs out and opens a
+// different one before that fetch lands, the response is for a work item the screen has since
+// moved on from. Applying it anyway used to overwrite the newly opened item's (possibly
+// non-empty) comment thread with the previous item's — including an empty one, which rendered
+// as "No comments yet." for an item that actually has some.
+func TestHandleCommentsIgnoresStaleWorkItem(t *testing.T) {
+	m := detailFixture() // detailItem.ID == "wi-1"
+	m.comments = []api.Comment{{ID: "real", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z"}}
+	m.commentsLoading = true
+
+	next, _ := m.handleComments(commentsMsg{workItemID: "wi-2", items: nil})
+	m = next.(Model)
+
+	if len(m.comments) != 1 || m.comments[0].ID != "real" {
+		t.Fatalf("a stale response for a different work item overwrote the current comments: %+v", m.comments)
+	}
+	if !m.commentsLoading {
+		t.Error("a stale response cleared commentsLoading for the still-in-flight current fetch")
+	}
+}
+
 // TestHandleCommentsOnEmptyList checks an empty comment thread does not leave the cursor
 // pointing at a non-existent comment (len-1 == -1 must stay a safe, unused value).
 func TestHandleCommentsOnEmptyList(t *testing.T) {
 	m := detailFixture()
-	next, _ := m.handleComments(commentsMsg{items: nil})
+	next, _ := m.handleComments(commentsMsg{workItemID: "wi-1", items: nil})
 	m = next.(Model)
 	if m.commentCursor != -1 {
 		t.Fatalf("commentCursor = %d, want -1 for an empty comment list", m.commentCursor)
@@ -265,7 +287,7 @@ func TestHandleCommentsBackgroundRefreshNoOpsWhenUnchanged(t *testing.T) {
 		{ID: "c1", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z", CommentHTML: "<p>hi</p>"},
 		{ID: "c2", Actor: "u2", CreatedAt: "2026-01-02T00:00:00Z", CommentHTML: "<p>hey</p>"},
 	}
-	next, _ := m.handleComments(commentsMsg{items: same})
+	next, _ := m.handleComments(commentsMsg{workItemID: "wi-1", items: same})
 	m = next.(Model)
 	m.commentCursor = 0 // simulate the user having scrolled back to the first comment
 
@@ -274,7 +296,7 @@ func TestHandleCommentsBackgroundRefreshNoOpsWhenUnchanged(t *testing.T) {
 		{ID: "c1", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z", CommentHTML: "<p>hi</p>"},
 		{ID: "c2", Actor: "u2", CreatedAt: "2026-01-02T00:00:00Z", CommentHTML: "<p>hey</p>"},
 	}
-	next, _ = m.handleComments(commentsMsg{items: unchanged})
+	next, _ = m.handleComments(commentsMsg{workItemID: "wi-1", items: unchanged})
 	m = next.(Model)
 	if m.commentCursor != 0 {
 		t.Errorf("an unchanged background refresh moved the cursor to %d, want it left at 0", m.commentCursor)
@@ -290,7 +312,7 @@ func TestHandleCommentsBackgroundRefreshKeepsCursorOnSameComment(t *testing.T) {
 		{ID: "c1", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z"},
 		{ID: "c2", Actor: "u2", CreatedAt: "2026-01-02T00:00:00Z"},
 	}
-	next, _ := m.handleComments(commentsMsg{items: first})
+	next, _ := m.handleComments(commentsMsg{workItemID: "wi-1", items: first})
 	m = next.(Model)
 	m.commentCursor = 0 // reading the first comment when a new one arrives
 
@@ -299,7 +321,7 @@ func TestHandleCommentsBackgroundRefreshKeepsCursorOnSameComment(t *testing.T) {
 		{ID: "c2", Actor: "u2", CreatedAt: "2026-01-02T00:00:00Z"},
 		{ID: "c3", Actor: "u1", CreatedAt: "2026-01-03T00:00:00Z"},
 	}
-	next, _ = m.handleComments(commentsMsg{items: withNewComment})
+	next, _ = m.handleComments(commentsMsg{workItemID: "wi-1", items: withNewComment})
 	m = next.(Model)
 	if m.commentCursor != 0 || m.comments[m.commentCursor].ID != "c1" {
 		t.Errorf("commentCursor = %d (%q), want it to stay on c1", m.commentCursor, m.comments[m.commentCursor].ID)
@@ -312,7 +334,7 @@ func TestHandleCommentsBackgroundRefreshKeepsCursorOnSameComment(t *testing.T) {
 // new — not get replaced by the loading placeholder every tick.
 func TestCommentsContentDoesNotBlankDuringBackgroundRefresh(t *testing.T) {
 	m := detailFixture()
-	next, _ := m.handleComments(commentsMsg{items: []api.Comment{
+	next, _ := m.handleComments(commentsMsg{workItemID: "wi-1", items: []api.Comment{
 		{ID: "c1", Actor: "u1", CreatedAt: "2026-01-01T00:00:00Z", CommentHTML: "<p>hi there</p>"},
 	}})
 	m = next.(Model)
@@ -589,7 +611,7 @@ func longDetailFixture(width, height int) Model {
 			CommentHTML: fmt.Sprintf("<p>%s comment %d, also long enough to wrap on its own.</p>", longNames[i%len(longNames)], i),
 		}
 	}
-	next, _ := m.handleComments(commentsMsg{items: comments})
+	next, _ := m.handleComments(commentsMsg{workItemID: "wi-1", items: comments})
 	return next.(Model)
 }
 

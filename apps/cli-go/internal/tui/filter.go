@@ -5,7 +5,23 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/makeplane/plane/apps/cli-go/internal/api"
+	"github.com/makeplane/plane/apps/cli-go/internal/config"
 )
+
+// saveBoardFilters persists the board's current assignee/label/state/priority filters against
+// m.project.ID, so they survive switching away and back to this project (or a restart) — see
+// config.BoardFilter. Called every time one of the filter pickers applies a change.
+func (m *Model) saveBoardFilters() {
+	m.cfg.SetBoardFilter(m.project.ID, config.BoardFilter{
+		Assignee: m.filterAssignee,
+		Label:    m.filterLabel,
+		State:    m.filterState,
+		Priority: m.filterPriority,
+	})
+	if err := config.Save(m.cfg); err != nil {
+		m.setError(err)
+	}
+}
 
 // openFilterPicker opens a list of every assignee (or label/state/priority) on the project,
 // plus a leading "All" entry, so the current filter's value stays selected. The label filter
@@ -156,6 +172,7 @@ func (m Model) updateFilterPicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.filterLabel = value
 		}
 		m.filterOpen = ""
+		m.saveBoardFilters()
 	}
 	return m, nil
 }
@@ -188,6 +205,7 @@ func (m Model) updateLabelFilterSearch(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filterLabel = value
 		m.filterOpen = ""
 		m.filterSearch.Blur()
+		m.saveBoardFilters()
 		return m, nil
 	}
 	before := m.filterSearch.Value()

@@ -274,8 +274,8 @@ func TestNewItemReviewDescriptionEditor(t *testing.T) {
 	if !m.creatingItem {
 		t.Error("ctrl+s dropped the review step instead of returning to it")
 	}
-	if !strings.Contains(m.newItemDescription, "Steps to reproduce") {
-		t.Errorf("newItemDescription = %q, want it to contain the typed text", m.newItemDescription)
+	if m.newItemDescription != "<p>Steps to reproduce</p>" {
+		t.Fatalf("newItemDescription = %q, want it saved as HTML", m.newItemDescription)
 	}
 	if !strings.Contains(m.viewNewItemReview(), "Steps to reproduce") {
 		t.Error("the review step does not show the description that was just set")
@@ -417,6 +417,12 @@ func TestViewBoardFitsTerminalWithOverlays(t *testing.T) {
 		{"state picker", func(m *Model) { m.pickerOpen = "state" }},
 		{"priority picker", func(m *Model) { m.pickerOpen = "priority" }},
 		{"filter picker", func(m *Model) { m.filterOpen = "label" }},
+		{"new item description editor", func(m *Model) {
+			m.editor = newTestEditor()
+			m.creatingItem = true
+			next, _ := m.openNewItemDescriptionEditor()
+			*m = next.(Model)
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := boardFixture(6, 900, 120, 40)

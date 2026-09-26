@@ -191,7 +191,7 @@ type Model struct {
 
 	editor           textarea.Model
 	editorOn         bool
-	editorMode       string // "comment" | "description" | "new-item", meaningful while editorOn
+	editorMode       string // "comment" | "description" | "new-item" | "new-item-description", meaningful while editorOn
 	editingCommentID string // "" while composing a new comment, set while editing an existing one
 
 	// New work item creation (board's "n"): the title is typed in the shared editor
@@ -465,6 +465,7 @@ var helpSections = []helpSection{
 		{"L", "filter by label"},
 		{"/", "search by title (loaded cards only)"},
 		{"u", "copy work item url"},
+		{"U", "open work item in browser"},
 		{"g", "open by work item id"},
 		{"o", "card order"},
 		{"n", "new work item"},
@@ -482,6 +483,7 @@ var helpSections = []helpSection{
 		{"g", "go to parent work item"},
 		{"S", "jump to a sub-task"},
 		{"u", "copy work item url"},
+		{"U", "open work item in browser"},
 		{"tab", "switch between description/comments"},
 		{"j/k or up/down", "scroll focused pane one line"},
 		{"n/p", "jump to next/prev comment"},

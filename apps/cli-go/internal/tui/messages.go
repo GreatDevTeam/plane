@@ -203,8 +203,9 @@ func fetchWorkItemsPage(client *api.Client, workspaceSlug, projectID, cursor str
 }
 
 type commentsMsg struct {
-	items []api.Comment
-	err   error
+	workItemID string
+	items      []api.Comment
+	err        error
 }
 
 func fetchComments(client *api.Client, workspaceSlug, projectID, workItemID string) tea.Cmd {
@@ -212,7 +213,7 @@ func fetchComments(client *api.Client, workspaceSlug, projectID, workItemID stri
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
 		items, err := client.ListComments(ctx, workspaceSlug, projectID, workItemID)
-		return commentsMsg{items: items, err: err}
+		return commentsMsg{workItemID: workItemID, items: items, err: err}
 	}
 }
 

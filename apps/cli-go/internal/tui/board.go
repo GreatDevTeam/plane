@@ -39,10 +39,16 @@ func (m Model) handleBoardData(msg boardDataMsg) (tea.Model, tea.Cmd) {
 	}
 	m.focusedCol = 0
 	m.colCursor = make([]int, len(m.states))
-	m.filterAssignee = ""
-	m.filterLabel = ""
-	m.filterState = ""
-	m.filterPriority = ""
+	// The assignee/label/state/priority filters persist per project (see config.BoardFilter)
+	// the same way hiddenStates does, so they stay applied until the user changes them —
+	// rather than silently clearing every time the board is (re)loaded, e.g. switching away to
+	// another project and back, or restarting. The title search is not part of this: it is a
+	// transient query, not a standing filter, and clears with every board load same as before.
+	bf := m.cfg.BoardFilterFor(m.project.ID)
+	m.filterAssignee = bf.Assignee
+	m.filterLabel = bf.Label
+	m.filterState = bf.State
+	m.filterPriority = bf.Priority
 	m.titleSearch = ""
 	m.hiddenStates = m.cfg.HiddenStatesFor(m.project.ID)
 	m.screen = screenBoard
@@ -483,6 +489,8 @@ func (m Model) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openTitleSearch()
 	case "u":
 		return m.copyItemURL(m.selectedItem())
+	case "U":
+		return m.openItemInBrowser(m.selectedItem())
 	case "g":
 		m.openIDPrompt()
 	}
@@ -570,6 +578,17 @@ func (m *Model) resetNewItem() {
 	m.newItemLabels = nil
 }
 
+// openNewItemDescriptionEditor is the new-work-item review step's "d" key: it opens the same
+// shared textarea openDescriptionEditor uses for an existing item, pre-filled with whatever was
+// typed already, so it round-trips through plainRichText/plainToHTML the same way.
+func (m Model) openNewItemDescriptionEditor() (tea.Model, tea.Cmd) {
+	if !m.creatingItem {
+		return m, nil
+	}
+	m.openEditor("new-item-description", "Describe this work item...", plainRichText(m.newItemDescription), 12)
+	return m, nil
+}
+
 // updateNewItemReview drives the board's new-work-item review step: once a title has been
 // typed (openNewItemEditor's editor, confirmed with enter — see updateEditor), the user lands
 // here and can still change the state/priority/assignee/labels/description it will be created
@@ -593,7 +612,7 @@ func (m Model) updateNewItemReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "T":
 		m.openNewItemLabelPicker()
 	case "d":
-		m.openEditor("new-item-description", "Add a description (optional)...", plainRichText(m.newItemDescription), 8)
+		return m.openNewItemDescriptionEditor()
 	case "enter":
 		fields := map[string]any{
 			"name":     m.newItemName,
@@ -608,6 +627,9 @@ func (m Model) updateNewItemReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if len(m.newItemLabels) > 0 {
 			fields["labels"] = m.newItemLabels
+		}
+		if m.newItemDescription != "" {
+			fields["description_html"] = m.newItemDescription
 		}
 		m.status = "Creating work item..."
 		return m, createWorkItem(m.client, m.workspaceSlug, m.project.ID, fields)
@@ -652,11 +674,17 @@ func (m Model) handleWorkItemCreated(msg workItemCreatedMsg) (tea.Model, tea.Cmd
 	return m, nil
 }
 
-// viewNewItemEditor renders the board's new-work-item title composer, in the same style
-// detailBottom uses for the comment/description editor.
+// viewNewItemEditor renders the board's new-work-item title or description composer (whichever
+// editorMode is active), in the same style detailBottom uses for the comment/description
+// editor. The description step behaves like an existing item's description editor (enter is a
+// plain newline, ctrl+s saves) rather than the title's enter-submits/alt+enter-for-newline.
 func (m Model) viewNewItemEditor() string {
-	return focusedInputStyle.Render(columnHeaderStyle.Render("New work item") + "\n" + m.editor.View() + "\n" +
-		helpStyle.Render("enter  next    alt+enter/ctrl+j  new line    esc  cancel"))
+	title, hint := "New work item", "enter  next    alt+enter/ctrl+j  new line    esc  cancel"
+	if m.editorMode == "new-item-description" {
+		title, hint = "New work item: description", "ctrl+s  save    esc  cancel"
+	}
+	return focusedInputStyle.Render(columnHeaderStyle.Render(title) + "\n" + m.editor.View() + "\n" +
+		helpStyle.Render(hint))
 }
 
 // viewNewItemReview renders the review step that follows the title editor: the item's name
@@ -665,11 +693,11 @@ func (m Model) viewNewItemEditor() string {
 func (m Model) viewNewItemReview() string {
 	lines := []string{
 		"Name:        " + m.newItemName,
-		"Description: " + m.newItemDescriptionSummary(),
 		"State:       " + m.stateName(m.newItemStateID),
 		"Priority:    " + m.priorityLabel(m.newItemPriority),
 		"Assignee:    " + m.newItemAssigneeName(),
 		"Labels:      " + m.labelsLine(m.newItemLabels),
+		"Description: " + m.newItemDescriptionSummary(),
 	}
 	body := columnHeaderStyle.Render("New work item") + "\n" + strings.Join(lines, "\n") + "\n" +
 		helpStyle.Render("s  state    y  priority    a  assignee    T  labels    d  description    enter  create    esc  cancel")
@@ -1052,7 +1080,7 @@ var boardHints = [][2]string{
 	{"h/l", "column"}, {"j/k", "card"}, {"enter", "open"}, {"s", "state"}, {"y", "priority"},
 	{"A", "assignee"}, {"T", "labels"}, {"a", "filter assignee"}, {"L", "filter label"},
 	{"S", "filter state"}, {"Y", "filter priority"}, {"/", "search title"}, {"u", "copy url"},
-	{"g", "open by id"}, {"o", "order"}, {"n", "new item"}, {"x", "hide col"}, {"C", "colors"},
+	{"U", "open url"}, {"g", "open by id"}, {"o", "order"}, {"n", "new item"}, {"x", "hide col"}, {"C", "colors"},
 	{"r", "refresh"}, {"p", "boards"}, {"q", "quit"},
 }
 
