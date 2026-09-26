@@ -182,6 +182,12 @@ func (c *Client) UpdateComment(ctx context.Context, workspaceSlug, projectID, wo
 	return &cm, nil
 }
 
+// DeleteComment removes an existing comment from a work item.
+func (c *Client) DeleteComment(ctx context.Context, workspaceSlug, projectID, workItemID, commentID string) error {
+	path := fmt.Sprintf("/api/v1/workspaces/%s/projects/%s/work-items/%s/comments/%s/", workspaceSlug, projectID, workItemID, commentID)
+	return c.do(ctx, http.MethodDelete, path, nil, nil, nil)
+}
+
 // ListLabels returns every label defined on the given project.
 func (c *Client) ListLabels(ctx context.Context, workspaceSlug, projectID string) ([]Label, error) {
 	return listAll[Label](ctx, c, fmt.Sprintf("/api/v1/workspaces/%s/projects/%s/labels/", workspaceSlug, projectID))

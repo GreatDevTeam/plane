@@ -322,6 +322,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleComments(msg)
 	case commentSavedMsg:
 		return m.handleCommentSaved(msg)
+	case commentDeletedMsg:
+		return m.handleCommentDeleted(msg)
 	case workItemCreatedMsg:
 		return m.handleWorkItemCreated(msg)
 	case relatedWorkItemMsg:
@@ -474,6 +476,7 @@ var helpSections = []helpSection{
 		{"f", "attachments (list/download/attach)"},
 		{"c", "add comment"},
 		{"e", "edit selected comment (own only)"},
+		{"x", "delete selected comment (own only, no confirmation)"},
 		{"r", "refresh"},
 		{"esc/backspace", "back"},
 	}},

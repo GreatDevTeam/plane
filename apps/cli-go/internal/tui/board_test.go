@@ -461,14 +461,17 @@ func TestCardLinesShowsLabelsAndPriority(t *testing.T) {
 	}
 }
 
-// TestCardLinesSelectedCardCarriesNoNestedStyling guards the highlight bug: cardNumberStyle,
-// priorityLabel and labelText each call lipgloss.Style.Render, which always ends with a reset
-// escape sequence that is not scoped to that call's own substring — nested inside a selected
-// card (wrapped in cardSelectedStyle by renderColumn), that reset silently cancelled the outer
-// background/foreground for the rest of the line. selected=true must render every line with no
-// embedded ANSI codes at all, so cardSelectedStyle's own wrap is the only styling applied and
-// the highlight carries the whole card uninterrupted.
-func TestCardLinesSelectedCardCarriesNoNestedStyling(t *testing.T) {
+// TestCardLinesSelectedCardKeepsColorsWithoutBreakingHighlight guards the highlight bug:
+// cardNumberStyle, priorityLabel and labelText each call lipgloss.Style.Render, which always
+// ends with a reset escape sequence that is not scoped to that call's own substring — nested
+// inside a selected card (wrapped in cardSelectedStyle by renderColumn), that reset used to
+// silently cancel the outer background/foreground for the rest of the line, which the previous
+// fix worked around by dropping the priority/label colors entirely on a selected card. Instead,
+// priorityLabelOn/labelTextOn (and cardSelectedTextStyle for the plain runs between them, see
+// cardMetaLine) now restate the selected background/foreground on every segment, so a selected
+// card keeps its per-segment colors exactly like an unselected one, and a reset is never
+// followed by a plain, unstyled run.
+func TestCardLinesSelectedCardKeepsColorsWithoutBreakingHighlight(t *testing.T) {
 	// go test runs with no TTY, so lipgloss's auto-detected color profile disables ANSI output
 	// entirely — force one on so this test actually exercises the styling it is checking for.
 	prev := lipgloss.ColorProfile()
@@ -477,20 +480,53 @@ func TestCardLinesSelectedCardCarriesNoNestedStyling(t *testing.T) {
 
 	m := Model{labels: []api.Label{{ID: "l1", Name: "bug", Color: "#f59e0b"}}}
 	it := api.WorkItem{SequenceID: 123, Name: "some title", Priority: "urgent", Labels: []string{"l1"}}
-	for _, line := range m.cardLines(it, 60, true) {
-		if strings.ContainsRune(line, '\x1b') {
-			t.Errorf("selected cardLines line %q contains an embedded ANSI escape, which would break the outer highlight", line)
+
+	selectedLines := m.cardLines(it, 60, true)
+	unselectedLines := m.cardLines(it, 60, false)
+
+	// Both selected and unselected meta lines (line3) must still carry the priority/label text
+	// — selection must not remove them.
+	for i, lines := range [][]string{selectedLines, unselectedLines} {
+		meta := lines[2]
+		if !strings.Contains(stripANSI(meta), "urgent") || !strings.Contains(stripANSI(meta), "bug") {
+			t.Errorf("case %d: meta line %q lost the priority/label text", i, meta)
 		}
 	}
-	// The unselected card is unaffected: it still carries the per-segment colors.
+
 	var sawEscape bool
-	for _, line := range m.cardLines(it, 60, false) {
+	for _, line := range selectedLines {
 		if strings.ContainsRune(line, '\x1b') {
 			sawEscape = true
 		}
+		assertNoUnstyledGapAfterReset(t, line)
 	}
 	if !sawEscape {
-		t.Error("unselected cardLines lost its per-segment styling (priority/labels)")
+		t.Error("selected cardLines lost its per-segment styling (priority/labels) entirely")
+	}
+}
+
+// stripANSI removes every embedded escape sequence, leaving only the plain text.
+func stripANSI(s string) string {
+	return ansi.Strip(s)
+}
+
+// assertNoUnstyledGapAfterReset fails if line contains a full reset escape sequence
+// ("\x1b[0m") directly followed by a plain character instead of another escape sequence or the
+// end of the string — that gap is exactly the highlight hole a nested Render call's reset used
+// to leave on a selected card (see cardMetaLine/cardSelectedTextStyle).
+func assertNoUnstyledGapAfterReset(t *testing.T, line string) {
+	t.Helper()
+	const reset = "\x1b[0m"
+	for i := 0; i < len(line); {
+		idx := strings.Index(line[i:], reset)
+		if idx < 0 {
+			return
+		}
+		pos := i + idx + len(reset)
+		if pos < len(line) && line[pos] != '\x1b' {
+			t.Errorf("line %q has an unstyled gap right after a reset at byte %d", line, pos)
+		}
+		i = pos
 	}
 }
 

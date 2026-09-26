@@ -1236,11 +1236,12 @@ func cell(s string, width int) string {
 // cardSelectedStyle's background. A lipgloss Style.Render call always ends its output with a
 // reset escape sequence, and that reset is not scoped to the styled substring — it turns off
 // every attribute for whatever comes after it on the same terminal line. cardNumberStyle here
-// and priorityLabel/labelText in cardMetaLine each make such a call, so nesting them inside a
-// selected card silently cancelled the outer highlight partway through line1 and line3 (the
-// card number and title read normally, one background color; the labels a different, unhighlighted
-// one). selected skips that inner coloring so the outer style's background/foreground carries
-// the whole line uninterrupted — the per-segment colors are what selection is trading away.
+// is skipped when selected for exactly that reason (line1's title stays plain either way, so
+// nothing else on that line needs repainting). cardMetaLine's priority/label colors go through
+// priorityLabelOn/labelTextOn instead, which explicitly restate cardSelectedStyle's own
+// background/foreground on every segment (colored or not — see cardSelectedTextStyle) so a
+// reset never leaves a gap: the labels keep their own colors on a selected card exactly like an
+// unselected one, instead of falling back to plain text.
 func (m Model) cardLines(it api.WorkItem, cardWidth int, selected bool) []string {
 	avail := cardWidth - cardFrame
 	if avail < 1 {
@@ -1290,28 +1291,41 @@ func wrapLine(s string, width int) (first, rest string) {
 // exactly cardRows rows — a fourth row would take a quarter of the cards off every column.
 // It sits ahead of the labels because it is structural: when the line has to be truncated,
 // what gets cut is the label list rather than the fact that the card has sub-tasks.
+//
+// On a selected card, every plain separator between segments (the "  " joiner, the ", "
+// between label names) is explicitly repainted via cardSelectedTextStyle rather than left bare
+// — see cardSelectedTextStyle's own comment for why a bare run would otherwise go unstyled.
 func (m Model) cardMetaLine(it api.WorkItem, selected bool) string {
+	joiner := "  "
+	sep := ", "
+	if selected {
+		joiner = cardSelectedTextStyle.Render(joiner)
+		sep = cardSelectedTextStyle.Render(sep)
+	}
 	var parts []string
 	if it.Priority != "" && it.Priority != "none" {
 		if selected {
-			parts = append(parts, priorityText(it.Priority))
+			parts = append(parts, m.priorityLabelOn(it.Priority, colorSelect))
 		} else {
 			parts = append(parts, m.priorityLabel(it.Priority))
 		}
 	}
 	if rel := m.cardRelations(it); rel != "" {
+		if selected {
+			rel = cardSelectedTextStyle.Render(rel)
+		}
 		parts = append(parts, rel)
 	}
 	if names := m.labelNames(it.Labels, selected); len(names) > 0 {
-		parts = append(parts, strings.Join(names, ", "))
+		parts = append(parts, strings.Join(names, sep))
 	}
-	return strings.Join(parts, "  ")
+	return strings.Join(parts, joiner)
 }
 
 // labelNames resolves label IDs to their names against the board's label list, dropping any ID
 // the board does not (yet) know about rather than showing a raw UUID. Each name is rendered in
-// that label's own color (see labelText) unless selected — see cardLines on why a selected
-// card's own background/foreground must not be interrupted by a nested style's reset.
+// that label's own color — labelTextOn on a selected card, so the color survives without
+// breaking the outer highlight (see cardSelectedTextStyle), labelText otherwise.
 func (m Model) labelNames(ids []string, selected bool) []string {
 	if len(ids) == 0 {
 		return nil
@@ -1321,7 +1335,7 @@ func (m Model) labelNames(ids []string, selected bool) []string {
 		for _, l := range m.labels {
 			if l.ID == id {
 				if selected {
-					names = append(names, l.Name)
+					names = append(names, labelTextOn(l.Name, m.effectiveLabelColor(l), colorSelect))
 				} else {
 					names = append(names, labelText(l.Name, m.effectiveLabelColor(l)))
 				}

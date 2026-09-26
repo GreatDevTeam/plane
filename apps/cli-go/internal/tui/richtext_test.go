@@ -22,6 +22,15 @@ func TestFormatRichTextEntitiesAndBreaks(t *testing.T) {
 	}
 }
 
+func TestFormatRichTextArrowEntity(t *testing.T) {
+	html := "<p>before &rarr; after</p>"
+	got := formatRichText(html)
+	want := "before → after"
+	if got != want {
+		t.Errorf("formatRichText(%q) = %q, want %q", html, got, want)
+	}
+}
+
 func TestPlainRichTextHasNoANSI(t *testing.T) {
 	html := "<p>Hello <strong>world</strong></p>"
 	got := plainRichText(html)

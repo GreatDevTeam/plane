@@ -203,6 +203,27 @@ func TestCreateAndUpdateComment(t *testing.T) {
 	}
 }
 
+func TestDeleteComment(t *testing.T) {
+	var gotMethod, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok")
+	if err := c.DeleteComment(context.Background(), "ws", "proj", "item1", "c1"); err != nil {
+		t.Fatalf("DeleteComment: %v", err)
+	}
+	if gotMethod != http.MethodDelete {
+		t.Errorf("method = %s, want DELETE", gotMethod)
+	}
+	wantPath := "/api/v1/workspaces/ws/projects/proj/work-items/item1/comments/c1/"
+	if gotPath != wantPath {
+		t.Errorf("path = %s, want %s", gotPath, wantPath)
+	}
+}
+
 func TestCreateWorkItem(t *testing.T) {
 	var gotMethod, gotPath string
 	var gotBody map[string]any
